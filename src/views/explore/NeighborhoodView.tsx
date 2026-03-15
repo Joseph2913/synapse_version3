@@ -60,6 +60,13 @@ export function NeighborhoodView({
   const [edges, setEdges] = useState<EntityEdge[]>([])
   const [loading, setLoading] = useState(true)
 
+  // PRD-23: Parent mode — show sub-anchor entities
+  const isParentMode = cluster.subAnchorIds.length > 0
+  const [activeSubAnchorId, setActiveSubAnchorId] = useState<string | null>(null)
+
+  // Reset sub-anchor filter when cluster changes
+  useEffect(() => { setActiveSubAnchorId(null) }, [cluster.anchor.id])
+
   // Synthetic co-source edges — hub-and-spoke per source document (needed before layout)
   const coSourceEdgesForLayout = useMemo((): EntityEdge[] => {
     const bySource = new Map<string, EntityNode[]>()
@@ -154,7 +161,8 @@ export function NeighborhoodView({
 
     async function load() {
       try {
-        const entityData = await fetchClusterEntities(user!.id, cluster.anchor.id, allClusters)
+        const subIds = isParentMode ? cluster.subAnchorIds : []
+        const entityData = await fetchClusterEntities(user!.id, cluster.anchor.id, allClusters, subIds)
         if (cancelled) return
         setEntities(entityData)
         onEntitiesLoaded?.(entityData)
@@ -179,6 +187,15 @@ export function NeighborhoodView({
     () => entities.find(e => e.isAnchor && e.clusters.includes(cluster.anchor.id)),
     [entities, cluster.anchor.id]
   )
+
+  // PRD-23: Filtered entities for display (sub-anchor filter in parent mode)
+  const displayEntities = useMemo(() => {
+    if (!isParentMode || !activeSubAnchorId) return entities
+    return entities.filter(e =>
+      e.originAnchorId === activeSubAnchorId ||
+      e.originAnchorId === cluster.anchor.id
+    )
+  }, [entities, isParentMode, activeSubAnchorId, cluster.anchor.id])
 
   // Peripheral entities (belong to other clusters)
   const peripheralIds = useMemo(() => {
@@ -606,32 +623,49 @@ export function NeighborhoodView({
               )
             })}
 
-            {/* 3. Entity nodes */}
-            {entities.map(entity => {
+            {/* 3. Entity nodes — use displayEntities for sub-anchor filtering */}
+            {displayEntities.map(entity => {
               const pos = nodePositions.get(entity.id)
               if (!pos) return null
 
               const isHub = entity.connectionCount >= HUB_CONNECTION_THRESHOLD
               const isPeripheral = peripheralIds.has(entity.id)
               const filterVisible = isEntityVisible(entity)
-              // Dim unconnected entities when a node is selected
               const isDimmed = !filterVisible || (connectedToSelected !== null && !connectedToSelected.has(entity.id))
 
+              // PRD-23: Origin ring for entities from sub-anchors (parent mode)
+              const originCluster = isParentMode && entity.originAnchorId && entity.originAnchorId !== cluster.anchor.id
+                ? allClusters.find(c => c.anchor.id === entity.originAnchorId)
+                : null
+
               return (
-                <EntityDot
-                  key={entity.id}
-                  entity={entity}
-                  x={pos.x}
-                  y={pos.y}
-                  radius={pos.radius}
-                  selected={selectedEntityId === entity.id}
-                  dimmed={isDimmed}
-                  isPeripheral={isPeripheral}
-                  isHubLabel={isHub}
-                  showAllLabels={camera.zoom >= 1.5}
-                  onHover={handleEntityHover}
-                  onClick={handleEntityClick}
-                />
+                <g key={entity.id}>
+                  {originCluster && (
+                    <circle
+                      cx={pos.x}
+                      cy={pos.y}
+                      r={(pos.radius ?? 6) + 3}
+                      fill="none"
+                      stroke={getEntityColor(originCluster.anchor.entityType)}
+                      strokeWidth={1}
+                      strokeOpacity={0.3}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+                  <EntityDot
+                    entity={entity}
+                    x={pos.x}
+                    y={pos.y}
+                    radius={pos.radius}
+                    selected={selectedEntityId === entity.id}
+                    dimmed={isDimmed}
+                    isPeripheral={isPeripheral}
+                    isHubLabel={isHub}
+                    showAllLabels={camera.zoom >= 1.5}
+                    onHover={handleEntityHover}
+                    onClick={handleEntityClick}
+                  />
+                </g>
               )
             })}
 
@@ -736,6 +770,73 @@ export function NeighborhoodView({
           {cluster.anchor.label}
         </span>
       </div>
+
+      {/* PRD-23: Sub-anchor navigation pills (parent mode only) */}
+      {isParentMode && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 46,
+            left: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+            pointerEvents: 'all',
+            maxWidth: '60%',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setActiveSubAnchorId(null)}
+            className="font-body font-semibold"
+            style={{
+              padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+              fontSize: 11,
+              background: !activeSubAnchorId ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
+              border: !activeSubAnchorId
+                ? '1px solid rgba(214,58,0,0.2)'
+                : '1px solid var(--border-subtle)',
+              color: !activeSubAnchorId
+                ? 'var(--color-accent-500)'
+                : 'var(--color-text-secondary)',
+            }}
+          >
+            All ({entities.length})
+          </button>
+          {cluster.subAnchorIds.map(subId => {
+            const subCluster = allClusters.find(c => c.anchor.id === subId)
+            if (!subCluster) return null
+            const subEntities = entities.filter(e => e.originAnchorId === subId)
+            const isActive = activeSubAnchorId === subId
+
+            return (
+              <button
+                key={subId}
+                type="button"
+                onClick={() => setActiveSubAnchorId(isActive ? null : subId)}
+                className="font-body font-semibold"
+                style={{
+                  padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                  fontSize: 11,
+                  background: isActive ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
+                  border: isActive
+                    ? '1px solid rgba(214,58,0,0.2)'
+                    : '1px solid var(--border-subtle)',
+                  color: isActive
+                    ? 'var(--color-accent-500)'
+                    : 'var(--color-text-secondary)',
+                }}
+              >
+                {subCluster.anchor.label.length > 16
+                  ? subCluster.anchor.label.slice(0, 14) + '…'
+                  : subCluster.anchor.label}
+                {' '}({subEntities.length})
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Entity count — top-right */}
       <div

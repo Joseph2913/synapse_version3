@@ -511,6 +511,8 @@ export function LandscapeView({
               const ghostCluster: ClusterData & { compositeScore: number } = {
                 anchor: { id: sc.nodeId, label: sc.label, entityType: sc.entityType, description: null, entityCount: sc.mentionCount, parentAnchorId: null, isSubAnchor: false },
                 entityCount: sc.mentionCount,
+                directEntityCount: sc.mentionCount,
+                inheritedEntityCount: 0,
                 typeDistribution: [],
                 position: { cx: 0, cy: 0, r: sc.r },
                 crossClusterEdges: [],

@@ -5,7 +5,9 @@ export type ZoomLevel = 'landscape' | 'neighborhood' | 'detail'
 
 export interface ClusterData {
   anchor: AnchorNode
-  entityCount: number
+  entityCount: number              // total: direct + inherited
+  directEntityCount: number        // PRD-23: direct edges only
+  inheritedEntityCount: number     // PRD-23: from sub-anchors
   typeDistribution: TypeDistributionEntry[]
   position: { cx: number; cy: number; r: number }
   crossClusterEdges: CrossClusterEdge[]
@@ -53,6 +55,7 @@ export interface EntityNode {
   isBridge: boolean // belongs to 2+ clusters
   isUnclustered: boolean // belongs to 0 clusters
   isAnchor: boolean // this node is itself an anchor
+  originAnchorId?: string // PRD-23: which anchor this entity primarily connects to
 }
 
 export interface SourceNode {

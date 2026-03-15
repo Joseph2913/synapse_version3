@@ -43,19 +43,19 @@ export async function fetchClusterData(userId: string): Promise<ClusterDataResul
   }
 
   // 3. Fetch all edges (paginated — graphs can exceed 1000 edges)
-  const allEdges: Array<{ source_node_id: string; target_node_id: string }> = []
+  const allEdges: Array<{ source_node_id: string; target_node_id: string; is_inherited: boolean }> = []
   {
     let offset = 0
     const PAGE = 1000
     while (true) {
       const { data, error } = await supabase
         .from('knowledge_edges')
-        .select('source_node_id, target_node_id')
+        .select('source_node_id, target_node_id, is_inherited')
         .eq('user_id', userId)
         .range(offset, offset + PAGE - 1)
       if (error) throw new Error(error.message)
       if (!data || data.length === 0) break
-      allEdges.push(...(data as Array<{ source_node_id: string; target_node_id: string }>))
+      allEdges.push(...(data as Array<{ source_node_id: string; target_node_id: string; is_inherited: boolean }>))
       if (data.length < PAGE) break
       offset += PAGE
     }
@@ -144,17 +144,34 @@ export async function fetchClusterData(userId: string): Promise<ClusterDataResul
       }
     }
 
+    // PRD-23: Count inherited entities for this anchor
+    const inheritedNodeIds = new Set<string>()
+    for (const edge of allEdges) {
+      if (edge.is_inherited && edge.source_node_id === a.id) {
+        inheritedNodeIds.add(edge.target_node_id)
+      }
+    }
+    // Remove direct entities from inherited count (avoid double-counting)
+    for (const directId of clusterNodeIds) {
+      inheritedNodeIds.delete(directId)
+    }
+
+    const directEntityCount    = clusterNodes.length
+    const inheritedEntityCount = inheritedNodeIds.size
+
     return {
       anchor: {
         id: a.id,
         label: a.label,
         entityType: a.entity_type,
         description: a.description,
-        entityCount: clusterNodes.length,
+        entityCount: directEntityCount + inheritedEntityCount,
         parentAnchorId: a.parent_anchor_id ?? null,
         isSubAnchor: !!a.parent_anchor_id,
       },
-      entityCount: clusterNodes.length,
+      entityCount: directEntityCount + inheritedEntityCount,
+      directEntityCount,
+      inheritedEntityCount,
       typeDistribution,
       position: { cx: 0, cy: 0, r: 0 }, // Computed by useClusterLayout
       crossClusterEdges,
@@ -225,23 +242,45 @@ export async function fetchUnclusteredNodes(
 export async function fetchClusterEntities(
   userId: string,
   anchorId: string,
-  clusterData?: ClusterData[]
+  clusterData?: ClusterData[],
+  subAnchorIds?: string[]          // PRD-23: include sub-anchor entities in parent mode
 ): Promise<EntityNode[]> {
-  // Get edges involving this anchor
+  // Build the set of anchor IDs to fetch for
+  const anchorIdsToFetch = [anchorId, ...(subAnchorIds ?? [])]
+
+  // Get edges involving this anchor OR any of its sub-anchors
+  const orFilter = anchorIdsToFetch
+    .map(id => `source_node_id.eq.${id},target_node_id.eq.${id}`)
+    .join(',')
+
   const { data: anchorEdges, error: edgeErr } = await supabase
     .from('knowledge_edges')
     .select('source_node_id, target_node_id')
     .eq('user_id', userId)
-    .or(`source_node_id.eq.${anchorId},target_node_id.eq.${anchorId}`)
+    .or(orFilter)
 
   if (edgeErr) throw new Error(edgeErr.message)
 
+  const anchorIdSet = new Set(anchorIdsToFetch)
   const nodeIds = new Set<string>()
+  // Track which anchor each entity primarily connects to
+  const entityOriginMap = new Map<string, string>()
   for (const e of anchorEdges ?? []) {
     const src = e.source_node_id as string
     const tgt = e.target_node_id as string
-    if (src !== anchorId) nodeIds.add(src)
-    if (tgt !== anchorId) nodeIds.add(tgt)
+    if (!anchorIdSet.has(src)) {
+      nodeIds.add(src)
+      if (!entityOriginMap.has(src)) {
+        // Primary anchor = the anchor end of this edge
+        entityOriginMap.set(src, tgt)
+      }
+    }
+    if (!anchorIdSet.has(tgt)) {
+      nodeIds.add(tgt)
+      if (!entityOriginMap.has(tgt)) {
+        entityOriginMap.set(tgt, src)
+      }
+    }
   }
   if (nodeIds.size === 0) return []
 
@@ -329,6 +368,7 @@ export async function fetchClusterEntities(
       isBridge: clusters.length >= 2,
       isUnclustered: clusters.length === 0,
       isAnchor: node.is_anchor ?? false,
+      originAnchorId: entityOriginMap.get(node.id) ?? anchorId,
     }
   })
 }

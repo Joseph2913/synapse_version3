@@ -749,7 +749,87 @@ export async function promoteToSubAnchor(
     return false
   }
 
+  // PRD-23: Propagate inheritance (fire-and-forget)
+  propagateInheritanceToParent(nodeId, parentAnchorId).catch(err => {
+    console.warn('[anchorCandidates] Inheritance propagation failed (non-fatal):', err)
+  })
+
   return true
+}
+
+// ─── PRD-23: Propagate sub-anchor entities to parent anchor ─────────────────
+// Creates inherited_from edges between parent anchor and sub-anchor's entities.
+
+export async function propagateInheritanceToParent(
+  subAnchorId:    string,
+  parentAnchorId: string
+): Promise<{ edgesCreated: number }> {
+  const { data: subAnchorNode } = await supabase
+    .from('knowledge_nodes')
+    .select('user_id')
+    .eq('id', subAnchorId)
+    .maybeSingle()
+
+  if (!subAnchorNode) return { edgesCreated: 0 }
+  const userId = subAnchorNode.user_id as string
+
+  // Fetch entities directly connected to sub-anchor (non-inherited edges only)
+  const { data: subEdges } = await supabase
+    .from('knowledge_edges')
+    .select('source_node_id, target_node_id')
+    .eq('user_id', userId)
+    .eq('is_inherited', false)
+    .or(`source_node_id.eq.${subAnchorId},target_node_id.eq.${subAnchorId}`)
+
+  const entityIds = new Set<string>()
+  for (const edge of subEdges ?? []) {
+    const src = edge.source_node_id as string
+    const tgt = edge.target_node_id as string
+    const entityId = src === subAnchorId ? tgt : src
+    if (entityId !== parentAnchorId) entityIds.add(entityId)
+  }
+
+  if (entityIds.size === 0) return { edgesCreated: 0 }
+
+  // Find which entities are already connected to parent
+  const { data: existingParentEdges } = await supabase
+    .from('knowledge_edges')
+    .select('source_node_id, target_node_id')
+    .eq('user_id', userId)
+    .or(`source_node_id.eq.${parentAnchorId},target_node_id.eq.${parentAnchorId}`)
+
+  const alreadyConnected = new Set<string>()
+  for (const edge of existingParentEdges ?? []) {
+    const src = edge.source_node_id as string
+    const tgt = edge.target_node_id as string
+    alreadyConnected.add(src === parentAnchorId ? tgt : src)
+  }
+
+  // Create inherited edges for entities not already connected
+  const toInsert = Array.from(entityIds)
+    .filter(id => !alreadyConnected.has(id))
+    .map(entityId => ({
+      user_id:                  userId,
+      source_node_id:           parentAnchorId,
+      target_node_id:           entityId,
+      relation_type:            'inherited_from',
+      evidence:                 `Inherited from sub-anchor: ${subAnchorId}`,
+      weight:                   0.5,
+      is_inherited:             true,
+      inherited_from_anchor_id: subAnchorId,
+    }))
+
+  if (toInsert.length === 0) return { edgesCreated: 0 }
+
+  const { error } = await supabase.from('knowledge_edges').insert(toInsert)
+
+  if (error) {
+    console.error('[anchorCandidates] propagateInheritanceToParent error:', error.message)
+    throw error
+  }
+
+  console.log(`[anchorCandidates] Created ${toInsert.length} inherited edges: ${subAnchorId} → ${parentAnchorId}`)
+  return { edgesCreated: toInsert.length }
 }
 
 // ─── PRD-22: Remove sub-anchor relationship ─────────────────────────────────
@@ -758,6 +838,14 @@ export async function promoteToSubAnchor(
 export async function removeSubAnchorRelationship(
   nodeId: string
 ): Promise<boolean> {
+  // 1. Find current parent before clearing
+  const { data: nodeData } = await supabase
+    .from('knowledge_nodes')
+    .select('parent_anchor_id')
+    .eq('id', nodeId)
+    .maybeSingle()
+
+  // 2. Clear the parent relationship
   const { error } = await supabase
     .from('knowledge_nodes')
     .update({ parent_anchor_id: null })
@@ -767,6 +855,20 @@ export async function removeSubAnchorRelationship(
     console.error('[anchorCandidates] removeSubAnchorRelationship error:', error.message)
     return false
   }
+
+  // 3. PRD-23: Remove inherited edges that came from this sub-anchor
+  if (nodeData?.parent_anchor_id) {
+    const { error: cleanupError } = await supabase
+      .from('knowledge_edges')
+      .delete()
+      .eq('inherited_from_anchor_id', nodeId)
+      .eq('is_inherited', true)
+
+    if (cleanupError) {
+      console.warn('[anchorCandidates] Failed to clean up inherited edges:', cleanupError.message)
+    }
+  }
+
   return true
 }
 
