@@ -733,17 +733,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ── Pick items with transcripts ready for extraction ───────────────────────
     let query = supabase
       .from('youtube_ingestion_queue')
-      .select(`
-        id, user_id, channel_id, video_id, video_title, video_url,
-        thumbnail_url, published_at, duration_seconds, transcript, status,
-        retry_count, max_retries, error_message, playlist_id,
-        youtube_playlists (
-          extraction_mode,
-          anchor_emphasis,
-          linked_anchor_ids,
-          custom_instructions
-        )
-      `)
+      .select('id, user_id, channel_id, video_id, video_title, video_url, thumbnail_url, published_at, duration_seconds, transcript, status, retry_count, max_retries, error_message, playlist_id')
       .eq('status', 'transcript_ready')
       .order('priority', { ascending: true })
       .order('created_at', { ascending: true })
@@ -756,6 +746,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: pendingItems, error: fetchError } = await query;
 
     if (fetchError) {
+      console.error('[extract-knowledge] Queue query failed:', fetchError.message);
       return res.status(500).json({ error: fetchError.message });
     }
 
@@ -769,9 +760,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Flatten joined playlist settings
+    // Fetch playlist settings separately (resilient — falls back to defaults)
+    const playlistIds = [...new Set(
+      (pendingItems as Array<Record<string, unknown>>)
+        .map(r => r['playlist_id'] as string | null)
+        .filter((id): id is string => !!id)
+    )];
+    const playlistMap = new Map<string, Record<string, unknown>>();
+    if (playlistIds.length > 0) {
+      try {
+        const { data: playlists } = await supabase
+          .from('youtube_playlists')
+          .select('id, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions')
+          .in('id', playlistIds);
+        for (const p of (playlists ?? []) as Array<Record<string, unknown>>) {
+          playlistMap.set(p['id'] as string, p);
+        }
+      } catch (err) {
+        console.warn('[extract-knowledge] Playlist settings lookup failed, using defaults:', err);
+      }
+    }
+
+    // Map queue items with playlist settings (or defaults)
     const items: QueueItem[] = (pendingItems as Array<Record<string, unknown>>).map(row => {
-      const playlist = row['youtube_playlists'] as Record<string, unknown> | null;
+      const playlist = playlistMap.get(row['playlist_id'] as string) ?? null;
       return {
         id: row['id'] as string,
         user_id: row['user_id'] as string,
@@ -787,10 +799,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         retry_count: (row['retry_count'] as number) ?? 0,
         max_retries: (row['max_retries'] as number) ?? 3,
         error_message: row['error_message'] as string | null,
-        extraction_mode: playlist?.['extraction_mode'] as string | undefined,
-        anchor_emphasis: playlist?.['anchor_emphasis'] as string | undefined,
+        extraction_mode: (playlist?.['extraction_mode'] as string) ?? undefined,
+        anchor_emphasis: (playlist?.['anchor_emphasis'] as string) ?? undefined,
         linked_anchor_ids: (playlist?.['linked_anchor_ids'] as string[]) ?? [],
-        custom_instructions: playlist?.['custom_instructions'] as string | null | undefined,
+        custom_instructions: (playlist?.['custom_instructions'] as string | null) ?? undefined,
       };
     });
 
