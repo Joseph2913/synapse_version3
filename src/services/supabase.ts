@@ -108,6 +108,7 @@ export async function searchNodes(query: string, limit: number = 20): Promise<Kn
   const { data, error } = await supabase
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, is_anchor, created_at')
+    .eq('is_merged', false)
     .ilike('label', `%${query}%`)
     .order('label')
     .limit(limit)
@@ -123,6 +124,7 @@ export async function searchNodesByLabel(query: string, limit: number = 15): Pro
   const { data, error } = await supabase
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, is_anchor, created_at')
+    .eq('is_merged', false)
     .ilike('label', `%${query}%`)
     .order('is_anchor', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
@@ -167,6 +169,7 @@ export async function fetchNodes(
   let query = supabase
     .from('knowledge_nodes')
     .select('*', { count: 'exact' })
+    .eq('is_merged', false)
     .order('created_at', { ascending: false })
 
   if (filters.search) {
@@ -587,7 +590,7 @@ export async function fetchExtractionSessions(
 
 export async function checkDuplicateNodes(
   labels: string[],
-  _userId: string
+  userId: string
 ): Promise<Set<string>> {
   if (labels.length === 0) return new Set()
 
@@ -595,6 +598,8 @@ export async function checkDuplicateNodes(
   const { data, error } = await supabase
     .from('knowledge_nodes')
     .select('label')
+    .eq('user_id', userId)
+    .eq('is_merged', false)
     .in('label', labels)
 
   if (error) {
@@ -621,7 +626,7 @@ export async function getGraphStats(userId: string): Promise<{
   sourceCount: number
 }> {
   const [nodes, chunks, edges, sources] = await Promise.all([
-    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('is_merged', false),
     supabase.from('source_chunks').select('id', { count: 'exact', head: true }).eq('user_id', userId).not('embedding', 'is', null),
     supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('user_id', userId),
     supabase.from('knowledge_sources').select('id', { count: 'exact', head: true }).eq('user_id', userId),
@@ -835,6 +840,7 @@ export async function keywordSearchNodes(
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, source, source_type, source_id, confidence, is_anchor, tags, created_at')
     .eq('user_id', userId)
+    .eq('is_merged', false)
     .or(orFilter)
     .order('is_anchor', { ascending: false })
     .order('created_at', { ascending: false })
@@ -1027,6 +1033,7 @@ export async function fetchTopNodes(
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, source, source_type, source_id, confidence, is_anchor, tags, created_at')
     .eq('user_id', userId)
+    .eq('is_merged', false)
     .order('created_at', { ascending: false })
     .limit(limit)
 

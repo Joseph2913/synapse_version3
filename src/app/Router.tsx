@@ -7,6 +7,7 @@ import { CaptureView } from '../views/CaptureView'
 import { AutomateView } from '../views/AutomateView'
 import { OrientView } from '../views/OrientView'
 import { PipelineView } from '../views/PipelineView'
+import { AnchorsView } from '../views/AnchorsView'
 
 const router = createBrowserRouter([
   {
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
       { path: '/automate', element: <AutomateView /> },
       { path: '/orient', element: <OrientView /> },
       { path: '/pipeline', element: <PipelineView /> },
+      { path: '/anchors', element: <AnchorsView /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

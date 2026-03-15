@@ -12,37 +12,61 @@ export async function fetchClusterData(userId: string): Promise<ClusterDataResul
   // 1. Fetch anchors
   const { data: anchors, error: ancErr } = await supabase
     .from('knowledge_nodes')
-    .select('id, label, entity_type, description')
+    .select('id, label, entity_type, description, parent_anchor_id')
     .eq('user_id', userId)
     .eq('is_anchor', true)
+    .eq('is_merged', false)
     .order('label')
 
   if (ancErr) throw new Error(ancErr.message)
   if (!anchors?.length) return { clusters: [], clusteredNodeIds: new Set() }
 
-  // 2. Fetch all non-anchor nodes
-  const { data: allNodes, error: nodeErr } = await supabase
-    .from('knowledge_nodes')
-    .select('id, entity_type, source_id')
-    .eq('user_id', userId)
-    .eq('is_anchor', false)
+  // 2. Fetch all non-anchor nodes (paginated to avoid Supabase 1000-row default limit)
+  const allNodes: Array<{ id: string; entity_type: string; source_id: string | null }> = []
+  {
+    let offset = 0
+    const PAGE = 1000
+    while (true) {
+      const { data, error } = await supabase
+        .from('knowledge_nodes')
+        .select('id, entity_type, source_id')
+        .eq('user_id', userId)
+        .eq('is_anchor', false)
+        .eq('is_merged', false)
+        .range(offset, offset + PAGE - 1)
+      if (error) throw new Error(error.message)
+      if (!data || data.length === 0) break
+      allNodes.push(...(data as Array<{ id: string; entity_type: string; source_id: string | null }>))
+      if (data.length < PAGE) break
+      offset += PAGE
+    }
+  }
 
-  if (nodeErr) throw new Error(nodeErr.message)
-
-  // 3. Fetch all edges
-  const { data: allEdges, error: edgeErr } = await supabase
-    .from('knowledge_edges')
-    .select('source_node_id, target_node_id')
-    .eq('user_id', userId)
-
-  if (edgeErr) throw new Error(edgeErr.message)
+  // 3. Fetch all edges (paginated — graphs can exceed 1000 edges)
+  const allEdges: Array<{ source_node_id: string; target_node_id: string }> = []
+  {
+    let offset = 0
+    const PAGE = 1000
+    while (true) {
+      const { data, error } = await supabase
+        .from('knowledge_edges')
+        .select('source_node_id, target_node_id')
+        .eq('user_id', userId)
+        .range(offset, offset + PAGE - 1)
+      if (error) throw new Error(error.message)
+      if (!data || data.length === 0) break
+      allEdges.push(...(data as Array<{ source_node_id: string; target_node_id: string }>))
+      if (data.length < PAGE) break
+      offset += PAGE
+    }
+  }
 
   // Compute cluster membership: node belongs to anchor's cluster
   // if it has a direct edge to/from that anchor
   const anchorIds = new Set(anchors.map(a => a.id))
   const nodeClusterMap = new Map<string, Set<string>>()
 
-  for (const edge of allEdges ?? []) {
+  for (const edge of allEdges) {
     const src = edge.source_node_id as string
     const tgt = edge.target_node_id as string
     if (anchorIds.has(src) && !anchorIds.has(tgt)) {
@@ -61,12 +85,23 @@ export async function fetchClusterData(userId: string): Promise<ClusterDataResul
     allClusteredNodeIds.add(nid)
   }
 
+  // Build sub-anchor map: parent_anchor_id → sub-anchor IDs
+  const subAnchorMap = new Map<string, string[]>()
+  for (const anchor of anchors ?? []) {
+    const a = anchor as { id: string; parent_anchor_id: string | null }
+    if (a.parent_anchor_id) {
+      const existing = subAnchorMap.get(a.parent_anchor_id) ?? []
+      existing.push(a.id)
+      subAnchorMap.set(a.parent_anchor_id, existing)
+    }
+  }
+
   const clusters = anchors.map(anchor => {
-    const a = anchor as { id: string; label: string; entity_type: string; description: string | null }
+    const a = anchor as { id: string; label: string; entity_type: string; description: string | null; parent_anchor_id: string | null }
     const clusterNodeIds = [...nodeClusterMap.entries()]
       .filter(([, set]) => set.has(a.id))
       .map(([nid]) => nid)
-    const clusterNodes = (allNodes ?? []).filter(n => clusterNodeIds.includes((n as { id: string }).id))
+    const clusterNodes = (allNodes).filter(n => clusterNodeIds.includes((n as { id: string }).id))
 
     // Type distribution
     const typeCounts: Record<string, number> = {}
@@ -90,7 +125,7 @@ export async function fetchClusterData(userId: string): Promise<ClusterDataResul
           .map(([nid]) => nid)
       )
       const shared = clusterNodeIds.filter(id => otherIds.has(id))
-      const crossEdges = (allEdges ?? []).filter(e => {
+      const crossEdges = (allEdges).filter(e => {
         const src = e.source_node_id as string
         const tgt = e.target_node_id as string
         return (
@@ -116,11 +151,14 @@ export async function fetchClusterData(userId: string): Promise<ClusterDataResul
         entityType: a.entity_type,
         description: a.description,
         entityCount: clusterNodes.length,
+        parentAnchorId: a.parent_anchor_id ?? null,
+        isSubAnchor: !!a.parent_anchor_id,
       },
       entityCount: clusterNodes.length,
       typeDistribution,
       position: { cx: 0, cy: 0, r: 0 }, // Computed by useClusterLayout
       crossClusterEdges,
+      subAnchorIds: subAnchorMap.get(a.id) ?? [],
     }
   })
 
@@ -138,10 +176,10 @@ export interface GraphStats {
 
 export async function fetchGraphStats(userId: string): Promise<GraphStats> {
   const [nodes, edges, sources, anchors] = await Promise.all([
-    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('is_merged', false),
     supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('user_id', userId),
     supabase.from('knowledge_sources').select('id', { count: 'exact', head: true }).eq('user_id', userId),
-    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('is_anchor', true),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('is_anchor', true).eq('is_merged', false),
   ])
   return {
     nodeCount: nodes.count ?? 0,
@@ -168,6 +206,7 @@ export async function fetchUnclusteredNodes(
     .select('id, label, entity_type')
     .eq('user_id', userId)
     .eq('is_anchor', false)
+    .eq('is_merged', false)
     .limit(500)
 
   if (error) throw new Error(error.message)
@@ -215,14 +254,27 @@ export async function fetchClusterEntities(
 
   if (nodeErr) throw new Error(nodeErr.message)
 
-  // Connection counts — fetch all edges for these nodes
-  const { data: allEdges } = await supabase
-    .from('knowledge_edges')
-    .select('source_node_id, target_node_id')
-    .eq('user_id', userId)
+  // Connection counts — fetch all edges (paginated)
+  const allEdges2: Array<{ source_node_id: string; target_node_id: string }> = []
+  {
+    let offset = 0
+    const PAGE = 1000
+    while (true) {
+      const { data, error } = await supabase
+        .from('knowledge_edges')
+        .select('source_node_id, target_node_id')
+        .eq('user_id', userId)
+        .range(offset, offset + PAGE - 1)
+      if (error) break
+      if (!data || data.length === 0) break
+      allEdges2.push(...(data as Array<{ source_node_id: string; target_node_id: string }>))
+      if (data.length < PAGE) break
+      offset += PAGE
+    }
+  }
 
   const counts: Record<string, number> = {}
-  for (const e of allEdges ?? []) {
+  for (const e of allEdges2) {
     const src = e.source_node_id as string
     const tgt = e.target_node_id as string
     counts[src] = (counts[src] || 0) + 1
@@ -236,8 +288,8 @@ export async function fetchClusterEntities(
     for (const c of clusterData) anchorIds.add(c.anchor.id)
   }
   const nodeClusterMembership = new Map<string, string[]>()
-  if (clusterData && allEdges) {
-    for (const e of allEdges) {
+  if (clusterData && allEdges2.length > 0) {
+    for (const e of allEdges2) {
       const src = e.source_node_id as string
       const tgt = e.target_node_id as string
       if (anchorIds.has(src) && !anchorIds.has(tgt)) {

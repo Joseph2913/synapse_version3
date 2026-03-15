@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ClusterBubble } from '../../components/explore/ClusterBubble'
 import { NodeTooltip } from '../../components/explore/NodeTooltip'
 import { getEntityColor } from '../../config/entityTypes'
@@ -7,20 +7,58 @@ import type { ClusterData } from '../../types/explore'
 import type { TooltipData } from '../../components/explore/NodeTooltip'
 import type { GraphStats, UnclusteredEntity } from '../../services/exploreQueries'
 
+interface SuggestedClusterData {
+  candidateId:             string
+  nodeId:                  string
+  label:                   string
+  entityType:              string
+  compositeScore:          number
+  reasoningText:           string | null
+  mentionCount:            number
+  sourceCount:             number
+  velocityDirection:       'rising' | 'stable' | 'falling'
+  suggestedParentAnchorId: string | null
+  duplicateCount:          number
+}
+
 interface LandscapeViewProps {
   clusters: ClusterData[]
   stats: GraphStats
   unclustered: UnclusteredEntity[]
   isClusterVisible: (cluster: ClusterData) => boolean
   onClusterClick: (cluster: ClusterData) => void
-  onZoomTransition?: (clusterId: string) => void
+  onClusterDoubleClick?: (cluster: ClusterData) => void
+  onExploreCluster?: (clusterId: string) => void
+  selectedClusterId?: string | null
+  onClearSelection?: () => void
+  suggestedClusters?: SuggestedClusterData[]
+  showCrossEdges?: boolean
+  onSuggestedClusterClick?: (candidate: SuggestedClusterData) => void
 }
 
 const MIN_ZOOM = 0.2
 const MAX_ZOOM = 4.0
-const TRANSITION_ZOOM = 2.0
 
 interface Camera { zoom: number; panX: number; panY: number }
+
+// Live node positions for floating + drag
+interface LiveNode {
+  id: string
+  x: number
+  y: number
+  vx: number
+  vy: number
+  // Gentle floating drift
+  floatPhase: number
+  floatSpeedX: number
+  floatSpeedY: number
+  floatAmpX: number
+  floatAmpY: number
+  // PRD-22: hierarchy tethering
+  parentAnchorId: string | null
+  homeX: number
+  homeY: number
+}
 
 export function LandscapeView({
   clusters,
@@ -28,7 +66,13 @@ export function LandscapeView({
   unclustered,
   isClusterVisible,
   onClusterClick,
-  onZoomTransition,
+  onClusterDoubleClick,
+  onExploreCluster,
+  selectedClusterId,
+  onClearSelection,
+  suggestedClusters,
+  showCrossEdges = true,
+  onSuggestedClusterClick,
 }: LandscapeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -43,7 +87,7 @@ export function LandscapeView({
   // Pan drag ref
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
 
-  // ResizeObserver for container dimensions
+  // ResizeObserver
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -59,55 +103,211 @@ export function LandscapeView({
     return () => obs.disconnect()
   }, [])
 
-  // Compute cluster layout positions
+  // Static layout (initial positions)
   const layoutClusters = useClusterLayout(clusters, size.width, size.height)
 
-  // Keep a ref to layoutClusters for use inside wheel event handler (avoids stale closure)
+  // ── Live floating positions ──────────────────────────────────────────────
+  const liveNodesRef = useRef<LiveNode[]>([])
+  const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
+  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const rafRef = useRef<number>(0)
+
+  // Initialize live nodes when layout changes — all nodes get the same floating params
+  useEffect(() => {
+    liveNodesRef.current = layoutClusters.map(c => ({
+      id: c.anchor.id,
+      x: c.position.cx,
+      y: c.position.cy,
+      vx: 0,
+      vy: 0,
+      floatPhase: Math.random() * Math.PI * 2,
+      floatSpeedX: 0.25 + Math.random() * 0.35,
+      floatSpeedY: 0.18 + Math.random() * 0.25,
+      floatAmpX: 0.12 + Math.random() * 0.2,
+      floatAmpY: 0.1 + Math.random() * 0.16,
+      parentAnchorId: c.anchor.parentAnchorId ?? null,
+      homeX: c.position.cx,
+      homeY: c.position.cy,
+    }))
+  }, [layoutClusters])
+
+  // Animation loop — identical gentle floating for ALL nodes
+  // Sub-anchors just have a mild gravity toward their parent
+  useEffect(() => {
+    let lastTime = performance.now()
+
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.05)
+      lastTime = now
+      const nodes = liveNodesRef.current
+      if (nodes.length === 0) { rafRef.current = requestAnimationFrame(tick); return }
+
+      const w = sizeRef.current.width
+      const h = sizeRef.current.height
+
+      for (const n of nodes) {
+        // Skip dragged node (and nodes being group-dragged)
+        if (dragRef.current?.id === n.id) {
+          n.vx = 0
+          n.vy = 0
+          continue
+        }
+
+        // Floating drift — same for all nodes
+        n.floatPhase += dt
+        const fx = Math.sin(n.floatPhase * n.floatSpeedX) * n.floatAmpX
+        const fy = Math.cos(n.floatPhase * n.floatSpeedY) * n.floatAmpY
+        n.vx += fx * dt
+        n.vy += fy * dt
+
+        // Sub-anchors: gentle gravity toward parent (not a rigid spring)
+        // Just a mild pull — they're free to drift around
+        if (n.parentAnchorId) {
+          const parent = nodes.find(p => p.id === n.parentAnchorId)
+          if (parent) {
+            n.vx += (parent.x - n.x) * 0.003 * dt
+            n.vy += (parent.y - n.y) * 0.003 * dt
+          }
+        }
+
+        // Boundary soft push
+        const pad = 30
+        if (n.x < pad) n.vx += (pad - n.x) * 0.01
+        if (n.x > w - pad) n.vx -= (n.x - (w - pad)) * 0.01
+        if (n.y < pad) n.vy += (pad - n.y) * 0.01
+        if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
+
+        // Damping
+        n.vx *= 0.97
+        n.vy *= 0.97
+
+        n.x += n.vx
+        n.y += n.vy
+      }
+
+      // Update React state at ~30fps
+      const newPos = new Map<string, { x: number; y: number }>()
+      for (const n of nodes) newPos.set(n.id, { x: n.x, y: n.y })
+      setLivePositions(newPos)
+
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // ── Node dragging ────────────────────────────────────────────────────────
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
+    e.stopPropagation()
+    const cam = cameraRef.current
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    const worldX = (e.clientX - rect.left - cam.panX) / cam.zoom
+    const worldY = (e.clientY - rect.top - cam.panY) / cam.zoom
+    const node = liveNodesRef.current.find(n => n.id === nodeId)
+    if (!node) return
+
+    dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current || !svgRef.current) return
+      const cam2 = cameraRef.current
+      const r2 = svgRef.current.getBoundingClientRect()
+      const wx = (ev.clientX - r2.left - cam2.panX) / cam2.zoom
+      const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
+      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
+      if (n) {
+        const dx = (wx - dragRef.current.offsetX) - n.x
+        const dy = (wy - dragRef.current.offsetY) - n.y
+        n.x += dx
+        n.y += dy
+
+        // If dragging a parent, also move its sub-anchors
+        if (!n.parentAnchorId) {
+          for (const other of liveNodesRef.current) {
+            if (other.parentAnchorId === n.id) {
+              other.x += dx
+              other.y += dy
+            }
+          }
+        }
+      }
+    }
+
+    const onUp = () => {
+      dragRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
+  // Position suggested clusters around the periphery
+  const positionedSuggested = useMemo(() => {
+    if (!suggestedClusters?.length || layoutClusters.length === 0) return []
+    const SUGGESTED_RADIUS = 10
+    const results: Array<SuggestedClusterData & { cx: number; cy: number; r: number }> = []
+
+    suggestedClusters.forEach((candidate, i) => {
+      const angle = (i / suggestedClusters.length) * Math.PI * 2
+      const ringRadius = Math.min(size.width, size.height) * 0.42
+
+      let cx = size.width / 2 + Math.cos(angle) * ringRadius
+      let cy = size.height / 2 + Math.sin(angle) * ringRadius
+
+      for (const lc of layoutClusters) {
+        const pos = livePositions.get(lc.anchor.id) ?? { x: lc.position.cx, y: lc.position.cy }
+        const dx = cx - pos.x
+        const dy = cy - pos.y
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const minDist = lc.position.r + SUGGESTED_RADIUS + 30
+        if (dist < minDist && dist > 0) {
+          const push = (minDist - dist) / dist
+          cx += dx * push * 0.5
+          cy += dy * push * 0.5
+        }
+      }
+
+      const pad = SUGGESTED_RADIUS + 15
+      cx = Math.max(pad, Math.min(size.width - pad, cx))
+      cy = Math.max(pad, Math.min(size.height - pad, cy))
+
+      results.push({ ...candidate, cx, cy, r: SUGGESTED_RADIUS })
+    })
+
+    return results
+  }, [suggestedClusters, layoutClusters, size.width, size.height, livePositions])
+
   const layoutClustersRef = useRef(layoutClusters)
   useEffect(() => { layoutClustersRef.current = layoutClusters }, [layoutClusters])
-  const hasTriggeredTransitionRef = useRef(false)
-
   // Tooltip state
   const [tooltip, setTooltip] = useState<{ data: TooltipData; x: number; y: number } | null>(null)
 
   const handleClusterHover = useCallback((cluster: ClusterData | null, event: React.MouseEvent) => {
     if (cluster) {
-      setTooltip({
-        data: { kind: 'cluster', data: cluster },
-        x: event.clientX,
-        y: event.clientY,
-      })
+      setTooltip({ data: { kind: 'cluster', data: cluster }, x: event.clientX, y: event.clientY })
     } else {
       setTooltip(null)
     }
   }, [])
 
-  // ── Camera helpers ────────────────────────────────────────────────────────
-
+  // ── Camera helpers ──────────────────────────────────────────────────────
   const zoomAround = useCallback((factor: number, cx: number, cy: number) => {
     setCamera(prev => {
       const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor))
-      return {
-        zoom: newZoom,
-        panX: cx - (cx - prev.panX) / prev.zoom * newZoom,
-        panY: cy - (cy - prev.panY) / prev.zoom * newZoom,
-      }
+      return { zoom: newZoom, panX: cx - (cx - prev.panX) / prev.zoom * newZoom, panY: cy - (cy - prev.panY) / prev.zoom * newZoom }
     })
   }, [])
 
-  const zoomIn = useCallback(() => {
-    zoomAround(1.25, sizeRef.current.width / 2, sizeRef.current.height / 2)
-  }, [zoomAround])
+  const zoomIn = useCallback(() => { zoomAround(1.25, sizeRef.current.width / 2, sizeRef.current.height / 2) }, [zoomAround])
+  const zoomOut = useCallback(() => { zoomAround(0.8, sizeRef.current.width / 2, sizeRef.current.height / 2) }, [zoomAround])
+  const resetCamera = useCallback(() => { setCamera({ zoom: 1, panX: 0, panY: 0 }) }, [])
 
-  const zoomOut = useCallback(() => {
-    zoomAround(0.8, sizeRef.current.width / 2, sizeRef.current.height / 2)
-  }, [zoomAround])
-
-  const resetCamera = useCallback(() => {
-    setCamera({ zoom: 1, panX: 0, panY: 0 })
-  }, [])
-
-  // Wheel zoom (non-passive; ctrlKey = trackpad pinch)
+  // Wheel zoom
   useEffect(() => {
     const el = svgRef.current
     if (!el) return
@@ -117,50 +317,21 @@ export function LandscapeView({
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
 
-      const checkTransition = (newZoom: number, prevZoom: number, prevPanX: number, prevPanY: number) => {
-        if (!onZoomTransition || newZoom < TRANSITION_ZOOM || prevZoom >= TRANSITION_ZOOM || hasTriggeredTransitionRef.current) return
-        const worldX = (sx - prevPanX) / prevZoom
-        const worldY = (sy - prevPanY) / prevZoom
-        const focused = layoutClustersRef.current.find(c => {
-          const dx = worldX - c.position.cx
-          const dy = worldY - c.position.cy
-          return Math.sqrt(dx * dx + dy * dy) < c.position.r * 1.5
-        })
-        if (focused) {
-          hasTriggeredTransitionRef.current = true
-          setTimeout(() => onZoomTransition(focused.anchor.id), 0)
-        }
-      }
-
       if (e.ctrlKey) {
         // Trackpad pinch or Ctrl+scroll → zoom around cursor
         setCamera(prev => {
           const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * (1 - e.deltaY * 0.01)))
-          checkTransition(newZoom, prev.zoom, prev.panX, prev.panY)
-          return {
-            zoom: newZoom,
-            panX: sx - (sx - prev.panX) / prev.zoom * newZoom,
-            panY: sy - (sy - prev.panY) / prev.zoom * newZoom,
-          }
+          return { zoom: newZoom, panX: sx - (sx - prev.panX) / prev.zoom * newZoom, panY: sy - (sy - prev.panY) / prev.zoom * newZoom }
         })
       } else if (Math.abs(e.deltaY) < 50 || Math.abs(e.deltaX) > 0) {
         // Trackpad two-finger swipe → pan
-        setCamera(prev => ({
-          ...prev,
-          panX: prev.panX - e.deltaX,
-          panY: prev.panY - e.deltaY,
-        }))
+        setCamera(prev => ({ ...prev, panX: prev.panX - e.deltaX, panY: prev.panY - e.deltaY }))
       } else {
         // Mouse scroll wheel → zoom around cursor
         setCamera(prev => {
           const factor = e.deltaY < 0 ? 1.12 : 0.9
           const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor))
-          checkTransition(newZoom, prev.zoom, prev.panX, prev.panY)
-          return {
-            zoom: newZoom,
-            panX: sx - (sx - prev.panX) / prev.zoom * newZoom,
-            panY: sy - (sy - prev.panY) / prev.zoom * newZoom,
-          }
+          return { zoom: newZoom, panX: sx - (sx - prev.panX) / prev.zoom * newZoom, panY: sy - (sy - prev.panY) / prev.zoom * newZoom }
         })
       }
     }
@@ -168,7 +339,7 @@ export function LandscapeView({
     return () => el.removeEventListener('wheel', onWheel)
   }, [size.width, size.height])
 
-  // Keyboard zoom: +/= zoom in, -/_ zoom out, 0 reset
+  // Keyboard zoom
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
@@ -183,38 +354,32 @@ export function LandscapeView({
 
   // Pan on SVG background drag
   const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
-    // Only pan when clicking the SVG background (not a cluster bubble)
     if (e.target !== e.currentTarget) return
     const cam = cameraRef.current
     panStartRef.current = { x: e.clientX, y: e.clientY, panX: cam.panX, panY: cam.panY }
     if (svgRef.current) svgRef.current.style.cursor = 'grab'
   }
-
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!panStartRef.current) return
-    const dx = e.clientX - panStartRef.current.x
-    const dy = e.clientY - panStartRef.current.y
-    const { panX: startPanX, panY: startPanY } = panStartRef.current
-    setCamera(prev => ({ ...prev, panX: startPanX + dx, panY: startPanY + dy }))
+    const start = panStartRef.current
+    if (!start) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    setCamera(prev => ({ ...prev, panX: start.panX + dx, panY: start.panY + dy }))
   }
-
   const handleSvgMouseUp = () => {
     panStartRef.current = null
     if (svgRef.current) svgRef.current.style.cursor = 'default'
   }
 
-  // Unclustered zone positioning
-  const unclusteredX = size.width - 120
-  const unclusteredY = size.height - 80
-
-  // Check if any filter is active (affects cross-cluster edge dimming)
+  const unclusteredX = size.width - 100
+  const unclusteredY = size.height - 60
   const hasActiveFilter = clusters.some(c => !isClusterVisible(c))
 
   return (
     <div
       ref={containerRef}
       className="relative w-full h-full"
-      style={{ overflow: 'hidden' }}
+      style={{ overflow: 'hidden', background: 'var(--color-bg-content)' }}
     >
       {size.width > 0 && size.height > 0 && (
         <svg
@@ -227,79 +392,171 @@ export function LandscapeView({
           onMouseUp={handleSvgMouseUp}
           onMouseLeave={handleSvgMouseUp}
         >
-          {/* Camera transform — wraps all world-space content */}
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
+            {/* 0. Hierarchy tether lines — sub-anchors to their parents */}
+            {layoutClusters
+              .filter(c => c.anchor.isSubAnchor && c.anchor.parentAnchorId)
+              .map(subCluster => {
+                const parent = layoutClusters.find(
+                  c => c.anchor.id === subCluster.anchor.parentAnchorId
+                )
+                if (!parent) return null
+
+                const subPos = livePositions.get(subCluster.anchor.id)
+                const parentPos = livePositions.get(parent.anchor.id)
+                const sx = subPos?.x ?? subCluster.position.cx
+                const sy = subPos?.y ?? subCluster.position.cy
+                const px = parentPos?.x ?? parent.position.cx
+                const py = parentPos?.y ?? parent.position.cy
+
+                const dx   = sx - px
+                const dy   = sy - py
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1
+                const ex   = px + (dx / dist) * parent.position.r
+                const ey   = py + (dy / dist) * parent.position.r
+
+                const color = getEntityColor(parent.anchor.entityType)
+
+                return (
+                  <line
+                    key={`tether-${subCluster.anchor.id}`}
+                    x1={sx} y1={sy}
+                    x2={ex} y2={ey}
+                    stroke={color}
+                    strokeWidth={2}
+                    strokeOpacity={0.4}
+                    strokeDasharray="6 4"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                )
+              })}
+
             {/* 1. Cross-cluster edges */}
-            {layoutClusters.map(cluster =>
-              cluster.crossClusterEdges.map(edge => {
+            {showCrossEdges && layoutClusters.map(cluster => {
+              const pos1 = livePositions.get(cluster.anchor.id)
+              return cluster.crossClusterEdges.map(edge => {
                 const target = layoutClusters.find(c => c.anchor.id === edge.targetClusterId)
                 if (!target) return null
                 if (cluster.anchor.id > edge.targetClusterId) return null
+                const pos2 = livePositions.get(target.anchor.id)
 
                 const bothVisible = isClusterVisible(cluster) && isClusterVisible(target)
-                const opacity = hasActiveFilter && !bothVisible ? 0.02 : 0.06
+                const baseOpacity = Math.min(0.06 + (edge.totalWeight / 30) * 0.14, 0.20)
+                const opacity = hasActiveFilter && !bothVisible ? 0.01 : baseOpacity
+                const strokeWidth = Math.min(0.5 + edge.totalWeight * 0.2, 3)
 
                 return (
                   <line
                     key={`${cluster.anchor.id}-${edge.targetClusterId}`}
-                    x1={cluster.position.cx}
-                    y1={cluster.position.cy}
-                    x2={target.position.cx}
-                    y2={target.position.cy}
-                    stroke={`rgba(0,0,0,${opacity})`}
-                    strokeWidth={Math.min(edge.totalWeight * 1.5, 6)}
-                    strokeDasharray="6 4"
-                    style={{ transition: 'opacity 0.18s ease' }}
+                    x1={pos1?.x ?? cluster.position.cx}
+                    y1={pos1?.y ?? cluster.position.cy}
+                    x2={pos2?.x ?? target.position.cx}
+                    y2={pos2?.y ?? target.position.cy}
+                    stroke={`rgba(100,116,139,${opacity})`}
+                    strokeWidth={strokeWidth}
                   />
                 )
               })
-            )}
+            })}
 
-            {/* 2. Cluster bubbles */}
-            {layoutClusters.map(cluster => (
-              <ClusterBubble
-                key={cluster.anchor.id}
-                cluster={cluster}
-                dimmed={!isClusterVisible(cluster)}
-                onHover={handleClusterHover}
-                onClick={onClusterClick}
-              />
-            ))}
+            {/* 2. Cluster bubbles — using live positions */}
+            {layoutClusters.map(cluster => {
+              const pos = livePositions.get(cluster.anchor.id)
+              const liveCluster = pos ? {
+                ...cluster,
+                position: { ...cluster.position, cx: pos.x, cy: pos.y },
+              } : cluster
+
+              return (
+                <g
+                  key={cluster.anchor.id}
+                  onMouseDown={e => handleNodeMouseDown(e, cluster.anchor.id)}
+                  style={{ cursor: 'grab' }}
+                >
+                  <ClusterBubble
+                    cluster={liveCluster}
+                    dimmed={!isClusterVisible(cluster)}
+                    cameraZoom={camera.zoom}
+                    isSubAnchor={cluster.anchor.isSubAnchor}
+                    subAnchorCount={cluster.subAnchorIds.length}
+                    isSelected={selectedClusterId === cluster.anchor.id}
+                    onHover={handleClusterHover}
+                    onClick={onClusterClick}
+                    onDoubleClick={onClusterDoubleClick}
+                  />
+                </g>
+              )
+            })}
+
+            {/* 2b. Ghost tethers */}
+            {positionedSuggested.map(sc => {
+              const nearest = layoutClusters[0]
+              if (!nearest) return null
+              const pos = livePositions.get(nearest.anchor.id)
+              return (
+                <line
+                  key={`suggested-tether-${sc.candidateId}`}
+                  x1={sc.cx} y1={sc.cy}
+                  x2={pos?.x ?? nearest.position.cx} y2={pos?.y ?? nearest.position.cy}
+                  stroke="rgba(245,158,11,0.06)"
+                  strokeWidth={0.5}
+                  strokeDasharray="3 5"
+                  style={{ pointerEvents: 'none' }}
+                />
+              )
+            })}
+
+            {/* 2c. Ghost cluster bubbles */}
+            {positionedSuggested.map(sc => {
+              const ghostCluster: ClusterData & { compositeScore: number } = {
+                anchor: { id: sc.nodeId, label: sc.label, entityType: sc.entityType, description: null, entityCount: sc.mentionCount, parentAnchorId: null, isSubAnchor: false },
+                entityCount: sc.mentionCount,
+                typeDistribution: [],
+                position: { cx: 0, cy: 0, r: sc.r },
+                crossClusterEdges: [],
+                subAnchorIds: [],
+                compositeScore: sc.compositeScore,
+              }
+              return (
+                <g
+                  key={`suggested-${sc.candidateId}`}
+                  transform={`translate(${sc.cx}, ${sc.cy})`}
+                  onClick={() => onSuggestedClusterClick?.(sc)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <ClusterBubble
+                    cluster={ghostCluster}
+                    dimmed={false}
+                    isSuggested={true}
+                    duplicateCount={sc.duplicateCount}
+                    cameraZoom={camera.zoom}
+                    onHover={(c, e) => {
+                      if (c) {
+                        setTooltip({
+                          data: { kind: 'suggested', candidateId: sc.candidateId, label: sc.label, entityType: sc.entityType, reasoning: sc.reasoningText, score: sc.compositeScore, velocity: sc.velocityDirection },
+                          x: e.clientX, y: e.clientY,
+                        })
+                      } else { setTooltip(null) }
+                    }}
+                    onClick={() => {}}
+                  />
+                </g>
+              )
+            })}
 
             {/* 3. Unclustered zone */}
             {unclustered.length > 0 && (
               <g>
-                <text
-                  x={unclusteredX}
-                  y={unclusteredY - 30}
-                  textAnchor="middle"
-                  style={{
-                    fontFamily: 'var(--font-display)',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    fill: 'var(--color-text-secondary)',
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase' as const,
-                  }}
-                >
+                <text x={unclusteredX} y={unclusteredY - 20} textAnchor="middle"
+                  style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, fill: 'var(--color-text-secondary)', letterSpacing: '0.08em', textTransform: 'uppercase' as const }}>
                   UNCLUSTERED
                 </text>
-
                 {unclustered.slice(0, 20).map((entity, i) => {
                   const angle = (i / Math.min(unclustered.length, 20)) * Math.PI * 2
-                  const spreadR = 15 + Math.random() * 25
-                  const dotX = unclusteredX + Math.cos(angle) * spreadR
-                  const dotY = unclusteredY + Math.sin(angle) * spreadR
-
+                  const spreadR = 10 + Math.random() * 15
                   return (
-                    <circle
-                      key={entity.id}
-                      cx={dotX}
-                      cy={dotY}
-                      r={3}
-                      fill={getEntityColor(entity.entityType)}
-                      opacity={0.5}
-                    />
+                    <circle key={entity.id} cx={unclusteredX + Math.cos(angle) * spreadR} cy={unclusteredY + Math.sin(angle) * spreadR}
+                      r={2} fill={getEntityColor(entity.entityType)} opacity={0.4} />
                   )
                 })}
               </g>
@@ -308,130 +565,115 @@ export function LandscapeView({
         </svg>
       )}
 
-      {/* 4. Stats overlay — top-right */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 16,
-          right: 16,
-          background: 'var(--color-bg-card)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 10,
-          padding: '10px 14px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          pointerEvents: 'none',
-        }}
-      >
+      {/* Stats overlay */}
+      <div style={{ position: 'absolute', top: 16, right: 16, background: 'rgba(255,255,255,0.9)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 3, pointerEvents: 'none', backdropFilter: 'blur(8px)' }}>
         <StatRow label="Clusters" value={stats.anchorCount} />
         <StatRow label="Entities" value={stats.nodeCount} />
         <StatRow label="Edges" value={stats.edgeCount} />
       </div>
 
-      {/* 5. Level indicator — top-left */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 16,
-          left: 16,
-          background: 'var(--color-accent-50)',
-          border: '1px solid rgba(214,58,0,0.15)',
-          borderRadius: 12,
-          padding: '5px 12px',
-          pointerEvents: 'none',
-        }}
-      >
-        <span
-          style={{
-            fontFamily: 'var(--font-body)',
-            fontSize: 11,
-            fontWeight: 600,
-            color: 'var(--color-accent-500)',
-          }}
-        >
-          Clusters
-        </span>
-      </div>
-
-      {/* Zoom controls — bottom-right */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 16,
-          right: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          zIndex: 20,
-        }}
-      >
+      {/* Zoom controls */}
+      <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 20 }}>
         {[
-          { label: '+', title: 'Zoom in (+ key)', action: zoomIn },
-          { label: '−', title: 'Zoom out (− key)', action: zoomOut },
-          { label: '⊙', title: 'Reset view (0 key)', action: resetCamera },
+          { label: '+', title: 'Zoom in', action: zoomIn },
+          { label: '−', title: 'Zoom out', action: zoomOut },
+          { label: '⊙', title: 'Reset', action: resetCamera },
         ].map(({ label, title, action }) => (
-          <button
-            key={label}
-            type="button"
-            onClick={action}
-            title={title}
+          <button key={label} type="button" onClick={action} title={title}
             className="flex items-center justify-center font-body font-bold cursor-pointer"
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: 7,
-              background: 'rgba(255,255,255,0.95)',
-              border: '1px solid rgba(0,0,0,0.08)',
-              color: 'var(--color-text-secondary)',
-              fontSize: 16,
-              lineHeight: 1,
-              transition: 'background 0.15s ease',
-            }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#fff' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.95)' }}
+            style={{ width: 26, height: 26, borderRadius: 6, background: 'rgba(255,255,255,0.9)', border: '1px solid rgba(0,0,0,0.08)', color: 'var(--color-text-secondary)', fontSize: 14, lineHeight: 1, backdropFilter: 'blur(8px)' }}
           >
             {label}
           </button>
         ))}
       </div>
 
-      {/* Tooltip portal */}
-      {tooltip && (
-        <NodeTooltip
-          tooltip={tooltip.data}
-          x={tooltip.x}
-          y={tooltip.y}
-        />
-      )}
+      {/* Selected cluster card — positioned above the node */}
+      {selectedClusterId && (() => {
+        const sel = clusters.find(c => c.anchor.id === selectedClusterId)
+        if (!sel) return null
+        const livePos = livePositions.get(selectedClusterId)
+        const wx = livePos?.x ?? sel.position.cx
+        const wy = livePos?.y ?? sel.position.cy
+        // Convert world coords to screen coords
+        const screenX = wx * camera.zoom + camera.panX
+        const screenY = wy * camera.zoom + camera.panY
+        const cardWidth = 220
+        // Position card centered above the node, clamped to viewport
+        const left = Math.max(8, Math.min(size.width - cardWidth - 8, screenX - cardWidth / 2))
+        const top = Math.max(8, screenY - sel.position.r * camera.zoom - 14)
+        const color = getEntityColor(sel.anchor.entityType)
+
+        return (
+          <div
+            style={{
+              position: 'absolute',
+              left,
+              bottom: size.height - top,
+              zIndex: 30,
+              width: cardWidth,
+              background: 'rgba(255,255,255,0.96)',
+              backdropFilter: 'blur(12px)',
+              border: `1px solid ${color}40`,
+              borderRadius: 10,
+              padding: '12px 14px',
+              boxShadow: '0 6px 24px rgba(0,0,0,0.08)',
+              animation: 'fadeUp 0.15s ease',
+              pointerEvents: 'auto',
+            }}
+          >
+            <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+              <span className="font-display" style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                {sel.anchor.label}
+              </span>
+              <button type="button" onClick={() => onClearSelection?.()}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', fontSize: 14, lineHeight: 1, padding: 2 }}>
+                ×
+              </button>
+            </div>
+            <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+              <span className="font-body" style={{
+                fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+                color, background: `${color}12`, border: `1px solid ${color}29`,
+              }}>
+                {sel.anchor.entityType}
+              </span>
+              <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}>
+                {sel.entityCount} entities
+              </span>
+            </div>
+            {sel.anchor.description && (
+              <p className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)', lineHeight: 1.4, margin: '0 0 8px 0' }}>
+                {sel.anchor.description.length > 100 ? sel.anchor.description.slice(0, 97) + '…' : sel.anchor.description}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => onExploreCluster?.(sel.anchor.id)}
+              className="font-body w-full"
+              style={{
+                background: 'var(--color-accent-500)', color: 'white',
+                fontSize: 11, fontWeight: 600, padding: '6px 0', borderRadius: 6,
+                border: 'none', cursor: 'pointer',
+              }}
+            >
+              Explore Cluster →
+            </button>
+          </div>
+        )
+      })()}
+
+      {/* Tooltip */}
+      {tooltip && <NodeTooltip tooltip={tooltip.data} x={tooltip.x} y={tooltip.y} />}
     </div>
   )
 }
 
-// ─── Stats Row ────────────────────────────────────────────────────────────────
-
 function StatRow({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <span
-        style={{
-          fontFamily: 'var(--font-body)',
-          fontSize: 10,
-          color: 'var(--color-text-secondary)',
-        }}
-      >
-        {label}
-      </span>
-      <span
-        style={{
-          fontFamily: 'var(--font-display)',
-          fontSize: 12,
-          fontWeight: 700,
-          color: 'var(--color-text-primary)',
-        }}
-      >
-        {value.toLocaleString()}
-      </span>
+      <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-primary)' }}>{value.toLocaleString()}</span>
     </div>
   )
 }

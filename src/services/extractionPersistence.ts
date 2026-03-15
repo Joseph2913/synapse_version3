@@ -70,20 +70,33 @@ export async function saveSource(
 
 // --- Save Nodes ---
 
+export interface SaveNodesResult {
+  newNodes:     SavedNode[]         // nodes actually inserted
+  reusedNodes:  SavedNode[]         // existing nodes reused (from exactMatches)
+  allNodes:     SavedNode[]         // newNodes + reusedNodes combined — use this for edge creation
+}
+
 export async function saveNodes(
   userId: string,
   entities: ReviewEntity[],
   sourceId: string,
   sourceMetadata: { sourceName: string; sourceType: string; sourceUrl?: string },
-  existingLabels: Set<string>
-): Promise<SavedNode[]> {
-  // Filter to only included entities
+  exactMatches: Map<string, string>  // label.toLowerCase() → existing node ID
+): Promise<SaveNodesResult> {
   const included = entities.filter(e => !e.removed)
 
-  // Filter out duplicates
-  const toInsert = included
-    .filter(e => !existingLabels.has(e.label.toLowerCase()))
-    .map(e => {
+  // Separate: entities to insert vs entities to reuse
+  const toInsert = included.filter(
+    e => !exactMatches.has(e.label.toLowerCase())
+  )
+  const toReuse = included.filter(
+    e => exactMatches.has(e.label.toLowerCase())
+  )
+
+  // Insert new nodes
+  let newNodes: SavedNode[] = []
+  if (toInsert.length > 0) {
+    const rows = toInsert.map(e => {
       const row: Record<string, unknown> = {
         user_id: userId,
         label: e.label,
@@ -93,24 +106,33 @@ export async function saveNodes(
         source_id: sourceId,
         confidence: e.confidence,
       }
-
-      // Defensive inserts: only include optional fields when they have values
-      if (e.description) row.description = e.description
-      if (sourceMetadata.sourceUrl) row.source_url = sourceMetadata.sourceUrl
-      if (e.tags && e.tags.length > 0) row.tags = e.tags
-
+      if (e.description)                row.description = e.description
+      if (sourceMetadata.sourceUrl)     row.source_url  = sourceMetadata.sourceUrl
+      if (e.tags && e.tags.length > 0)  row.tags        = e.tags
       return row
     })
 
-  if (!toInsert.length) return []
+    const { data, error } = await supabase
+      .from('knowledge_nodes')
+      .insert(rows)
+      .select('id, label, entity_type')
 
-  const { data, error } = await supabase
-    .from('knowledge_nodes')
-    .insert(toInsert)
-    .select('id, label, entity_type')
+    if (error) throw new PersistenceError('Failed to save nodes', error)
+    newNodes = (data ?? []) as SavedNode[]
+  }
 
-  if (error) throw new PersistenceError('Failed to save nodes', error)
-  return (data ?? []) as SavedNode[]
+  // Build reused nodes array from existing IDs
+  const reusedNodes: SavedNode[] = toReuse.map(e => ({
+    id:          exactMatches.get(e.label.toLowerCase())!,
+    label:       e.label,
+    entity_type: e.entity_type,
+  }))
+
+  return {
+    newNodes,
+    reusedNodes,
+    allNodes: [...newNodes, ...reusedNodes],
+  }
 }
 
 // --- Save Edges ---

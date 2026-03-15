@@ -1,14 +1,28 @@
-import { TrendingUp, BarChart3, Clock, Star, AlertTriangle, Target } from 'lucide-react'
+import { TrendingUp, BarChart3, Clock, Star, AlertTriangle, Target, GitMerge, X } from 'lucide-react'
 import { ProviderIcon } from '../shared/ProviderIcon'
+import { getEntityColor } from '../../config/entityTypes'
 import type { PipelineMetrics, PipelineHistoryItem } from '../../types/pipeline'
+import type { PotentialDuplicatePair } from '../../services/deduplication'
 
 interface PipelineStatsProps {
   metrics: PipelineMetrics
   allItems: PipelineHistoryItem[]
   loading: boolean
+  pendingDuplicatesCount?: number
+  pendingDuplicates?: PotentialDuplicatePair[]
+  onMerge?: (canonicalId: string, mergeId: string, pairId: string) => void
+  onKeepSeparate?: (pairId: string) => void
 }
 
-export function PipelineStats({ metrics, allItems, loading }: PipelineStatsProps) {
+export function PipelineStats({
+  metrics,
+  allItems,
+  loading,
+  pendingDuplicatesCount = 0,
+  pendingDuplicates = [],
+  onMerge,
+  onKeepSeparate,
+}: PipelineStatsProps) {
   const avgSec = metrics.avgDuration > 0 ? (metrics.avgDuration / 1000).toFixed(1) : '—'
   const ratingDisplay = metrics.ratedCount > 0 ? metrics.avgRating.toFixed(1) : '—'
 
@@ -162,6 +176,141 @@ export function PipelineStats({ metrics, allItems, loading }: PipelineStatsProps
                         transition: 'width 0.3s ease',
                       }}
                     />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Potential Duplicates Review */}
+      {pendingDuplicatesCount > 0 && (
+        <div style={{ marginTop: 20, marginBottom: 20 }}>
+          <span
+            className="font-body"
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: 'var(--semantic-amber-500, #f59e0b)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              marginBottom: 10,
+            }}
+          >
+            <GitMerge size={11} />
+            Potential Duplicates
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                background: 'rgba(245,158,11,0.1)',
+                color: 'var(--semantic-amber-500, #f59e0b)',
+                borderRadius: 10,
+                padding: '1px 6px',
+              }}
+            >
+              {pendingDuplicatesCount}
+            </span>
+          </span>
+
+          <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+            {pendingDuplicatesCount} pair{pendingDuplicatesCount !== 1 ? 's' : ''} of nodes may be the same entity
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {pendingDuplicates.map(pair => {
+              const simPct = Math.round(pair.similarity * 100)
+              const simColor = simPct >= 90
+                ? 'var(--semantic-green-500, #22c55e)'
+                : 'var(--semantic-amber-500, #f59e0b)'
+
+              return (
+                <div
+                  key={pair.id}
+                  style={{
+                    background: 'var(--color-bg-inset)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    {/* Node A */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span className="font-body font-semibold" style={{ fontSize: 12, color: 'var(--color-text-primary)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {pair.nodeA.label}
+                      </span>
+                      <span className="font-body" style={{ fontSize: 9, fontWeight: 600, color: getEntityColor(pair.nodeA.entityType) }}>
+                        {pair.nodeA.entityType}
+                      </span>
+                    </div>
+
+                    {/* Similarity */}
+                    <span className="font-body font-semibold" style={{ fontSize: 11, color: simColor, flexShrink: 0 }}>
+                      {simPct}%
+                    </span>
+
+                    {/* Node B */}
+                    <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
+                      <span className="font-body font-semibold" style={{ fontSize: 12, color: 'var(--color-text-primary)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {pair.nodeB.label}
+                      </span>
+                      <span className="font-body" style={{ fontSize: 9, fontWeight: 600, color: getEntityColor(pair.nodeB.entityType) }}>
+                        {pair.nodeB.entityType}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={() => onKeepSeparate?.(pair.id)}
+                      className="font-body font-semibold cursor-pointer"
+                      style={{
+                        fontSize: 10,
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        background: 'transparent',
+                        border: '1px solid var(--border-subtle)',
+                        color: 'var(--color-text-secondary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <X size={10} />
+                      Keep Separate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Pick higher connection count as canonical
+                        const canonical = pair.nodeA.connectionCount >= pair.nodeB.connectionCount
+                          ? pair.nodeA : pair.nodeB
+                        const toMerge = canonical === pair.nodeA ? pair.nodeB : pair.nodeA
+                        onMerge?.(canonical.id, toMerge.id, pair.id)
+                      }}
+                      className="font-body font-semibold cursor-pointer"
+                      style={{
+                        fontSize: 10,
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        background: 'var(--color-accent-50)',
+                        border: '1px solid rgba(214,58,0,0.15)',
+                        color: 'var(--color-accent-500)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <GitMerge size={10} />
+                      Merge
+                    </button>
                   </div>
                 </div>
               )

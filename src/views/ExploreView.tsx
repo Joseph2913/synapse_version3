@@ -11,11 +11,28 @@ import { useExploreFilters } from '../hooks/useExploreFilters'
 import { useEntityBrowser } from '../hooks/useEntityBrowser'
 import type { ClusterData, EntityNode, SourceNode, SourceEdge, SourceGraphAnchor } from '../types/explore'
 import type { EntityEdge } from '../services/exploreQueries'
+import { useAuth } from '../hooks/useAuth'
+import { fetchCandidatesWithNodes, confirmAnchorCandidate, dismissAnchorCandidate } from '../services/anchorCandidates'
+import type { AnchorCandidateWithNode } from '../types/anchors'
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const DEFAULT_LEFT_PCT = 67
 const MIN_LEFT_PCT = 30
 const MAX_LEFT_PCT = 80
+
+interface SuggestedClusterData {
+  candidateId:             string
+  nodeId:                  string
+  label:                   string
+  entityType:              string
+  compositeScore:          number
+  reasoningText:           string | null
+  mentionCount:            number
+  sourceCount:             number
+  velocityDirection:       'rising' | 'stable' | 'falling'
+  suggestedParentAnchorId: string | null
+  duplicateCount:          number
+}
 
 export function ExploreView() {
   const { data, loading, error, refetch } = useExploreData()
@@ -42,6 +59,42 @@ export function ExploreView() {
 
   // Entity browser — only fetches when entity-browser tab is active
   const entityBrowser = useEntityBrowser(viewMode === 'entity-browser')
+
+  const { user } = useAuth()
+
+  // Suggested anchor candidates — for ghost cluster rendering
+  const [suggestedCandidates, setSuggestedCandidates] = useState<AnchorCandidateWithNode[]>([])
+  const [showCrossEdges, setShowCrossEdges] = useState(true)
+  const [selectedSuggestedId, setSelectedSuggestedId] = useState<string | null>(null)
+  const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null)
+
+  // Fetch suggested candidates for ghost cluster rendering
+  useEffect(() => {
+    if (!user) return
+    fetchCandidatesWithNodes(user.id, ['suggested'])
+      .then(setSuggestedCandidates)
+      .catch(err => console.warn('[ExploreView] Failed to fetch suggested candidates:', err))
+  }, [user])
+
+  // Event listeners for anchor changes
+  useEffect(() => {
+    const onSuggestionsChanged = () => {
+      if (!user) return
+      fetchCandidatesWithNodes(user.id, ['suggested'])
+        .then(setSuggestedCandidates)
+        .catch(() => {})
+    }
+    const onAnchorConfirmed = () => {
+      refetch()
+      setTimeout(() => refetch(), 35000)
+    }
+    window.addEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
+    window.addEventListener('synapse:anchor-confirmed', onAnchorConfirmed)
+    return () => {
+      window.removeEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
+      window.removeEventListener('synapse:anchor-confirmed', onAnchorConfirmed)
+    }
+  }, [user, refetch])
 
   // Track neighborhood entities + edges for metadata panel
   const [neighborhoodEntities, setNeighborhoodEntities] = useState<EntityNode[]>([])
@@ -88,6 +141,48 @@ export function ExploreView() {
   }, [activeClusterId, clusters])
 
   const isNeighborhood = zoomLevel === 'neighborhood' && activeCluster !== null
+
+  // Build deduplicated ghost cluster data
+  const suggestedClusterData = useMemo((): SuggestedClusterData[] => {
+    const candidates = suggestedCandidates.filter(c => c.node !== null)
+    if (candidates.length === 0) return []
+
+    const grouped = new Map<string, AnchorCandidateWithNode & { duplicateCount: number }>()
+    for (const c of candidates) {
+      const key = c.node!.label.toLowerCase()
+      const existing = grouped.get(key)
+      if (!existing) {
+        grouped.set(key, { ...c, duplicateCount: 0 })
+      } else if (c.compositeScore > existing.compositeScore) {
+        grouped.set(key, { ...c, duplicateCount: existing.duplicateCount + 1 })
+      } else {
+        existing.duplicateCount++
+      }
+    }
+
+    return Array.from(grouped.values())
+      .sort((a, b) => b.compositeScore - a.compositeScore)
+      .slice(0, 8)
+      .map(c => ({
+        candidateId:             c.id,
+        nodeId:                  c.nodeId ?? '',
+        label:                   c.node!.label,
+        entityType:              c.node!.entity_type,
+        compositeScore:          c.compositeScore,
+        reasoningText:           c.reasoningText,
+        mentionCount:            c.mentionCount,
+        sourceCount:             c.sourceCount,
+        velocityDirection:       c.velocityDirection,
+        suggestedParentAnchorId: null,
+        duplicateCount:          c.duplicateCount,
+      }))
+  }, [suggestedCandidates])
+
+  const selectedSuggestedCandidate = useMemo(() =>
+    selectedSuggestedId
+      ? suggestedCandidates.find(c => c.id === selectedSuggestedId) ?? null
+      : null,
+  [selectedSuggestedId, suggestedCandidates])
 
   // Unique source types present in data (for toolbar dropdown)
   const sourceTypesPresent = useMemo(() => {
@@ -139,11 +234,20 @@ export function ExploreView() {
     setViewMode(mode)
   }, [setViewMode, setSelectedEntityId])
 
+  // Single click: select cluster (show info card). Double-click: enter neighborhood.
   const handleClusterClick = useCallback((cluster: ClusterData) => {
+    setSelectedClusterId(prev => prev === cluster.anchor.id ? null : cluster.anchor.id)
+    setSelectedSuggestedId(null)
+    setSelectedEntityId(null)
+    setSelectedSourceId(null)
+  }, [setSelectedEntityId])
+
+  const handleClusterDoubleClick = useCallback((cluster: ClusterData) => {
     enterNeighborhood(cluster.anchor.id)
   }, [enterNeighborhood])
 
-  const handleZoomTransition = useCallback((clusterId: string) => {
+  // "Explore" button from the cluster info card
+  const handleExploreCluster = useCallback((clusterId: string) => {
     enterNeighborhood(clusterId)
   }, [enterNeighborhood])
 
@@ -173,6 +277,33 @@ export function ExploreView() {
     setShowEdges(prev => !prev)
   }, [setShowEdges])
 
+  const handleSuggestedClusterClick = useCallback((candidate: SuggestedClusterData) => {
+    setSelectedSuggestedId(candidate.candidateId)
+    setSelectedEntityId(null)
+    setSelectedSourceId(null)
+  }, [setSelectedEntityId])
+
+  const handleConfirmFromExplore = useCallback(async (candidateId: string, nodeId: string) => {
+    const success = await confirmAnchorCandidate(candidateId, nodeId)
+    if (success) {
+      setSuggestedCandidates(prev => prev.filter(c => c.id !== candidateId))
+      setSelectedSuggestedId(null)
+      refetch()
+      setTimeout(() => refetch(), 35000)
+      window.dispatchEvent(new CustomEvent('synapse:anchor-suggestions-changed'))
+      window.dispatchEvent(new CustomEvent('synapse:anchor-confirmed', { detail: { nodeId } }))
+    }
+  }, [refetch])
+
+  const handleDismissFromExplore = useCallback(async (candidateId: string, dismissCount: number) => {
+    const success = await dismissAnchorCandidate(candidateId, dismissCount, 30)
+    if (success) {
+      setSuggestedCandidates(prev => prev.filter(c => c.id !== candidateId))
+      setSelectedSuggestedId(null)
+      window.dispatchEvent(new CustomEvent('synapse:anchor-suggestions-changed'))
+    }
+  }, [])
+
   // Shared toolbar props
   const toolbarProps = {
     viewMode,
@@ -199,6 +330,9 @@ export function ExploreView() {
     onClearAllFilters: clearAllFilters,
     // Entity browser state (controls rendered inline in toolbar)
     entityBrowser,
+    suggestedCount: suggestedClusterData.length,
+    showCrossEdges,
+    onToggleShowCrossEdges: () => setShowCrossEdges(prev => !prev),
   }
 
   // Determine effective clusters for toolbar (empty when loading/errored)
@@ -224,6 +358,24 @@ export function ExploreView() {
         <div className="flex-1 overflow-hidden">
           <EntityBrowserTab browser={entityBrowser} />
         </div>
+      ) : viewMode === 'anchors' && !isNeighborhood ? (
+        /* ── LANDSCAPE: Full-screen with floating info card ── */
+        <div className="flex-1 overflow-hidden relative">
+          <LandscapeView
+            clusters={clusters}
+            stats={stats}
+            unclustered={unclustered}
+            isClusterVisible={isClusterVisible}
+            onClusterClick={handleClusterClick}
+            onClusterDoubleClick={handleClusterDoubleClick}
+            onExploreCluster={handleExploreCluster}
+            selectedClusterId={selectedClusterId}
+            onClearSelection={() => setSelectedClusterId(null)}
+            suggestedClusters={suggestedClusterData}
+            showCrossEdges={showCrossEdges}
+            onSuggestedClusterClick={handleSuggestedClusterClick}
+          />
+        </div>
       ) : (
 
       <div
@@ -243,18 +395,6 @@ export function ExploreView() {
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
-          {/* Landscape (cluster bubbles) */}
-          {viewMode === 'anchors' && !isNeighborhood && (
-            <LandscapeView
-              clusters={clusters}
-              stats={stats}
-              unclustered={unclustered}
-              isClusterVisible={isClusterVisible}
-              onClusterClick={handleClusterClick}
-              onZoomTransition={handleZoomTransition}
-            />
-          )}
-
           {/* Neighborhood (entity nodes within a cluster) */}
           {viewMode === 'anchors' && isNeighborhood && activeCluster && (
             <NeighborhoodView
@@ -342,6 +482,10 @@ export function ExploreView() {
             onBack={returnToLandscape}
             filters={filters}
             onClearSpotlight={() => toggleSpotlight(null)}
+            selectedSuggestedCandidate={selectedSuggestedCandidate}
+            onConfirmSuggested={handleConfirmFromExplore}
+            onDismissSuggested={handleDismissFromExplore}
+            onClearSuggested={() => setSelectedSuggestedId(null)}
           />
         </div>
       </div>

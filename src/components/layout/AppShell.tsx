@@ -6,12 +6,38 @@ import { RightPanel } from './RightPanel'
 import { CommandPalette } from '../modals/CommandPalette'
 import { SettingsModal } from '../modals/SettingsModal'
 import { useGraphContext } from '../../hooks/useGraphContext'
+import { useAuth } from '../../hooks/useAuth'
+import { fetchSuggestedCount } from '../../services/anchorCandidates'
 
 export function AppShell() {
   const location = useLocation()
   const { rightPanelContent } = useGraphContext()
+  const { user } = useAuth()
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [suggestedAnchorCount, setSuggestedAnchorCount] = useState(0)
+
+  // Fetch anchor suggestion count (non-blocking — table may not exist yet)
+  useEffect(() => {
+    if (user) {
+      try {
+        fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
+      } catch { /* table may not exist */ }
+    }
+  }, [user])
+
+  // Listen for anchor suggestion changes
+  useEffect(() => {
+    const handler = () => {
+      if (user) {
+        try {
+          fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
+        } catch { /* ignore */ }
+      }
+    }
+    window.addEventListener('synapse:anchor-suggestions-changed', handler)
+    return () => window.removeEventListener('synapse:anchor-suggestions-changed', handler)
+  }, [user])
 
   const isAskView = location.pathname === '/ask'
   // Ask view has its own internal right panel, so skip the AppShell one
@@ -39,6 +65,7 @@ export function AppShell() {
         <NavRail
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
+          anchorSuggestionCount={suggestedAnchorCount}
         />
 
         <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0">

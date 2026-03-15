@@ -326,12 +326,40 @@ async function processMeeting(
     const { entities = [], relationships = [] } = extraction;
     console.log(`[meetings/process] Meeting ${meeting.id}: extracted ${entities.length} entities, ${relationships.length} relationships`);
 
-    // ── STEP 3: SAVE NODES ──────────────────────────────────────────────────────
+    // ── STEP 3: DEDUPLICATION + SAVE NODES ─────────────────────────────────────
     const savedNodeMap = new Map<string, string>();
     let nodesCreated = 0;
 
+    // Check for existing nodes with same label (exact-match deduplication)
+    const entityLabels = entities.filter(e => e.label && e.entity_type).map(e => e.label);
+    const { data: existingNodes } = await supabase
+      .from('knowledge_nodes')
+      .select('id, label, entity_type')
+      .eq('user_id', meeting.user_id)
+      .eq('is_merged', false)
+      .in('label', entityLabels);
+
+    const exactMatchMap = new Map<string, string>();
+    for (const existing of existingNodes ?? []) {
+      const matchingEntity = entities.find(
+        e => e.label.toLowerCase() === (existing.label as string).toLowerCase()
+          && e.entity_type === existing.entity_type
+      );
+      if (matchingEntity) {
+        exactMatchMap.set(matchingEntity.label.toLowerCase(), existing.id as string);
+      }
+    }
+
+    // Pre-populate savedNodeMap with reused nodes
+    for (const [labelLower, existingId] of exactMatchMap) {
+      const entity = entities.find(e => e.label.toLowerCase() === labelLower);
+      if (entity) savedNodeMap.set(entity.label, existingId);
+    }
+
+    // Insert only new nodes (not in exactMatchMap)
     for (const entity of entities) {
       if (!entity.label || !entity.entity_type) continue;
+      if (exactMatchMap.has(entity.label.toLowerCase())) continue;
 
       const nodePayload: Record<string, unknown> = {
         user_id: meeting.user_id,
@@ -368,6 +396,8 @@ async function processMeeting(
         nodesCreated++;
       }
     }
+
+    console.log(`[meetings/process] Dedup: ${exactMatchMap.size} exact matches reused, ${nodesCreated} new nodes for meeting ${meeting.id}`);
 
     // ── STEP 4: GENERATE EMBEDDINGS ─────────────────────────────────────────────
     const nodeEmbeddings = new Map<string, number[]>();
@@ -553,6 +583,29 @@ Return an empty array if no genuine cross-source connections exist.`;
 
     // ── COMPLETE ────────────────────────────────────────────────────────────────
     await updateStatus('completed');
+
+    // ── TRIGGER ANCHOR SCORING (fire-and-forget) ────────────────────────────────
+    const savedNodeIds = Array.from(savedNodeMap.values());
+    if (savedNodeIds.length > 0) {
+      const appUrl = process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3000';
+
+      fetch(`${appUrl}/api/anchors/score-post-extraction`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${CRON_SECRET ?? ''}`,
+        },
+        body: JSON.stringify({
+          userId:   meeting.user_id,
+          sourceId: meeting.id,
+          nodeIds:  savedNodeIds,
+        }),
+      }).catch(err => {
+        console.warn('[meetings/process] Anchor scoring trigger failed (non-fatal):', err);
+      });
+    }
 
     // Save extraction session record
     await supabase.from('extraction_sessions').insert({

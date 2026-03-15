@@ -9,6 +9,8 @@ export interface ClusterData {
   typeDistribution: TypeDistributionEntry[]
   position: { cx: number; cy: number; r: number }
   crossClusterEdges: CrossClusterEdge[]
+  // PRD-22: sub-anchors orbiting this cluster
+  subAnchorIds: string[]
 }
 
 export interface TypeDistributionEntry {
@@ -30,6 +32,9 @@ export interface AnchorNode {
   entityType: string
   description: string | null
   entityCount: number
+  // PRD-22: hierarchy fields
+  parentAnchorId: string | null   // null = root anchor
+  isSubAnchor:    boolean         // true when parentAnchorId is set
 }
 
 export interface EntityNode {

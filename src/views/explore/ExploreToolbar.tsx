@@ -45,6 +45,9 @@ interface ExploreToolbarProps {
   onSetSourceAnchorFilter?: (anchorId: string | null) => void
   // Entity browser state (passed from ExploreView, controls rendered inline)
   entityBrowser?: EntityBrowserState
+  suggestedCount?: number
+  showCrossEdges?: boolean
+  onToggleShowCrossEdges?: () => void
 }
 
 const RECENCY_OPTIONS: { key: ExploreFilters['recency']; label: string }[] = [
@@ -78,6 +81,9 @@ export function ExploreToolbar({
   onToggleConnType,
   onSetSourceAnchorFilter,
   entityBrowser,
+  suggestedCount,
+  showCrossEdges,
+  onToggleShowCrossEdges,
 }: ExploreToolbarProps) {
   const [spotlightOpen, setSpotlightOpen] = useState(false)
   const spotlightRef = useRef<HTMLDivElement>(null)
@@ -225,6 +231,61 @@ export function ExploreToolbar({
       })}
 
       <Divider />
+
+      {/* Suggested clusters notification */}
+      {(suggestedCount ?? 0) > 0 && viewMode === 'anchors' && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 10px', borderRadius: 20,
+          background: 'rgba(245,158,11,0.08)',
+          border: '1px solid rgba(245,158,11,0.25)',
+          flexShrink: 0,
+        }}>
+          <span style={{
+            fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: '#d97706',
+          }}>
+            ✦ {suggestedCount} new cluster{suggestedCount !== 1 ? 's' : ''} detected
+          </span>
+          <button
+            type="button"
+            onClick={() => { window.location.href = '/anchors' }}
+            style={{
+              fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: '#d97706',
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+              textDecoration: 'underline', textUnderlineOffset: 2,
+            }}
+          >
+            Review →
+          </button>
+        </div>
+      )}
+
+      {/* Cross-edges toggle */}
+      {viewMode === 'anchors' && !isNeighborhood && onToggleShowCrossEdges && (
+        <button
+          type="button"
+          onClick={onToggleShowCrossEdges}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '4px 10px', borderRadius: 20,
+            fontSize: 11, fontWeight: 600,
+            fontFamily: 'var(--font-body)',
+            border: `1px solid ${showCrossEdges ? 'rgba(100,116,139,0.3)' : 'var(--border-subtle)'}`,
+            background: showCrossEdges ? 'rgba(100,116,139,0.06)' : 'transparent',
+            color: showCrossEdges ? 'rgb(71,85,105)' : 'var(--color-text-secondary)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            flexShrink: 0,
+          }}
+        >
+          <svg width={14} height={10} viewBox="0 0 14 10" style={{ flexShrink: 0 }}>
+            <circle cx={2} cy={5} r={2} fill="currentColor" opacity={0.6} />
+            <line x1={4} y1={5} x2={10} y2={5} stroke="currentColor" strokeWidth={1.5} opacity={0.6} />
+            <circle cx={12} cy={5} r={2} fill="currentColor" opacity={0.6} />
+          </svg>
+          Connections
+        </button>
+      )}
 
       {/* 2. Anchor dropdown (entities mode only) */}
       {viewMode === 'anchors' && clusters.length > 0 && (

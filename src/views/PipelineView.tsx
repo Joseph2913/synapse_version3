@@ -4,6 +4,8 @@ import { useAuth } from '../hooks/useAuth'
 import { usePipelineHistory } from '../hooks/usePipelineHistory'
 import { usePipelineMetrics } from '../hooks/usePipelineMetrics'
 import { updateExtractionRating, deleteExtractionSession } from '../services/supabase'
+import { fetchPendingDuplicates, mergeNodes, keepSeparate } from '../services/deduplication'
+import type { PotentialDuplicatePair } from '../services/deduplication'
 import { HistoryCard } from '../components/pipeline/HistoryCard'
 import { ExtractionDetail } from '../components/pipeline/ExtractionDetail'
 import { ActiveItemDetail } from '../components/pipeline/ActiveItemDetail'
@@ -171,6 +173,44 @@ export function PipelineView() {
   const { items, allItems, loading, error, hasMore, loadMore, refetch, startPolling, counts } = usePipelineHistory(sourceFilter, statusFilter, sortBy)
   const metrics = usePipelineMetrics(allItems)
 
+  // Potential duplicates state
+  const { user } = useAuth()
+  const [pendingDuplicates, setPendingDuplicates] = useState<PotentialDuplicatePair[]>([])
+
+  const refreshDuplicates = useCallback(async () => {
+    if (!user?.id) return
+    try {
+      const pairs = await fetchPendingDuplicates(user.id)
+      setPendingDuplicates(pairs)
+    } catch (err) {
+      console.warn('[PipelineView] Failed to fetch pending duplicates:', err)
+    }
+  }, [user?.id])
+
+  useEffect(() => {
+    refreshDuplicates()
+  }, [refreshDuplicates])
+
+  const handleMergeDuplicates = useCallback(async (canonicalId: string, mergeId: string, _pairId: string) => {
+    if (!user?.id) return
+    try {
+      await mergeNodes(user.id, canonicalId, mergeId)
+      refreshDuplicates()
+    } catch (err) {
+      console.warn('[PipelineView] Merge failed:', err)
+    }
+  }, [user?.id, refreshDuplicates])
+
+  const handleKeepSeparate = useCallback(async (pairId: string) => {
+    if (!user?.id) return
+    try {
+      await keepSeparate(user.id, pairId)
+      refreshDuplicates()
+    } catch (err) {
+      console.warn('[PipelineView] Keep separate failed:', err)
+    }
+  }, [user?.id, refreshDuplicates])
+
   const selectedItem = useMemo(
     () => selectedItemId ? items.find(i => i.id === selectedItemId) ?? null : null,
     [selectedItemId, items]
@@ -334,7 +374,15 @@ export function PipelineView() {
 
     return (
       <div style={{ overflowY: 'auto', height: '100%' }}>
-        <PipelineStats metrics={metrics} allItems={allItems} loading={loading} />
+        <PipelineStats
+          metrics={metrics}
+          allItems={allItems}
+          loading={loading}
+          pendingDuplicatesCount={pendingDuplicates.length}
+          pendingDuplicates={pendingDuplicates}
+          onMerge={handleMergeDuplicates}
+          onKeepSeparate={handleKeepSeparate}
+        />
         <ExtractionSettings />
       </div>
     )
