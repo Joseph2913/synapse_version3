@@ -376,8 +376,25 @@ export function ExploreView() {
             onSuggestedClusterClick={handleSuggestedClusterClick}
           />
         </div>
+      ) : viewMode === 'anchors' && isNeighborhood && activeCluster ? (
+        /* ── NEIGHBORHOOD: Full-screen with floating info card (spec Section 1.5) ── */
+        <div className="flex-1 overflow-hidden relative">
+          <NeighborhoodView
+            cluster={activeCluster}
+            allClusters={clusters}
+            filters={filters}
+            showEdges={showEdges}
+            visibleEdgeTypes={visibleEdgeTypes}
+            selectedEntityId={selectedEntityId}
+            onSelectEntity={handleSelectEntity}
+            onBack={returnToLandscape}
+            onEntitiesLoaded={handleEntitiesLoaded}
+            onEdgesLoaded={handleEdgesLoaded}
+          />
+        </div>
       ) : (
 
+      /* ── SOURCE GRAPH: Split panel layout ── */
       <div
         ref={containerRef}
         className="flex-1 flex overflow-hidden"
@@ -395,24 +412,6 @@ export function ExploreView() {
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
-          {/* Neighborhood (entity nodes within a cluster) */}
-          {viewMode === 'anchors' && isNeighborhood && activeCluster && (
-            <NeighborhoodView
-              cluster={activeCluster}
-              allClusters={clusters}
-              filters={filters}
-              showEdges={showEdges}
-              visibleEdgeTypes={visibleEdgeTypes}
-              selectedEntityId={selectedEntityId}
-              onSelectEntity={handleSelectEntity}
-              onBack={returnToLandscape}
-              onAutoBack={returnToLandscape}
-              onEntitiesLoaded={handleEntitiesLoaded}
-              onEdgesLoaded={handleEdgesLoaded}
-            />
-          )}
-
-          {/* Source graph */}
           {viewMode === 'sources' && (
             <SourceGraphView
               filters={filters}
