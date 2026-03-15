@@ -622,10 +622,22 @@ export async function callScanNowAPI(
 // ─── Immediate Process (calls process API directly) ───────────────────────────
 
 export async function callProcessNowAPI(
-  authToken: string
+  authToken: string,
+  sourceType?: 'youtube' | 'meeting'
 ): Promise<{ processed: number }> {
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` }
 
+  if (sourceType === 'meeting') {
+    // Process meeting items directly
+    const meetingRes = await fetch('/api/meetings/process', { method: 'POST', headers })
+    if (!meetingRes.ok) {
+      const err = await meetingRes.json().catch(() => ({ error: 'Processing failed' })) as { error?: string }
+      throw new Error(err.error ?? `Processing failed: ${meetingRes.status}`)
+    }
+    return meetingRes.json() as Promise<{ processed: number }>
+  }
+
+  // YouTube: call decoupled endpoints sequentially
   // Step 1: Fetch transcripts for pending items
   await fetch('/api/youtube/fetch-transcripts', { method: 'POST', headers })
 

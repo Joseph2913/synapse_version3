@@ -482,7 +482,8 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
     setActionError(null)
     try {
       if (!session?.access_token) throw new Error('Not authenticated')
-      const result = await callProcessNowAPI(session.access_token)
+      const sourceType = source.category === 'meeting' ? 'meeting' as const : 'youtube' as const
+      const result = await callProcessNowAPI(session.access_token, sourceType)
       setProcessResult(`${result.processed} item${result.processed !== 1 ? 's' : ''} processed`)
       await onRefetch()
       refetchQueue()

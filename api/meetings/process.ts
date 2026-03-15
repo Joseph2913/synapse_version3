@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
+// Allow up to 120s on Vercel Pro (heavy Gemini extraction + embeddings)
+export const maxDuration = 120;
+
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -276,8 +279,8 @@ async function processMeeting(
   meeting: MeetingSource,
   supabase: ReturnType<typeof getSupabase>
 ): Promise<{ success: boolean; nodesCreated: number; edgesCreated: number; error?: string }> {
-  const updateStatus = async (status: string) => {
-    const meta = { ...(meeting.metadata ?? {}), extraction_status: status };
+  const updateStatus = async (status: string, extra?: Record<string, unknown>) => {
+    const meta = { ...(meeting.metadata ?? {}), extraction_status: status, ...extra };
     await supabase
       .from('knowledge_sources')
       .update({ metadata: meta })
@@ -285,7 +288,7 @@ async function processMeeting(
   };
 
   try {
-    await updateStatus('processing');
+    await updateStatus('processing', { processing_started_at: new Date().toISOString() });
 
     const content = meeting.content;
     if (!content || content.trim().length < 50) {
@@ -595,6 +598,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabase();
 
   try {
+    // ── STUCK ITEM RECOVERY ────────────────────────────────────────────────────
+    // Reset meetings stuck in 'processing' for >5 minutes back to 'pending'
+    // (mirrors YouTube pipeline stuck-item detection)
+    {
+      const { data: stuckCandidates } = await supabase
+        .from('knowledge_sources')
+        .select('id, metadata')
+        .eq('source_type', 'Meeting')
+        .contains('metadata', { extraction_status: 'processing' })
+        .limit(20);
+
+      const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+      const stuckItems = (stuckCandidates ?? []).filter(item => {
+        const meta = (item as { metadata: Record<string, unknown> | null }).metadata;
+        const startedAt = meta?.processing_started_at as string | undefined;
+        // If no timestamp, treat as stuck (legacy item)
+        if (!startedAt) return true;
+        return new Date(startedAt).getTime() < fiveMinAgo;
+      });
+
+      if (stuckItems.length > 0) {
+        console.log(`[meetings/process] Resetting ${stuckItems.length} stuck meetings back to pending`);
+        for (const stuck of stuckItems) {
+          const meta = {
+            ...((stuck as { metadata: Record<string, unknown> }).metadata ?? {}),
+            extraction_status: 'pending',
+            last_stuck_reset: new Date().toISOString(),
+          };
+          await supabase
+            .from('knowledge_sources')
+            .update({ metadata: meta })
+            .eq('id', stuck.id);
+        }
+      }
+    }
+
     // Find meeting sources with extraction_status = 'pending'
     let query = supabase
       .from('knowledge_sources')

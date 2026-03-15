@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
+// Allow up to 60s on Vercel Pro
+export const maxDuration = 60;
+
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;

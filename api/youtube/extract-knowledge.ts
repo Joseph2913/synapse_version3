@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
+// Allow up to 120s on Vercel Pro (heavy Gemini extraction + embeddings)
+export const maxDuration = 120;
+
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
