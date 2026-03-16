@@ -8,6 +8,7 @@ import { useQueryComposer } from '../hooks/useQueryComposer'
 import { useGraphContext } from '../hooks/useGraphContext'
 import { getGraphStats } from '../services/supabase'
 import { DEFAULT_QUERY_CONFIG } from '../types/rag'
+import type { ChatEntryContext } from '../types/chatRouting'
 import { StatusBar } from '../components/ask/StatusBar'
 import { ChatMessageList } from '../components/ask/ChatMessageList'
 import { ChatInput } from '../components/ask/ChatInput'
@@ -38,8 +39,13 @@ export function AskView() {
   } = useQueryComposer()
   const [graphIsEmpty, setGraphIsEmpty] = useState(false)
 
-  const pendingAutoQuery = useRef(
-    (location.state as { autoQuery?: string } | null)?.autoQuery ?? ''
+  // Read chatContext or legacy autoQuery from navigation state
+  const navState = location.state as { chatContext?: ChatEntryContext; autoQuery?: string } | null
+  const pendingContext = useRef<ChatEntryContext | null>(
+    navState?.chatContext
+      ?? (navState?.autoQuery
+        ? { autoQuery: navState.autoQuery, entryPoint: 'direct', systemDirective: '', queryConfig: {} }
+        : null)
   )
 
   useEffect(() => {
@@ -49,13 +55,13 @@ export function AskView() {
       .catch(() => {})
   }, [user])
 
-  // Fire the auto-query once using the default config
+  // Fire the auto-query once using the appropriate context
   useEffect(() => {
-    const query = pendingAutoQuery.current
-    if (!query || !user) return
-    pendingAutoQuery.current = ''
+    const ctx = pendingContext.current
+    if (!ctx || !user) return
+    pendingContext.current = null
     navigate('/ask', { state: {}, replace: true })
-    void sendMessage(query, DEFAULT_QUERY_CONFIG)
+    void sendMessage(ctx.autoQuery, DEFAULT_QUERY_CONFIG, ctx)
   }, [user, sendMessage, navigate])
 
   // ─── Drag resize ───────────────────────────────────────────────────────

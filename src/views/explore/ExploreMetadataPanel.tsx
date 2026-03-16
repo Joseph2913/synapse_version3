@@ -5,6 +5,7 @@ import { EntityBadge } from '../../components/shared/EntityBadge'
 import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { fetchNodesByIds } from '../../services/supabase'
+import { buildSourceCompareContext } from '../../config/chatEntryContexts'
 import type {
   ExploreViewMode,
   ZoomLevel,
@@ -645,53 +646,6 @@ function ConnectionDetailPanel({
 
 // ─── Connection Prompt Builder ────────────────────────────────────────────────
 
-function buildConnectionPrompt(
-  source: SourceNode,
-  other: SourceNode,
-  edge: SourceEdge,
-  sharedEntities: KnowledgeNode[],
-): string {
-  const entityConn = edge.connections.find(c => c.type === 'entity')
-  const anchorConn = edge.connections.find(c => c.type === 'anchor')
-
-  const sameType = source.sourceType === other.sourceType
-
-  // Build entity list snippet (up to 5)
-  const entityNames = sharedEntities.slice(0, 5).map(e => e.label)
-  const entitySnippet = entityNames.length > 0
-    ? ` They share entities like ${entityNames.join(', ')}${sharedEntities.length > 5 ? ` and ${sharedEntities.length - 5} more` : ''}.`
-    : ''
-
-  const tagSnippet = ''
-
-  // Build anchor snippet
-  const anchorSnippet = anchorConn && anchorConn.labels.length > 0
-    ? ` Both connect to the anchor topic${anchorConn.labels.length > 1 ? 's' : ''} "${anchorConn.labels.slice(0, 3).join('", "')}".`
-    : ''
-
-  // Determine dominant connection type for prompt framing
-  const sorted = [...edge.connections].sort((a, b) => b.count - a.count)
-  const primary = sorted[0]?.type
-
-  // Contextual prompt based on dominant connection + source types
-  if (primary === 'entity' && entityConn && entityConn.count >= 5) {
-    // Strong entity overlap — deep comparison
-    return `"${source.title}" and "${other.title}" share ${entityConn.count} entity connections.${entitySnippet}${tagSnippet}${anchorSnippet} Analyze the relationship between these two sources: What themes connect them? How do they complement each other? Are there insights that emerge from viewing them together?`
-  }
-
-  if (primary === 'anchor' && anchorConn) {
-    // Anchor-based connection — topic exploration
-    return `"${source.title}" and "${other.title}" both connect to ${anchorConn.labels.length > 1 ? 'the anchors' : 'the anchor'} "${anchorConn.labels.slice(0, 3).join('", "')}".${entitySnippet}${tagSnippet} How do these sources contribute different perspectives to ${anchorConn.labels.length > 1 ? 'these topics' : 'this topic'}? What can we learn by considering them together?`
-  }
-
-  if (sameType) {
-    // Same source type — evolution/progression comparison
-    return `Compare "${source.title}" and "${other.title}" (both ${source.sourceType} sources). They have ${edge.totalWeight} connections.${entitySnippet}${tagSnippet}${anchorSnippet} What themes evolved between them? How do their perspectives differ or build upon each other?`
-  }
-
-  // General cross-source relationship
-  return `Analyze the relationship between "${source.title}" (${source.sourceType}) and "${other.title}" (${other.sourceType}). They share ${edge.totalWeight} connections across ${edge.connections.length} connection types.${entitySnippet}${tagSnippet}${anchorSnippet} What are the key insights from their overlap? How do they relate to each other within my knowledge graph?`
-}
 
 // ─── Source List (enhanced with drill-down) ──────────────────────────────────
 
@@ -826,11 +780,14 @@ function SourceListPanel({
     }
   }, [expandedConnId, selectedSource, sources])
 
-  const handleAskAboutConnection = useCallback((otherSource: SourceNode, edge: SourceEdge) => {
+  const handleAskAboutConnection = useCallback((otherSource: SourceNode, _edge: SourceEdge) => {
     if (!selectedSource) return
-    const prompt = buildConnectionPrompt(selectedSource, otherSource, edge, sharedEntities)
-    navigate('/ask', { state: { autoQuery: prompt } })
-  }, [selectedSource, sharedEntities, navigate])
+    const ctx = buildSourceCompareContext(
+      { id: selectedSource.id, title: selectedSource.title },
+      { id: otherSource.id, title: otherSource.title }
+    )
+    navigate('/ask', { state: { chatContext: ctx } })
+  }, [selectedSource, navigate])
 
   // No source selected — show full source list
   if (!selectedSourceId || !selectedSource) {

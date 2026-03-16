@@ -1946,6 +1946,25 @@ export async function deleteExtractionSession(
   if (error) throw new Error(`Failed to delete extraction: ${error.message}`)
 }
 
+// ─── PRD-17: Source Content Fetch (fallback when chunks are empty) ───────────
+
+/**
+ * Fetch full source records including content for generating synthetic chunks.
+ * Used when source_chunks table has no entries for a given source.
+ */
+export async function fetchSourcesWithContent(
+  sourceIds: string[]
+): Promise<Map<string, KnowledgeSource>> {
+  if (sourceIds.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('knowledge_sources')
+    .select('*')
+    .in('id', sourceIds)
+
+  if (error || !data) return new Map()
+  return new Map((data as KnowledgeSource[]).map(s => [s.id, s]))
+}
+
 // ─── PRD-17: Scoped Retrieval Functions ──────────────────────────────────────
 
 /**

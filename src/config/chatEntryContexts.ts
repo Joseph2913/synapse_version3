@@ -1,5 +1,5 @@
 import type { ChatEntryContext } from '../types/chatRouting'
-import type { KnowledgeNode, KnowledgeSource } from '../types/database'
+import type { KnowledgeNode } from '../types/database'
 
 // ─── Builder: Entity Explore ─────────────────────────────────────────────────
 

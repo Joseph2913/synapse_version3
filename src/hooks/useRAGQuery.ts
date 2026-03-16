@@ -2,8 +2,10 @@ import { useState, useRef, useCallback } from 'react'
 import { useAuth } from './useAuth'
 import { useGraphContext } from './useGraphContext'
 import { queryGraph, buildRAGResponseContext } from '../services/rag'
+import { routedQuery } from '../services/ragRouter'
 import type { ChatMessage, RAGPipelineStep, RAGResponseContext, RAGStepEvent, QueryConfig } from '../types/rag'
 import { DEFAULT_QUERY_CONFIG } from '../types/rag'
+import type { ChatEntryContext } from '../types/chatRouting'
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -16,7 +18,7 @@ export interface UseRAGQueryReturn {
   pipelineEvents: RAGStepEvent[]
   error: string | null
   lastResponseContext: RAGResponseContext | null
-  sendMessage: (text: string, queryConfig?: QueryConfig) => Promise<void>
+  sendMessage: (text: string, queryConfig?: QueryConfig, entryContext?: ChatEntryContext) => Promise<void>
   clearChat: () => void
 }
 
@@ -31,7 +33,10 @@ export function useRAGQuery(): UseRAGQueryReturn {
   const [lastResponseContext, setLastResponseContext] = useState<RAGResponseContext | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  const sendMessage = useCallback(async (text: string, queryConfig: QueryConfig = DEFAULT_QUERY_CONFIG) => {
+  // Persist active entry context for follow-up messages
+  const activeContextRef = useRef<ChatEntryContext | null>(null)
+
+  const sendMessage = useCallback(async (text: string, queryConfig: QueryConfig = DEFAULT_QUERY_CONFIG, entryContext?: ChatEntryContext) => {
     if (!user) return
     if (!text.trim()) return
 
@@ -71,27 +76,32 @@ export function useRAGQuery(): UseRAGQueryReturn {
         .filter(m => m.role !== 'system')
         .map(m => ({ role: m.role, content: m.content }))
 
-      const response = await queryGraph(
-        text,
-        user.id,
-        conversationHistory,
-        queryConfig,
-        (event) => {
-          if (!controller.signal.aborted) {
-            if (event.status === 'running') setCurrentStep(event.step)
-            setPipelineEvents(prev => {
-              const idx = prev.findIndex(e => e.step === event.step)
-              if (idx >= 0) {
-                const updated = [...prev]
-                updated[idx] = event
-                return updated
-              }
-              return [...prev, event]
-            })
-          }
-        },
-        controller.signal
-      )
+      // If a new entry context is provided, store it for follow-ups
+      if (entryContext) {
+        activeContextRef.current = entryContext
+      }
+
+      const currentContext = entryContext ?? activeContextRef.current
+
+      const stepHandler = (event: RAGStepEvent) => {
+        if (!controller.signal.aborted) {
+          if (event.status === 'running') setCurrentStep(event.step)
+          setPipelineEvents(prev => {
+            const idx = prev.findIndex(e => e.step === event.step)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = event
+              return updated
+            }
+            return [...prev, event]
+          })
+        }
+      }
+
+      // Route through entry-point-specific pipeline when context is available
+      const response = currentContext
+        ? await routedQuery(text, user.id, conversationHistory, currentContext, stepHandler, controller.signal)
+        : await queryGraph(text, user.id, conversationHistory, queryConfig, stepHandler, controller.signal)
 
       if (controller.signal.aborted) return
 
@@ -147,6 +157,7 @@ export function useRAGQuery(): UseRAGQueryReturn {
     setAskContext(null)
     setRightPanelContent(null)
     setError(null)
+    activeContextRef.current = null
   }, [setRightPanelContent, setAskContext])
 
   return {

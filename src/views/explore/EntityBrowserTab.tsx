@@ -9,8 +9,10 @@ import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { fetchEntityNeighbors } from '../../services/exploreQueries'
 import { useAuth } from '../../hooks/useAuth'
+import { buildEntityExploreContext } from '../../config/chatEntryContexts'
 import type { EntityBrowserState } from '../../hooks/useEntityBrowser'
 import type { EntityNeighbor } from '../../services/exploreQueries'
+import type { KnowledgeNode } from '../../types/database'
 
 interface EntityBrowserTabProps {
   browser: EntityBrowserState
@@ -246,7 +248,10 @@ function EntityDetailPanel({
       {/* Actions */}
       <div style={{ padding: '12px 18px' }}>
         <button type="button"
-          onClick={() => navigate('/ask', { state: { autoQuery: `Tell me about ${entity.label} and its connections` } })}
+          onClick={() => {
+            const node = { id: entity.id, label: entity.label, entity_type: entity.entityType, user_id: '', is_anchor: false, created_at: entity.createdAt } as KnowledgeNode
+            navigate('/ask', { state: { chatContext: buildEntityExploreContext(node) } })
+          }}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             width: '100%', padding: '8px 12px', borderRadius: 8,
