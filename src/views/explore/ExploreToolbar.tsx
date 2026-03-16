@@ -6,10 +6,9 @@ import type { ExploreViewMode, ExploreFilters, ClusterData, SourceConnectionType
 import type { EntityBrowserState } from '../../hooks/useEntityBrowser'
 import type { EntitySortOption } from '../../hooks/useEntityBrowser'
 
-// Connection-type metadata for the dropdown
+// Connection-type metadata for the dropdown (tag removed — too noisy)
 const CONN_TYPE_META: { type: SourceConnectionType; color: string; label: string }[] = [
   { type: 'entity', color: '#6366f1', label: 'Shared entities' },
-  { type: 'tag', color: '#10b981', label: 'Common tags' },
   { type: 'anchor', color: '#b45309', label: 'Common anchors' },
 ]
 
@@ -661,15 +660,35 @@ export function ExploreToolbar({
                         transition: 'background 0.1s ease',
                       }}
                     >
-                      <span style={{ fontSize: 12 }}>{cfg.icon}</span>
-                      <span className="flex-1">{type}</span>
                       <span style={{
                         width: 7, height: 7, borderRadius: '50%',
                         background: cfg.color, flexShrink: 0,
                       }} />
+                      <span className="flex-1">{type}</span>
                     </button>
                   )
                 })}
+                {/* Clear filters */}
+                {activeSourceTypeCount > 0 && (
+                  <>
+                    <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0' }} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        for (const st of Array.from(filters.sourceTypes)) onToggleSourceType(st)
+                      }}
+                      className="flex items-center gap-2 w-full cursor-pointer font-body"
+                      style={{
+                        padding: '7px 10px', fontSize: 11, fontWeight: 500,
+                        color: 'var(--color-text-secondary)',
+                        background: 'none', border: 'none', borderRadius: 6, textAlign: 'left',
+                      }}
+                    >
+                      <X size={10} style={{ flexShrink: 0, opacity: 0.5 }} />
+                      <span>Clear filters</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -737,6 +756,27 @@ export function ExploreToolbar({
                     </button>
                   )
                 })}
+                {/* Clear filters */}
+                {activeConnTypeCount > 0 && (
+                  <>
+                    <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0' }} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        for (const ct of Array.from(filters.connTypes)) onToggleConnType(ct)
+                      }}
+                      className="flex items-center gap-2 w-full cursor-pointer font-body"
+                      style={{
+                        padding: '7px 10px', fontSize: 11, fontWeight: 500,
+                        color: 'var(--color-text-secondary)',
+                        background: 'none', border: 'none', borderRadius: 6, textAlign: 'left',
+                      }}
+                    >
+                      <X size={10} style={{ flexShrink: 0, opacity: 0.5 }} />
+                      <span>Clear filters</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>

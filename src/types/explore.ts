@@ -69,7 +69,7 @@ export interface SourceNode {
   anchorIds: string[]        // anchor IDs this source's entities connect to
 }
 
-export type SourceConnectionType = 'entity' | 'tag' | 'anchor'
+export type SourceConnectionType = 'entity' | 'anchor'
 
 export interface SourceEdge {
   fromSourceId: string

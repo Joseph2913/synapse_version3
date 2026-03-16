@@ -1945,3 +1945,157 @@ export async function deleteExtractionSession(
 
   if (error) throw new Error(`Failed to delete extraction: ${error.message}`)
 }
+
+// ─── PRD-17: Scoped Retrieval Functions ──────────────────────────────────────
+
+/**
+ * Fetch all chunks for a single source, ordered by chunk_index.
+ */
+export async function fetchAllChunksForSource(
+  sourceId: string,
+  _userId: string,
+  limit = 30
+): Promise<SemanticChunkResult[]> {
+  const { data, error } = await supabase
+    .from('source_chunks')
+    .select('id, source_id, chunk_index, content')
+    .eq('source_id', sourceId)
+    .order('chunk_index', { ascending: true })
+    .limit(limit)
+
+  if (error) {
+    console.warn('[supabase] fetchAllChunksForSource failed:', error.message)
+    return []
+  }
+
+  return (data ?? []).map(row => ({
+    id: row.id,
+    source_id: row.source_id,
+    chunk_index: row.chunk_index,
+    content: row.content,
+    similarity: 1.0,
+  }))
+}
+
+/**
+ * Fetch all entities extracted from a specific source.
+ */
+export async function fetchEntitiesForSource(
+  sourceId: string,
+  _userId: string
+): Promise<KnowledgeNode[]> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('*')
+    .eq('source_id', sourceId)
+    .eq('is_merged', false)
+
+  if (error) {
+    console.warn('[supabase] fetchEntitiesForSource failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeNode[]
+}
+
+/**
+ * Fetch edges where BOTH endpoints are within a given entity set.
+ */
+export async function fetchEdgesBetweenEntities(
+  entityIds: string[],
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  if (entityIds.length === 0) return []
+
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('*')
+    .in('source_node_id', entityIds)
+    .in('target_node_id', entityIds)
+
+  if (error) {
+    console.warn('[supabase] fetchEdgesBetweenEntities failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeEdge[]
+}
+
+/**
+ * Fetch edges crossing between two entity sets (A→B or B→A).
+ */
+export async function fetchCrossSourceEdges(
+  setA: string[],
+  setB: string[],
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  if (setA.length === 0 || setB.length === 0) return []
+
+  const [forwardResult, reverseResult] = await Promise.all([
+    supabase
+      .from('knowledge_edges')
+      .select('*')
+      .in('source_node_id', setA)
+      .in('target_node_id', setB),
+    supabase
+      .from('knowledge_edges')
+      .select('*')
+      .in('source_node_id', setB)
+      .in('target_node_id', setA),
+  ])
+
+  const forward = (forwardResult.data ?? []) as KnowledgeEdge[]
+  const reverse = (reverseResult.data ?? []) as KnowledgeEdge[]
+
+  // Deduplicate
+  const seen = new Set<string>()
+  const result: KnowledgeEdge[] = []
+  for (const edge of [...forward, ...reverse]) {
+    if (!seen.has(edge.id)) {
+      seen.add(edge.id)
+      result.push(edge)
+    }
+  }
+  return result
+}
+
+/**
+ * Fetch all first-degree edges for a single entity.
+ */
+export async function fetchEntityDirectEdges(
+  entityId: string,
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('*')
+    .or(`source_node_id.eq.${entityId},target_node_id.eq.${entityId}`)
+
+  if (error) {
+    console.warn('[supabase] fetchEntityDirectEdges failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeEdge[]
+}
+
+/**
+ * Fetch a node including its embedding vector.
+ */
+export async function fetchNodeWithEmbedding(
+  nodeId: string,
+  _userId: string
+): Promise<(KnowledgeNode & { embedding: number[] | null }) | null> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('*, embedding')
+    .eq('id', nodeId)
+    .maybeSingle()
+
+  if (error) {
+    console.warn('[supabase] fetchNodeWithEmbedding failed:', error.message)
+    return null
+  }
+
+  return data as (KnowledgeNode & { embedding: number[] | null }) | null
+}

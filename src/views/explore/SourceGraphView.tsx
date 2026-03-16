@@ -1,31 +1,39 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Upload } from 'lucide-react'
-import { SourceCard } from '../../components/explore/SourceCard'
-import { getSourceConfig } from '../../config/sourceTypes'
-import { useSourceLayout } from '../../hooks/useSourceLayout'
-import type { SourcePosition } from '../../hooks/useSourceLayout'
+import { getSourceConfig, SOURCE_TYPE_CONFIG, DEFAULT_SOURCE_CONFIG } from '../../config/sourceTypes'
+import { useSourceLayout, dotRadius, ANCHOR_RADIUS } from '../../hooks/useSourceLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchSourceGraph } from '../../services/exploreQueries'
+import { SourceDetailCard } from '../../components/explore/SourceDetailCard'
 import type {
   SourceNode,
   SourceEdge,
   SourceGraphAnchor,
-  SourceConnectionType,
   ExploreFilters,
 } from '../../types/explore'
 
-// ─── Connection-type color map ───────────────────────────────────────────────
-const CONN_COLORS: Record<SourceConnectionType, string> = {
-  entity: '#6366f1',  // indigo
-  tag: '#10b981',     // emerald
-  anchor: '#b45309',  // amber/anchor
-}
-
-const MIN_ZOOM = 0.2
-const MAX_ZOOM = 4.0
-const ANCHOR_RADIUS = 14
+const MIN_ZOOM = 0.15
+const MAX_ZOOM = 6.0
 
 interface Camera { zoom: number; panX: number; panY: number }
+
+// Live node for floating animation
+interface LiveNode {
+  id: string
+  x: number
+  y: number
+  vx: number
+  vy: number
+  radius: number
+  floatPhase: number
+  floatSpeedX: number
+  floatSpeedY: number
+  floatAmpX: number
+  floatAmpY: number
+}
+
+// Anchor color constant
+const ANCHOR_COLOR = '#b45309'
 
 interface SourceGraphViewProps {
   filters: ExploreFilters
@@ -46,37 +54,225 @@ export function SourceGraphView({
   const [size, setSize] = useState({ width: 0, height: 0 })
   const sizeRef = useRef({ width: 0, height: 0 })
 
-  // Camera (zoom + pan)
+  // Camera
   const [camera, setCamera] = useState<Camera>({ zoom: 1, panX: 0, panY: 0 })
   const cameraRef = useRef<Camera>({ zoom: 1, panX: 0, panY: 0 })
   useEffect(() => { cameraRef.current = camera }, [camera])
 
-  // Data state
+  // Data
   const [sources, setSources] = useState<SourceNode[]>([])
   const [edges, setEdges] = useState<SourceEdge[]>([])
   const [anchors, setAnchors] = useState<SourceGraphAnchor[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Interaction state
+  // Interaction
   const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null)
-  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
   const [hoveredAnchorId, setHoveredAnchorId] = useState<string | null>(null)
+  const [exploringSourceId, setExploringSourceId] = useState<string | null>(null)
 
-  // Mutable positions layer (drag updates applied here)
+  // Static layout
   const layoutPositions = useSourceLayout(sources, edges, size.width, size.height, anchors)
-  const [nodePositions, setNodePositions] = useState<Map<string, SourcePosition>>(new Map())
-  useEffect(() => { setNodePositions(layoutPositions) }, [layoutPositions])
 
-  // Drag & pan refs (no state to avoid re-renders every frame)
-  const dragNodeRef = useRef<{ id: string; isAnchor: boolean } | null>(null)
-  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  // Live floating positions
+  const liveNodesRef = useRef<LiveNode[]>([])
+  const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
+  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const rafRef = useRef<number>(0)
   const hasDraggedRef = useRef(false)
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
 
-  // Edge/anchor refs for drag spring physics (never stale)
+  // Edge refs
   const edgesRef = useRef(edges)
   useEffect(() => { edgesRef.current = edges }, [edges])
   const anchorsRef = useRef(anchors)
   useEffect(() => { anchorsRef.current = anchors }, [anchors])
+
+  // Weighted connectivity map: nodeId → Map<connectedNodeId, weight 0-1>
+  // Weight determines how strongly a connected node follows during drag
+  const connectivityRef = useRef(new Map<string, Map<string, number>>())
+  useEffect(() => {
+    const map = new Map<string, Map<string, number>>()
+    const addLink = (a: string, b: string, weight: number) => {
+      if (!map.has(a)) map.set(a, new Map())
+      if (!map.has(b)) map.set(b, new Map())
+      // Keep the strongest weight if duplicate
+      const existing = map.get(a)!.get(b) ?? 0
+      if (weight > existing) {
+        map.get(a)!.set(b, weight)
+        map.get(b)!.set(a, weight)
+      }
+    }
+    // Source-to-source: weight based on totalWeight (normalise to 0-1)
+    const maxWeight = Math.max(...edges.map(e => e.totalWeight), 1)
+    for (const e of edges) {
+      addLink(e.fromSourceId, e.toSourceId, Math.min(e.totalWeight / maxWeight, 1))
+    }
+    // Anchor-to-source: strong connection (0.8)
+    for (const a of anchors) {
+      for (const srcId of a.connectedSourceIds) addLink(a.id, srcId, 0.8)
+    }
+    connectivityRef.current = map
+  }, [edges, anchors])
+
+  // Node radii
+  const nodeRadii = useMemo(() => {
+    const radii = new Map<string, number>()
+    for (const s of sources) radii.set(s.id, dotRadius(s.entityCount))
+    for (const a of anchors) radii.set(a.id, ANCHOR_RADIUS)
+    return radii
+  }, [sources, anchors])
+
+  // Initialize live nodes
+  useEffect(() => {
+    if (layoutPositions.size === 0) return
+    liveNodesRef.current = Array.from(layoutPositions.entries()).map(([id, pos]) => ({
+      id,
+      x: pos.x,
+      y: pos.y,
+      vx: 0,
+      vy: 0,
+      radius: nodeRadii.get(id) ?? pos.radius,
+      floatPhase: Math.random() * Math.PI * 2,
+      floatSpeedX: 0.2 + Math.random() * 0.25,
+      floatSpeedY: 0.15 + Math.random() * 0.2,
+      floatAmpX: 0.06 + Math.random() * 0.1,
+      floatAmpY: 0.05 + Math.random() * 0.08,
+    }))
+  }, [layoutPositions, nodeRadii])
+
+  // Previous dragged node position — used to compute movement delta
+  const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
+
+  // Animation loop — floating + directional drag drift
+  //
+  // When dragging: we compute the DIRECTION the dragged node moved this frame,
+  // then apply that direction as a gentle velocity nudge to connected nodes.
+  // They glide in the same direction — NOT toward the dragged node.
+  // Stronger connections get a bigger nudge, weaker ones barely move.
+  // Nodes stay in their own area; they just drift along with the movement.
+  useEffect(() => {
+    let lastTime = performance.now()
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.05)
+      lastTime = now
+      const nodes = liveNodesRef.current
+      if (nodes.length === 0) { rafRef.current = requestAnimationFrame(tick); return }
+
+      const nodeMap = new Map<string, LiveNode>()
+      for (const n of nodes) nodeMap.set(n.id, n)
+
+      // ── Directional drag drift ───────────────────────────────────────────
+      // Compute how far the dragged node moved this frame, then nudge
+      // connected nodes in that SAME direction (not toward the node).
+      if (dragRef.current && dragPrevPos.current) {
+        const dragNode = nodeMap.get(dragRef.current.id)
+        if (dragNode) {
+          // Movement delta of the dragged node this frame
+          const moveDx = dragNode.x - dragPrevPos.current.x
+          const moveDy = dragNode.y - dragPrevPos.current.y
+
+          if (Math.abs(moveDx) > 0.1 || Math.abs(moveDy) > 0.1) {
+            const connections = connectivityRef.current.get(dragRef.current.id)
+            if (connections) {
+              for (const [connId, weight] of connections) {
+                const connNode = nodeMap.get(connId)
+                if (!connNode) continue
+
+                // Very subtle nudge in the same direction as the drag
+                // Strong connections (weight ~1): ~3% of drag speed
+                // Weak connections (weight ~0.1): ~0.5% of drag speed
+                const strength = 0.003 + weight * 0.025
+                connNode.vx += moveDx * strength
+                connNode.vy += moveDy * strength
+
+                // 2nd degree: barely perceptible
+                const secondDeg = connectivityRef.current.get(connId)
+                if (secondDeg) {
+                  for (const [secId, secWeight] of secondDeg) {
+                    if (secId === dragRef.current!.id) continue
+                    const secNode = nodeMap.get(secId)
+                    if (!secNode) continue
+                    const secStrength = 0.0005 + secWeight * 0.003
+                    secNode.vx += moveDx * secStrength
+                    secNode.vy += moveDy * secStrength
+                  }
+                }
+              }
+            }
+          }
+
+          dragPrevPos.current = { x: dragNode.x, y: dragNode.y }
+        }
+      }
+
+      // ── Update all nodes ─────────────────────────────────────────────────
+      for (const n of nodes) {
+        if (dragRef.current?.id === n.id) { n.vx = 0; n.vy = 0; continue }
+
+        // Floating drift
+        n.floatPhase += dt
+        n.vx += Math.sin(n.floatPhase * n.floatSpeedX) * n.floatAmpX * dt
+        n.vy += Math.cos(n.floatPhase * n.floatSpeedY) * n.floatAmpY * dt
+
+        // Boundary soft push
+        const w = sizeRef.current.width
+        const h = sizeRef.current.height
+        if (w > 0 && h > 0) {
+          const pad = 30
+          if (n.x < pad) n.vx += (pad - n.x) * 0.01
+          if (n.x > w - pad) n.vx -= (n.x - (w - pad)) * 0.01
+          if (n.y < pad) n.vy += (pad - n.y) * 0.01
+          if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
+        }
+
+        // Damping
+        n.vx *= 0.94
+        n.vy *= 0.94
+        n.x += n.vx
+        n.y += n.vy
+      }
+
+      const newPos = new Map<string, { x: number; y: number }>()
+      for (const n of nodes) newPos.set(n.id, { x: n.x, y: n.y })
+      setLivePositions(newPos)
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // Auto-fit camera
+  const hasAutoFitRef = useRef(false)
+  useEffect(() => {
+    if (layoutPositions.size === 0 || size.width === 0 || size.height === 0) return
+    if (hasAutoFitRef.current) return
+    hasAutoFitRef.current = true
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const [, pos] of layoutPositions) {
+      const r = pos.radius + 20
+      minX = Math.min(minX, pos.x - r)
+      minY = Math.min(minY, pos.y - r)
+      maxX = Math.max(maxX, pos.x + r)
+      maxY = Math.max(maxY, pos.y + r)
+    }
+
+    const contentW = maxX - minX
+    const contentH = maxY - minY
+    if (contentW <= 0 || contentH <= 0) return
+
+    const scaleX = size.width / contentW
+    const scaleY = size.height / contentH
+    const zoom = Math.max(MIN_ZOOM, Math.min(1.5, Math.min(scaleX, scaleY) * 0.92))
+
+    setCamera({
+      zoom,
+      panX: size.width / 2 - ((minX + maxX) / 2) * zoom,
+      panY: size.height / 2 - ((minY + maxY) / 2) * zoom,
+    })
+  }, [layoutPositions, size])
+
+  useEffect(() => { hasAutoFitRef.current = false }, [sources])
 
   // ResizeObserver
   useEffect(() => {
@@ -94,12 +290,11 @@ export function SourceGraphView({
     return () => obs.disconnect()
   }, [])
 
-  // Fetch source graph data
+  // Fetch
   useEffect(() => {
     if (!user) return
     let cancelled = false
     setLoading(true)
-
     fetchSourceGraph(user.id)
       .then(data => {
         if (cancelled) return
@@ -110,17 +305,14 @@ export function SourceGraphView({
       })
       .catch(err => console.warn('SourceGraphView fetch error:', err))
       .finally(() => { if (!cancelled) setLoading(false) })
-
     return () => { cancelled = true }
   }, [user, onSourcesLoaded])
 
-  // ─── Filtering logic (uses filters prop from useExploreFilters) ────────────
+  // ─── Filtering ──────────────────────────────────────────────────────────────
 
   const filteredEdges = useMemo(() => {
     if (filters.connTypes.size === 0) return edges
-    return edges.filter(e =>
-      e.connections.some(c => filters.connTypes.has(c.type))
-    )
+    return edges.filter(e => e.connections.some(c => filters.connTypes.has(c.type)))
   }, [edges, filters.connTypes])
 
   const filteredSourceIds = useMemo(() => {
@@ -138,7 +330,6 @@ export function SourceGraphView({
     return ids
   }, [sources, filters.sourceTypes, filters.sourceAnchorFilter, filters.searchQuery, filters.recency])
 
-  // Edge helpers
   const edgesForSource = useMemo(() => {
     const map = new Map<string, SourceEdge[]>()
     for (const e of filteredEdges) {
@@ -157,17 +348,7 @@ export function SourceGraphView({
     return new Set(relevant.map(e => `${e.fromSourceId}-${e.toSourceId}`))
   }, [activeSourceId, edgesForSource])
 
-  // ─── Derived data ─────────────────────────────────────────────────────────
-
-  const getEdgeColor = (edge: SourceEdge, active: boolean): string => {
-    if (active) return 'var(--color-accent-500)'
-    const sorted = [...edge.connections].sort((a, b) => b.count - a.count)
-    const primary = sorted[0]
-    if (!primary) return 'rgba(0,0,0,0.08)'
-    return CONN_COLORS[primary.type]
-  }
-
-  // ─── Camera helpers ────────────────────────────────────────────────────────
+  // ─── Camera helpers ─────────────────────────────────────────────────────────
 
   const zoomAround = useCallback((factor: number, cx: number, cy: number) => {
     setCamera(prev => {
@@ -181,62 +362,68 @@ export function SourceGraphView({
   }, [])
 
   const zoomIn = useCallback(() => {
-    zoomAround(1.25, sizeRef.current.width / 2, sizeRef.current.height / 2)
+    zoomAround(1.3, sizeRef.current.width / 2, sizeRef.current.height / 2)
   }, [zoomAround])
 
   const zoomOut = useCallback(() => {
-    zoomAround(0.8, sizeRef.current.width / 2, sizeRef.current.height / 2)
+    zoomAround(0.75, sizeRef.current.width / 2, sizeRef.current.height / 2)
   }, [zoomAround])
 
   const resetCamera = useCallback(() => {
+    hasAutoFitRef.current = false
     setCamera({ zoom: 1, panX: 0, panY: 0 })
   }, [])
 
-  // Wheel zoom (non-passive to call preventDefault)
+  // Reset all nodes back to their original layout positions
+  const resetNodes = useCallback(() => {
+    if (layoutPositions.size === 0) return
+    for (const n of liveNodesRef.current) {
+      const orig = layoutPositions.get(n.id)
+      if (orig) {
+        n.x = orig.x
+        n.y = orig.y
+        n.vx = 0
+        n.vy = 0
+      }
+    }
+    // Also re-fit camera
+    hasAutoFitRef.current = false
+  }, [layoutPositions])
+
+  // Wheel zoom — works for scroll wheel, trackpad pinch, and two-finger pan
   useEffect(() => {
-    const el = svgRef.current
+    const el = containerRef.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const rect = el.getBoundingClientRect()
+      const svg = svgRef.current
+      if (!svg) return
+      const rect = svg.getBoundingClientRect()
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
 
       if (e.ctrlKey) {
-        // Trackpad pinch
-        setCamera(prev => {
-          const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * (1 - e.deltaY * 0.01)))
-          return {
-            zoom: newZoom,
-            panX: sx - (sx - prev.panX) / prev.zoom * newZoom,
-            panY: sy - (sy - prev.panY) / prev.zoom * newZoom,
-          }
-        })
-      } else if (Math.abs(e.deltaX) > 2) {
-        // Trackpad two-finger swipe → pan
+        // Trackpad pinch — gentle sensitivity
+        const factor = 1 - e.deltaY * 0.004
+        zoomAround(factor, sx, sy)
+      } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 0.5 && Math.abs(e.deltaX) > 2) {
+        // Two-finger horizontal swipe → pan
         setCamera(prev => ({
           ...prev,
           panX: prev.panX - e.deltaX,
           panY: prev.panY - e.deltaY,
         }))
       } else {
-        // Mouse scroll wheel → zoom around cursor
-        setCamera(prev => {
-          const factor = e.deltaY < 0 ? 1.12 : 0.9
-          const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor))
-          return {
-            zoom: newZoom,
-            panX: sx - (sx - prev.panX) / prev.zoom * newZoom,
-            panY: sy - (sy - prev.panY) / prev.zoom * newZoom,
-          }
-        })
+        // Mouse scroll wheel → zoom around cursor position (gentle)
+        const factor = e.deltaY < 0 ? 1.06 : 0.94
+        zoomAround(factor, sx, sy)
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [size.width, size.height])
+  }, [zoomAround])
 
-  // Keyboard zoom: +/= in, -/_ out, 0 reset
+  // Keyboard zoom
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
@@ -244,118 +431,68 @@ export function SourceGraphView({
       if (e.key === '+' || e.key === '=') { zoomIn(); e.preventDefault() }
       else if (e.key === '-' || e.key === '_') { zoomOut(); e.preventDefault() }
       else if (e.key === '0') { resetCamera(); e.preventDefault() }
+      else if (e.key === 'r' || e.key === 'R') { resetNodes(); e.preventDefault() }
+      else if (e.key === 'Escape') { onSelectSource(null); setExploringSourceId(null) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoomIn, zoomOut, resetCamera])
+  }, [zoomIn, zoomOut, resetCamera, resetNodes, onSelectSource])
 
-  // ─── SVG interaction (drag + pan) ──────────────────────────────────────────
-
-  const toWorldPos = (clientX: number, clientY: number) => {
-    const rect = containerRef.current!.getBoundingClientRect()
-    const cam = cameraRef.current
-    return {
-      wx: (clientX - rect.left - cam.panX) / cam.zoom,
-      wy: (clientY - rect.top - cam.panY) / cam.zoom,
-    }
-  }
-
-  const hitTestNode = (wx: number, wy: number): { id: string; isAnchor: boolean } | null => {
-    // Test anchors first (smaller, drawn on top)
-    for (const anchor of anchors) {
-      const pos = nodePositions.get(anchor.id)
-      if (!pos) continue
-      const dx = wx - pos.x
-      const dy = wy - pos.y
-      if (Math.sqrt(dx * dx + dy * dy) < ANCHOR_RADIUS + 8) {
-        return { id: anchor.id, isAnchor: true }
-      }
-    }
-    // Test sources (reverse z-order)
-    for (let i = sources.length - 1; i >= 0; i--) {
-      const source = sources[i]!
-      const pos = nodePositions.get(source.id)
-      if (!pos) continue
-      const dx = wx - pos.x
-      const dy = wy - pos.y
-      if (Math.sqrt(dx * dx + dy * dy) < pos.radius + 8) {
-        return { id: source.id, isAnchor: false }
-      }
-    }
-    return null
-  }
-
-  const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+  // ── Node dragging ──────────────────────────────────────────────────────────
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
+    e.stopPropagation()
     hasDraggedRef.current = false
-    const { wx, wy } = toWorldPos(e.clientX, e.clientY)
-    const hit = hitTestNode(wx, wy)
+    const cam = cameraRef.current
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const worldX = (e.clientX - rect.left - cam.panX) / cam.zoom
+    const worldY = (e.clientY - rect.top - cam.panY) / cam.zoom
+    const node = liveNodesRef.current.find(n => n.id === nodeId)
+    if (!node) return
+    dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
+    dragPrevPos.current = { x: node.x, y: node.y }
 
-    if (hit) {
-      dragNodeRef.current = hit
-      if (svgRef.current) svgRef.current.style.cursor = 'grabbing'
-    } else {
-      const cam = cameraRef.current
-      panStartRef.current = { x: e.clientX, y: e.clientY, panX: cam.panX, panY: cam.panY }
-      if (svgRef.current) svgRef.current.style.cursor = 'grab'
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current || !svgRef.current) return
+      hasDraggedRef.current = true
+      const cam2 = cameraRef.current
+      const r2 = svgRef.current.getBoundingClientRect()
+      const wx = (ev.clientX - r2.left - cam2.panX) / cam2.zoom
+      const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
+      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
+      if (n) { n.x = wx - dragRef.current.offsetX; n.y = wy - dragRef.current.offsetY }
     }
+    const onUp = () => {
+      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current?.id)
+      if (n) { n.vx = 0; n.vy = 0 }
+      dragRef.current = null
+      dragPrevPos.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
+  // ─── SVG pan ───────────────────────────────────────────────────────────────
+  const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (e.target !== e.currentTarget) return
+    hasDraggedRef.current = false
+    const cam = cameraRef.current
+    panStartRef.current = { x: e.clientX, y: e.clientY, panX: cam.panX, panY: cam.panY }
+    if (svgRef.current) svgRef.current.style.cursor = 'grab'
   }
 
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (dragNodeRef.current) {
-      const { wx, wy } = toWorldPos(e.clientX, e.clientY)
-      const { id, isAnchor: isDragAnchor } = dragNodeRef.current
-      setNodePositions(prev => {
-        const old = prev.get(id)
-        if (!old) return prev
-        const dx = wx - old.x
-        const dy = wy - old.y
-        const next = new Map(prev)
-        next.set(id, { ...old, x: wx, y: wy })
-
-        // Spring: pull connected nodes
-        if (!isDragAnchor) {
-          // Dragging a source → pull connected sources via edges
-          for (const edge of edgesRef.current) {
-            if (edge.fromSourceId !== id && edge.toSourceId !== id) continue
-            const otherId = edge.fromSourceId === id ? edge.toSourceId : edge.fromSourceId
-            const other = next.get(otherId)
-            if (!other) continue
-            const k = Math.min(edge.totalWeight * 0.01, 0.15)
-            next.set(otherId, { ...other, x: other.x + dx * k, y: other.y + dy * k })
-          }
-          // Pull connected anchors
-          for (const anchor of anchorsRef.current) {
-            if (!anchor.connectedSourceIds.includes(id)) continue
-            const anchorPos = next.get(anchor.id)
-            if (!anchorPos) continue
-            next.set(anchor.id, { ...anchorPos, x: anchorPos.x + dx * 0.08, y: anchorPos.y + dy * 0.08 })
-          }
-        } else {
-          // Dragging an anchor → pull connected sources
-          const anchor = anchorsRef.current.find(a => a.id === id)
-          if (anchor) {
-            for (const srcId of anchor.connectedSourceIds) {
-              const srcPos = next.get(srcId)
-              if (!srcPos) continue
-              next.set(srcId, { ...srcPos, x: srcPos.x + dx * 0.08, y: srcPos.y + dy * 0.08 })
-            }
-          }
-        }
-
-        return next
-      })
-      hasDraggedRef.current = true
-    } else if (panStartRef.current) {
-      const dx = e.clientX - panStartRef.current.x
-      const dy = e.clientY - panStartRef.current.y
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) hasDraggedRef.current = true
-      const { panX: startPanX, panY: startPanY } = panStartRef.current
-      setCamera(prev => ({ ...prev, panX: startPanX + dx, panY: startPanY + dy }))
-    }
+    const start = panStartRef.current
+    if (!start) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) hasDraggedRef.current = true
+    setCamera(prev => ({ ...prev, panX: start.panX + dx, panY: start.panY + dy }))
   }
 
   const handleSvgMouseUp = () => {
-    dragNodeRef.current = null
     panStartRef.current = null
     if (svgRef.current) svgRef.current.style.cursor = 'default'
   }
@@ -363,33 +500,42 @@ export function SourceGraphView({
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.target === e.currentTarget && !hasDraggedRef.current) {
       onSelectSource(null)
+      setExploringSourceId(null)
     }
-    hasDraggedRef.current = false
   }
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
-
   const handleSourceHover = useCallback((source: SourceNode | null) => {
-    if (dragNodeRef.current) return
+    if (dragRef.current) return
     setHoveredSourceId(source?.id ?? null)
-    if (source) {
-      const pos = nodePositions.get(source.id)
-      if (pos) {
-        const cam = cameraRef.current
-        setTooltipPos({
-          x: pos.x * cam.zoom + cam.panX,
-          y: pos.y * cam.zoom + cam.panY,
-        })
-      }
-    } else {
-      setTooltipPos(null)
-    }
-  }, [nodePositions])
+  }, [])
 
   const handleSourceClick = useCallback((source: SourceNode) => {
     if (hasDraggedRef.current) return
-    onSelectSource(selectedSourceId === source.id ? null : source)
+    const deselecting = selectedSourceId === source.id
+    onSelectSource(deselecting ? null : source)
+    // Click directly opens the right-side detail panel
+    setExploringSourceId(deselecting ? null : source.id)
   }, [onSelectSource, selectedSourceId])
+
+  // selectedSourceId is used for highlight ring / edge emphasis; detail panel uses exploringSourceId
+
+  // ─── Legend items ──────────────────────────────────────────────────────────
+  const legendItems = useMemo(() => {
+    const sourceTypeSet = new Set(sources.map(s => s.sourceType))
+    const items: { color: string; label: string; dashed?: boolean }[] = []
+    for (const [type, cfg] of Object.entries(SOURCE_TYPE_CONFIG)) {
+      if (sourceTypeSet.has(type)) items.push({ color: cfg.color, label: cfg.label })
+    }
+    // Add "Other" if any source uses default config
+    if (sources.some(s => !SOURCE_TYPE_CONFIG[s.sourceType])) {
+      items.push({ color: DEFAULT_SOURCE_CONFIG.color, label: 'Other' })
+    }
+    if (anchors.length > 0) {
+      items.push({ color: ANCHOR_COLOR, label: 'Anchor', dashed: true })
+    }
+    return items
+  }, [sources, anchors])
 
   // Loading
   if (loading) {
@@ -420,7 +566,7 @@ export function SourceGraphView({
   }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden' }}>
+    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)' }}>
       {size.width > 0 && size.height > 0 && (
         <svg
           ref={svgRef}
@@ -433,13 +579,12 @@ export function SourceGraphView({
           onMouseLeave={handleSvgMouseUp}
           onClick={handleSvgClick}
         >
-          {/* Camera transform wraps all world-space content */}
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
 
-            {/* 1. Source-to-source edges — always color-coded by dominant connection type */}
+            {/* 1. Source-to-source edges — simple thin lines */}
             {filteredEdges.map(edge => {
-              const fromPos = nodePositions.get(edge.fromSourceId)
-              const toPos = nodePositions.get(edge.toSourceId)
+              const fromPos = livePositions.get(edge.fromSourceId)
+              const toPos = livePositions.get(edge.toSourceId)
               if (!fromPos || !toPos) return null
 
               const edgeKey = `${edge.fromSourceId}-${edge.toSourceId}`
@@ -447,47 +592,25 @@ export function SourceGraphView({
               const isSelected = selectedSourceId === edge.fromSourceId || selectedSourceId === edge.toSourceId
               const isActive = isHighlighted || isSelected
               const hasActiveSource = !!activeSourceId
-              const strokeWidth = Math.min(1 + edge.totalWeight * 0.3, 5)
-              const dominantColor = getEdgeColor(edge, false)
-
-              const mx = (fromPos.x + toPos.x) / 2
-              const my = (fromPos.y + toPos.y) / 2
 
               return (
-                <g key={edgeKey}>
-                  <line
-                    x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
-                    stroke={isActive ? getEdgeColor(edge, isSelected) : dominantColor}
-                    strokeWidth={isActive ? strokeWidth + 0.5 : Math.max(strokeWidth * 0.6, 0.8)}
-                    strokeOpacity={isActive ? 0.85 : hasActiveSource ? 0.06 : 0.35}
-                    style={{ transition: 'stroke 0.18s ease, stroke-opacity 0.18s ease, stroke-width 0.18s ease' }}
-                  />
-                  {/* Edge badge on highlight */}
-                  {isActive && (
-                    <g transform={`translate(${mx}, ${my})`}>
-                      <rect x={-14} y={-10} width={28} height={20} rx={10} ry={10}
-                        fill="var(--color-bg-card)" stroke="var(--border-subtle)" strokeWidth={1}
-                      />
-                      <text textAnchor="middle" dominantBaseline="central"
-                        style={{
-                          fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 700,
-                          fill: isSelected ? 'var(--color-accent-500)' : 'var(--color-text-primary)',
-                        }}
-                      >
-                        {edge.totalWeight}
-                      </text>
-                    </g>
-                  )}
-                </g>
+                <line
+                  key={edgeKey}
+                  x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
+                  stroke={isSelected ? 'var(--color-accent-500)' : 'rgba(100,116,139,1)'}
+                  strokeWidth={isActive ? 1.2 : 0.5}
+                  strokeOpacity={isActive ? 0.5 : hasActiveSource ? 0.03 : 0.08}
+                  style={{ transition: 'stroke-opacity 0.15s ease' }}
+                />
               )
             })}
 
-            {/* 2. Source-to-anchor edges (dashed, always visible) */}
+            {/* 2. Source-to-anchor edges — thin dashed */}
             {anchors.map(anchor => {
-              const anchorPos = nodePositions.get(anchor.id)
+              const anchorPos = livePositions.get(anchor.id)
               if (!anchorPos) return null
               return anchor.connectedSourceIds.map(srcId => {
-                const srcPos = nodePositions.get(srcId)
+                const srcPos = livePositions.get(srcId)
                 if (!srcPos) return null
                 const isAnchorActive = hoveredAnchorId === anchor.id || filters.sourceAnchorFilter === anchor.id
                 const isSourceActive = activeSourceId === srcId
@@ -496,100 +619,139 @@ export function SourceGraphView({
                   <line
                     key={`a-${anchor.id}-${srcId}`}
                     x1={anchorPos.x} y1={anchorPos.y} x2={srcPos.x} y2={srcPos.y}
-                    stroke="rgba(180,83,9,0.75)"
-                    strokeWidth={isActive ? 1.8 : 0.8}
-                    strokeOpacity={isActive ? 0.65 : (activeSourceId && !isSourceActive) ? 0.04 : 0.2}
-                    strokeDasharray={isActive ? '6,3' : '4,4'}
-                    style={{ transition: 'stroke-opacity 0.18s ease, stroke-width 0.18s ease' }}
+                    stroke={ANCHOR_COLOR}
+                    strokeWidth={isActive ? 1 : 0.4}
+                    strokeOpacity={isActive ? 0.45 : (activeSourceId && !isSourceActive) ? 0.02 : 0.08}
+                    strokeDasharray={isActive ? '4,2' : '2,3'}
+                    style={{ transition: 'stroke-opacity 0.15s ease' }}
                   />
                 )
               })
             })}
 
-            {/* 3. Source dots */}
+            {/* 3. Source circles — plain colored, no icons */}
             {sources.map(source => {
-              const pos = nodePositions.get(source.id)
+              const pos = livePositions.get(source.id)
               if (!pos) return null
+
+              const r = nodeRadii.get(source.id) ?? 3
+              const cfg = getSourceConfig(source.sourceType)
+              const isDimmed = !filteredSourceIds.has(source.id)
+              const isSelected = selectedSourceId === source.id
+              const isHovered = hoveredSourceId === source.id
+
               return (
-                <SourceCard
+                <g
                   key={source.id}
-                  source={source}
-                  x={pos.x} y={pos.y}
-                  selected={selectedSourceId === source.id}
-                  dimmed={!filteredSourceIds.has(source.id)}
-                  onHover={handleSourceHover}
-                  onClick={handleSourceClick}
-                />
+                  onMouseDown={e => handleNodeMouseDown(e, source.id)}
+                  onMouseEnter={() => handleSourceHover(source)}
+                  onMouseLeave={() => handleSourceHover(null)}
+                  onClick={() => handleSourceClick(source)}
+                  style={{
+                    cursor: dragRef.current?.id === source.id ? 'grabbing' : 'pointer',
+                    opacity: isDimmed ? 0.12 : 1,
+                    transition: 'opacity 0.18s ease',
+                  }}
+                >
+                  <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    {/* Selection ring */}
+                    {isSelected && !isDimmed && (
+                      <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.5} opacity={0.7} />
+                    )}
+
+                    {/* Hover ring */}
+                    {isHovered && !isDimmed && !isSelected && (
+                      <circle r={r + 3} fill="none" stroke={`${cfg.color}50`} strokeWidth={1} />
+                    )}
+
+                    {/* Solid filled circle — no icon */}
+                    <circle
+                      r={r}
+                      fill={cfg.color}
+                      fillOpacity={0.75}
+                      stroke={cfg.color}
+                      strokeWidth={isSelected ? 1.5 : 0.5}
+                      strokeOpacity={0.9}
+                    />
+
+                    {/* Label — only on hover, select, or sufficient zoom */}
+                    {(isHovered || isSelected || camera.zoom > 0.6) && (
+                      <text
+                        y={r + 10}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-body)',
+                          fontSize: 7,
+                          fontWeight: isSelected ? 700 : 500,
+                          fill: isSelected ? 'var(--color-accent-500)'
+                            : isHovered ? 'var(--color-text-primary)'
+                            : 'var(--color-text-secondary)',
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          opacity: isHovered || isSelected ? 1 : 0.7,
+                        }}
+                      >
+                        {source.title.length > 18 ? source.title.slice(0, 16) + '…' : source.title}
+                      </text>
+                    )}
+                  </g>
+                </g>
               )
             })}
 
-            {/* 4. Anchor nodes — parchment/gold style matching NeighborhoodView */}
+            {/* 4. Anchor dots — small filled circles */}
             {anchors.map(anchor => {
-              const pos = nodePositions.get(anchor.id)
+              const pos = livePositions.get(anchor.id)
               if (!pos) return null
               const isActive = hoveredAnchorId === anchor.id || filters.sourceAnchorFilter === anchor.id
 
               return (
                 <g
                   key={`anchor-${anchor.id}`}
-                  transform={`translate(${pos.x}, ${pos.y})`}
-                  style={{ cursor: 'pointer' }}
-                  onMouseEnter={() => { if (!dragNodeRef.current) setHoveredAnchorId(anchor.id) }}
+                  onMouseDown={e => handleNodeMouseDown(e, anchor.id)}
+                  onMouseEnter={() => { if (!dragRef.current) setHoveredAnchorId(anchor.id) }}
                   onMouseLeave={() => setHoveredAnchorId(null)}
+                  style={{ cursor: dragRef.current?.id === anchor.id ? 'grabbing' : 'pointer' }}
                 >
-                  {/* Glow aura */}
-                  <circle r={isActive ? 30 : 24} fill={isActive ? 'rgba(180,83,9,0.08)' : 'rgba(180,83,9,0.04)'} style={{ transition: 'r 0.15s ease' }} />
-                  <circle r={isActive ? 22 : 18} fill={isActive ? 'rgba(180,83,9,0.12)' : 'rgba(180,83,9,0.06)'} style={{ transition: 'r 0.15s ease' }} />
-                  {/* Gold border ring */}
-                  <circle
-                    r={14}
-                    fill="none"
-                    stroke={isActive ? 'rgba(180,83,9,0.85)' : 'rgba(180,83,9,0.55)'}
-                    strokeWidth={isActive ? 2.5 : 1.8}
-                    style={{ transition: 'stroke 0.15s ease, stroke-width 0.15s ease' }}
-                  />
-                  {/* Parchment fill */}
-                  <circle r={12.5} fill="rgb(235,222,205)" />
-                  {/* Diamond symbol */}
-                  <text
-                    y={1}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    style={{ fontSize: 10, fill: 'rgba(140,70,0,0.85)', pointerEvents: 'none', userSelect: 'none' }}
-                  >
-                    ◆
-                  </text>
-                  {/* Anchor label below */}
-                  <text
-                    y={24}
-                    textAnchor="middle"
-                    style={{
-                      fontFamily: 'var(--font-display)',
-                      fontSize: 8,
-                      fontWeight: 700,
-                      fill: isActive ? 'rgba(140,70,0,0.9)' : 'rgba(140,70,0,0.65)',
-                      pointerEvents: 'none',
-                      userSelect: 'none',
-                      transition: 'fill 0.15s ease',
-                    }}
-                  >
-                    {anchor.label.length > 18 ? anchor.label.slice(0, 17) + '…' : anchor.label}
-                  </text>
-                  {/* Source count badge */}
-                  <text
-                    y={34}
-                    textAnchor="middle"
-                    style={{
-                      fontFamily: 'var(--font-body)',
-                      fontSize: 7,
-                      fontWeight: 500,
-                      fill: 'rgba(140,70,0,0.5)',
-                      pointerEvents: 'none',
-                      userSelect: 'none',
-                    }}
-                  >
-                    {anchor.connectedSourceIds.length} sources
-                  </text>
+                  <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    {isActive && (
+                      <circle r={ANCHOR_RADIUS + 4} fill={`${ANCHOR_COLOR}15`} />
+                    )}
+                    <circle
+                      r={ANCHOR_RADIUS}
+                      fill={ANCHOR_COLOR}
+                      fillOpacity={isActive ? 0.85 : 0.6}
+                      stroke={ANCHOR_COLOR}
+                      strokeWidth={isActive ? 1.5 : 0.5}
+                      strokeOpacity={0.8}
+                    />
+                    {/* Small diamond inside */}
+                    <text
+                      y={0.5}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      style={{ fontSize: 5, fill: '#fff', pointerEvents: 'none', userSelect: 'none', fontWeight: 700 }}
+                    >
+                      ◆
+                    </text>
+                    {/* Label */}
+                    {(isActive || camera.zoom > 0.6) && (
+                      <text
+                        y={ANCHOR_RADIUS + 9}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-display)',
+                          fontSize: 6,
+                          fontWeight: 700,
+                          fill: isActive ? ANCHOR_COLOR : `${ANCHOR_COLOR}99`,
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                        }}
+                      >
+                        {anchor.label.length > 16 ? anchor.label.slice(0, 14) + '…' : anchor.label}
+                      </text>
+                    )}
+                  </g>
                 </g>
               )
             })}
@@ -597,102 +759,135 @@ export function SourceGraphView({
         </svg>
       )}
 
-      {/* Hover tooltip (screen coords — adjusted for camera) */}
-      {hoveredSourceId && tooltipPos && (() => {
-        const src = sources.find(s => s.id === hoveredSourceId)
-        if (!src) return null
-        const cfg = getSourceConfig(src.sourceType)
-        const connCount = edgesForSource.get(src.id)?.length ?? 0
+      {/* Hover tooltip for source */}
+      {hoveredSourceId && !exploringSourceId && (() => {
+        const hSource = sources.find(s => s.id === hoveredSourceId)
+        if (!hSource) return null
+        const livePos = livePositions.get(hSource.id)
+        if (!livePos) return null
+        const r = nodeRadii.get(hSource.id) ?? 3
+        const cfg = getSourceConfig(hSource.sourceType)
+        const connCount = edgesForSource.get(hSource.id)?.length ?? 0
+
+        const screenX = livePos.x * camera.zoom + camera.panX
+        const screenY = livePos.y * camera.zoom + camera.panY
+        const cardWidth = 220
+        const left = Math.max(8, Math.min(size.width - cardWidth - 8, screenX - cardWidth / 2))
+        const top = Math.max(8, screenY - r * camera.zoom - 12)
+
         return (
           <div
             style={{
-              position: 'absolute', left: tooltipPos.x, top: tooltipPos.y - 44,
-              transform: 'translateX(-50%)',
-              background: 'var(--color-bg-card)', border: '1px solid var(--border-strong)',
-              borderRadius: 8, padding: '6px 10px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
-              pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10,
-              display: 'flex', alignItems: 'center', gap: 6,
+              position: 'absolute',
+              left,
+              bottom: size.height - top,
+              zIndex: 30,
+              width: cardWidth,
+              background: 'rgba(255,255,255,0.96)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 10,
+              padding: '8px 12px',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+              pointerEvents: 'none',
             }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: cfg.color, flexShrink: 0 }} />
-            <span style={{
-              fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600,
-              color: 'var(--color-text-primary)', maxWidth: 200,
-              overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>
-              {src.title}
-            </span>
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
-              {src.entityCount} entities · {connCount} conn.
-            </span>
+            <div className="flex items-center gap-2" style={{ marginBottom: 3 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: cfg.color, flexShrink: 0 }} />
+              <span className="font-display" style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {hSource.title}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-body" style={{
+                fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+                color: cfg.color, background: `${cfg.color}12`, border: `1px solid ${cfg.color}25`,
+              }}>
+                {hSource.sourceType}
+              </span>
+              <span className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)' }}>
+                {hSource.entityCount} entities · {connCount} connections
+              </span>
+            </div>
           </div>
         )
       })()}
 
-      {/* Stats overlay — top-right */}
-      <div
-        style={{
-          position: 'absolute', top: 16, right: 16,
-          background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)',
-          borderRadius: 10, padding: '8px 12px',
-          fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--color-text-secondary)',
-          pointerEvents: 'none',
-        }}
-      >
-        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: 'var(--color-text-primary)' }}>
-          {sources.length}
-        </span>{' '}
-        sources · {filteredEdges.length} connections · {anchors.length} anchors
-      </div>
+      {/* Right-side detail panel when exploring a source */}
+      {exploringSourceId && (
+        <SourceDetailCard
+          sourceId={exploringSourceId}
+          onClose={() => setExploringSourceId(null)}
+          onNavigateToSource={(sourceId) => {
+            const target = sources.find(s => s.id === sourceId)
+            if (target) {
+              onSelectSource(target)
+              setExploringSourceId(sourceId)
+            }
+          }}
+        />
+      )}
 
-      {/* Connection type legend — top-right, below stats */}
+      {/* Legend — bottom-left */}
       <div
         style={{
-          position: 'absolute', top: 52, right: 16,
-          display: 'flex', gap: 4, zIndex: 20,
-        }}
-      >
-        {[
-          { color: CONN_COLORS.entity, label: 'Entity', dash: false },
-          { color: CONN_COLORS.tag, label: 'Tag', dash: false },
-          { color: CONN_COLORS.anchor, label: 'Anchor', dash: true },
-        ].map(({ color, label, dash }) => (
-          <div
-            key={label}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '3px 9px', borderRadius: 20,
-              border: `1.5px solid ${color}`,
-              background: `${color}18`,
-              fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600,
-              color, whiteSpace: 'nowrap', pointerEvents: 'none',
-            }}
-          >
-            {dash ? (
-              <svg width={10} height={3} style={{ flexShrink: 0 }}>
-                <line x1={0} y1={1.5} x2={10} y2={1.5} stroke={color} strokeWidth={2} strokeDasharray="3,2" />
-              </svg>
-            ) : (
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: color, flexShrink: 0 }} />
-            )}
-            {label}
-          </div>
-        ))}
-      </div>
-
-      {/* Zoom controls — bottom-right */}
-      <div
-        style={{
-          position: 'absolute', bottom: 16, right: 16,
+          position: 'absolute', bottom: 16, left: 16,
+          background: 'rgba(255,255,255,0.92)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8,
+          padding: '8px 10px',
           display: 'flex', flexDirection: 'column', gap: 4,
           zIndex: 20,
         }}
       >
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, color: 'var(--color-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
+          Legend
+        </span>
+        {legendItems.map(item => (
+          <div key={item.label} className="flex items-center gap-2">
+            {item.dashed ? (
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: item.color, opacity: 0.7, flexShrink: 0 }} />
+            ) : (
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: item.color, opacity: 0.75, flexShrink: 0 }} />
+            )}
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)' }}>
+              {item.label}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Stats — top-right */}
+      <div
+        style={{
+          position: 'absolute', top: 16, right: 16,
+          background: 'rgba(255,255,255,0.92)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8, padding: '6px 10px',
+          display: 'flex', gap: 12, alignItems: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
+          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{sources.length}</strong> sources
+        </span>
+        <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
+          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{filteredEdges.length}</strong> connections
+        </span>
+        <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
+          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{anchors.length}</strong> anchors
+        </span>
+      </div>
+
+      {/* Zoom controls — bottom-right */}
+      <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 20 }}>
         {[
           { label: '+', title: 'Zoom in (+ key)', action: zoomIn },
           { label: '−', title: 'Zoom out (− key)', action: zoomOut },
-          { label: '⊙', title: 'Reset view (0 key)', action: resetCamera },
+          { label: '⊙', title: 'Fit to screen (0 key)', action: resetCamera },
+          { label: '↺', title: 'Reset node positions (R key)', action: resetNodes },
         ].map(({ label, title, action }) => (
           <button
             key={label}
@@ -701,15 +896,13 @@ export function SourceGraphView({
             title={title}
             className="flex items-center justify-center font-body font-bold cursor-pointer"
             style={{
-              width: 28, height: 28, borderRadius: 7,
-              background: 'rgba(255,255,255,0.95)',
+              width: 26, height: 26, borderRadius: 6,
+              background: 'rgba(255,255,255,0.92)',
               border: '1px solid rgba(0,0,0,0.08)',
               color: 'var(--color-text-secondary)',
-              fontSize: 16, lineHeight: 1,
-              transition: 'background 0.15s ease',
+              fontSize: 14, lineHeight: 1,
+              backdropFilter: 'blur(8px)',
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#fff' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.95)' }}
           >
             {label}
           </button>
@@ -721,10 +914,11 @@ export function SourceGraphView({
         <div
           style={{
             position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
-            background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)',
-            borderRadius: 10, padding: '8px 16px',
-            fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--color-text-secondary)',
-            maxWidth: 400, textAlign: 'center',
+            background: 'rgba(255,255,255,0.92)', border: '1px solid var(--border-subtle)',
+            borderRadius: 8, padding: '6px 14px',
+            fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--color-text-secondary)',
+            maxWidth: 380, textAlign: 'center',
+            backdropFilter: 'blur(8px)',
           }}
         >
           Sources aren't connected yet. Ingest more content with overlapping topics to see connections emerge.

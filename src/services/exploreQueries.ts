@@ -629,9 +629,7 @@ export async function fetchSourceGraph(userId: string): Promise<SourceGraphResul
     if (data.entityCount > 0) {
       connections.push({ type: 'entity', count: data.entityCount, labels: [] })
     }
-    if (data.sharedTags.size > 0) {
-      connections.push({ type: 'tag', count: data.sharedTags.size, labels: Array.from(data.sharedTags) })
-    }
+    // Tag connections omitted — too noisy for source graph
     if (data.commonAnchors.size > 0) {
       connections.push({
         type: 'anchor',
@@ -641,7 +639,7 @@ export async function fetchSourceGraph(userId: string): Promise<SourceGraphResul
     }
 
     if (connections.length > 0) {
-      const totalWeight = data.entityCount + data.sharedTags.size * 2 + data.commonAnchors.size * 3
+      const totalWeight = data.entityCount + data.commonAnchors.size * 3
       sourceEdges.push({
         fromSourceId: fromId!,
         toSourceId: toId!,
@@ -831,4 +829,277 @@ export async function fetchEntitiesWithConnectionCount(
         .filter((x): x is NonNullable<typeof x> => x !== null),
     }
   })
+}
+
+// ─── fetchSourceCardDetail ───────────────────────────────────────────────────
+// Fetches rich detail for a single source: summary, entities, connections,
+// and related sources (for the SourceDetailCard in the source graph).
+
+export interface SourceCardEntity {
+  id: string
+  label: string
+  entityType: string
+  isAnchor: boolean
+}
+
+export interface SourceCardConnection {
+  id: string
+  fromLabel: string
+  fromEntityType: string
+  toLabel: string
+  toEntityType: string
+  relationType: string
+}
+
+export interface SourceCardCrossConnection {
+  id: string
+  localLabel: string
+  localEntityType: string
+  remoteLabel: string
+  remoteEntityType: string
+  relationType: string
+}
+
+export interface SourceCardRelatedSource {
+  sourceId: string
+  title: string
+  sourceType: string
+  sharedEntityCount: number
+  crossConnections: SourceCardCrossConnection[]
+}
+
+export interface SourceCardDetail {
+  sourceId: string
+  title: string
+  sourceType: string
+  summary: string | null
+  entities: SourceCardEntity[]
+  connections: SourceCardConnection[]
+  relatedSources: SourceCardRelatedSource[]
+  anchorLabels: string[]
+  createdAt: string
+}
+
+export async function fetchSourceCardDetail(
+  userId: string,
+  sourceId: string
+): Promise<SourceCardDetail | null> {
+  // 1. Fetch the source itself (for summary + metadata)
+  const { data: source, error: srcErr } = await supabase
+    .from('knowledge_sources')
+    .select('id, title, source_type, summary, summary_source, content, metadata, created_at')
+    .eq('id', sourceId)
+    .eq('user_id', userId)
+    .single()
+
+  if (srcErr || !source) return null
+
+  // 2. Fetch all entities belonging to this source
+  const { data: rawNodes } = await supabase
+    .from('knowledge_nodes')
+    .select('id, label, entity_type, is_anchor')
+    .eq('source_id', sourceId)
+    .eq('user_id', userId)
+    .eq('is_merged', false)
+    .order('confidence', { ascending: false, nullsFirst: false })
+
+  const nodes = (rawNodes ?? []) as Array<{
+    id: string; label: string; entity_type: string; is_anchor: boolean
+  }>
+  const nodeIds = nodes.map(n => n.id)
+  const nodeIdSet = new Set(nodeIds)
+  const nodeMap = new Map(nodes.map(n => [n.id, n]))
+
+  const entities: SourceCardEntity[] = nodes.map(n => ({
+    id: n.id,
+    label: n.label,
+    entityType: n.entity_type,
+    isAnchor: n.is_anchor,
+  }))
+
+  // Build summary early
+  const s = source as { id: string; title: string | null; source_type: string | null; summary: string | null; content: string | null; metadata: Record<string, unknown> | null; created_at: string }
+  const summary = s.summary ?? (s.metadata?.summary as string | null) ?? (s.content ? s.content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) + '...' : null)
+
+  // 3. Early return if no entities
+  if (nodeIds.length === 0) {
+    return {
+      sourceId: s.id,
+      title: s.title || 'Untitled',
+      sourceType: s.source_type || 'Note',
+      summary,
+      entities: [],
+      connections: [],
+      relatedSources: [],
+      anchorLabels: [],
+      createdAt: s.created_at,
+    }
+  }
+
+  // 4. Fetch edges involving these nodes
+  const batchSize = 50
+  let allEdges: Array<{ id: string; source_node_id: string; target_node_id: string; relation_type: string | null }> = []
+  for (let i = 0; i < nodeIds.length; i += batchSize) {
+    const batch = nodeIds.slice(i, i + batchSize)
+    const orFilter = batch.map(id => `source_node_id.eq.${id},target_node_id.eq.${id}`).join(',')
+    const { data: edgeBatch } = await supabase
+      .from('knowledge_edges')
+      .select('id, source_node_id, target_node_id, relation_type')
+      .eq('user_id', userId)
+      .or(orFilter)
+    if (edgeBatch) allEdges = [...allEdges, ...(edgeBatch as typeof allEdges)]
+  }
+
+  // Deduplicate edges
+  const edgeMap = new Map<string, typeof allEdges[number]>()
+  for (const e of allEdges) edgeMap.set(e.id, e)
+  const uniqueEdges = Array.from(edgeMap.values())
+
+  // 5. Separate within-source vs cross-source edges
+  const withinConnections: SourceCardConnection[] = []
+  const otherNodeIds = new Set<string>()
+  // Store cross-source edges with their local/remote node IDs for later grouping
+  const crossEdges: Array<{ id: string; localNodeId: string; remoteNodeId: string; relationType: string }> = []
+
+  for (const e of uniqueEdges) {
+    const fromIn = nodeIdSet.has(e.source_node_id)
+    const toIn = nodeIdSet.has(e.target_node_id)
+    if (fromIn && toIn) {
+      const fromNode = nodeMap.get(e.source_node_id)
+      const toNode = nodeMap.get(e.target_node_id)
+      if (fromNode && toNode && withinConnections.length < 30) {
+        withinConnections.push({
+          id: e.id,
+          fromLabel: fromNode.label,
+          fromEntityType: fromNode.entity_type,
+          toLabel: toNode.label,
+          toEntityType: toNode.entity_type,
+          relationType: e.relation_type ?? 'relates_to',
+        })
+      }
+    } else {
+      const localId = fromIn ? e.source_node_id : e.target_node_id
+      const remoteId = fromIn ? e.target_node_id : e.source_node_id
+      otherNodeIds.add(remoteId)
+      crossEdges.push({
+        id: e.id,
+        localNodeId: localId,
+        remoteNodeId: remoteId,
+        relationType: e.relation_type ?? 'relates_to',
+      })
+    }
+  }
+
+  // 6. Fetch other nodes (with label, entity_type, source_id)
+  type OtherNodeRow = { id: string; label: string; entity_type: string; source_id: string | null; is_anchor: boolean }
+  const otherNodeMap = new Map<string, OtherNodeRow>()
+  if (otherNodeIds.size > 0) {
+    const otherIdArr = Array.from(otherNodeIds).slice(0, 300)
+    const { data: otherNodes } = await supabase
+      .from('knowledge_nodes')
+      .select('id, label, entity_type, source_id, is_anchor')
+      .in('id', otherIdArr)
+      .eq('user_id', userId)
+
+    for (const n of (otherNodes ?? []) as OtherNodeRow[]) {
+      otherNodeMap.set(n.id, n)
+    }
+  }
+
+  // 7. Group cross-source edges by related source, building connection details
+  const relatedMap = new Map<string, {
+    count: number
+    connections: SourceCardCrossConnection[]
+  }>()
+
+  for (const ce of crossEdges) {
+    const remoteNode = otherNodeMap.get(ce.remoteNodeId)
+    if (!remoteNode || !remoteNode.source_id || remoteNode.source_id === sourceId) continue
+
+    const rSourceId = remoteNode.source_id
+    if (!relatedMap.has(rSourceId)) relatedMap.set(rSourceId, { count: 0, connections: [] })
+    const entry = relatedMap.get(rSourceId)!
+    entry.count++
+
+    const localNode = nodeMap.get(ce.localNodeId)
+    if (localNode && entry.connections.length < 15) {
+      entry.connections.push({
+        id: ce.id,
+        localLabel: localNode.label,
+        localEntityType: localNode.entity_type,
+        remoteLabel: remoteNode.label,
+        remoteEntityType: remoteNode.entity_type,
+        relationType: ce.relationType,
+      })
+    }
+  }
+
+  // Also count anchor connections (entities in this source that connect to anchor nodes)
+  const anchorConnections: SourceCardConnection[] = []
+  for (const ce of crossEdges) {
+    const remoteNode = otherNodeMap.get(ce.remoteNodeId)
+    if (!remoteNode || !remoteNode.is_anchor) continue
+    const localNode = nodeMap.get(ce.localNodeId)
+    if (localNode && anchorConnections.length < 10) {
+      anchorConnections.push({
+        id: ce.id,
+        fromLabel: localNode.label,
+        fromEntityType: localNode.entity_type,
+        toLabel: remoteNode.label,
+        toEntityType: remoteNode.entity_type,
+        relationType: ce.relationType,
+      })
+    }
+  }
+
+  // Merge within-source + anchor connections into the connections list
+  const connections = [...withinConnections, ...anchorConnections]
+
+  // 8. Fetch related source titles
+  const sortedRelated = Array.from(relatedMap.entries())
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 10)
+
+  let relatedSources: SourceCardRelatedSource[] = []
+  const relatedSourceIds = sortedRelated.map(([id]) => id)
+
+  if (relatedSourceIds.length > 0) {
+    const { data: relSources } = await supabase
+      .from('knowledge_sources')
+      .select('id, title, source_type')
+      .in('id', relatedSourceIds)
+
+    const titleMap = new Map(
+      (relSources ?? []).map(rs => {
+        const r = rs as { id: string; title: string | null; source_type: string | null }
+        return [r.id, r] as const
+      })
+    )
+
+    relatedSources = sortedRelated.map(([rsId, data]) => {
+      const meta = titleMap.get(rsId)
+      return {
+        sourceId: rsId,
+        title: meta?.title || 'Untitled',
+        sourceType: meta?.source_type || 'Note',
+        sharedEntityCount: data.count,
+        crossConnections: data.connections,
+      }
+    })
+  }
+
+  // Anchor labels connected to this source's entities
+  const anchorLabels = entities.filter(e => e.isAnchor).map(e => e.label)
+
+  return {
+    sourceId: s.id,
+    title: s.title || 'Untitled',
+    sourceType: s.source_type || 'Note',
+    summary,
+    entities: entities.filter(e => !e.isAnchor),
+    connections,
+    relatedSources,
+    anchorLabels,
+    createdAt: s.created_at,
+  }
 }

@@ -23,13 +23,11 @@ import type { AnchorCandidateWithNode } from '../../types/anchors'
 // Connection-type color map
 const CONN_COLORS: Record<SourceConnectionType, string> = {
   entity: '#6366f1',
-  tag: '#10b981',
   anchor: '#b45309',
 }
 
 const CONN_LABELS: Record<SourceConnectionType, string> = {
   entity: 'entity edges',
-  tag: 'common tags',
   anchor: 'common anchors',
 }
 
@@ -654,7 +652,6 @@ function buildConnectionPrompt(
   sharedEntities: KnowledgeNode[],
 ): string {
   const entityConn = edge.connections.find(c => c.type === 'entity')
-  const tagConn = edge.connections.find(c => c.type === 'tag')
   const anchorConn = edge.connections.find(c => c.type === 'anchor')
 
   const sameType = source.sourceType === other.sourceType
@@ -665,10 +662,7 @@ function buildConnectionPrompt(
     ? ` They share entities like ${entityNames.join(', ')}${sharedEntities.length > 5 ? ` and ${sharedEntities.length - 5} more` : ''}.`
     : ''
 
-  // Build tag list snippet
-  const tagSnippet = tagConn && tagConn.labels.length > 0
-    ? ` They share tags: ${tagConn.labels.slice(0, 4).join(', ')}${tagConn.labels.length > 4 ? ` (+${tagConn.labels.length - 4} more)` : ''}.`
-    : ''
+  const tagSnippet = ''
 
   // Build anchor snippet
   const anchorSnippet = anchorConn && anchorConn.labels.length > 0
@@ -683,11 +677,6 @@ function buildConnectionPrompt(
   if (primary === 'entity' && entityConn && entityConn.count >= 5) {
     // Strong entity overlap — deep comparison
     return `"${source.title}" and "${other.title}" share ${entityConn.count} entity connections.${entitySnippet}${tagSnippet}${anchorSnippet} Analyze the relationship between these two sources: What themes connect them? How do they complement each other? Are there insights that emerge from viewing them together?`
-  }
-
-  if (primary === 'tag' && tagConn) {
-    // Tag-based connection — thematic comparison
-    return `"${source.title}" (${source.sourceType}) and "${other.title}" (${other.sourceType}) share ${tagConn.count} common tags: ${tagConn.labels.slice(0, 5).join(', ')}.${entitySnippet}${anchorSnippet} How do these sources approach these shared themes differently? What unique perspectives does each bring?`
   }
 
   if (primary === 'anchor' && anchorConn) {

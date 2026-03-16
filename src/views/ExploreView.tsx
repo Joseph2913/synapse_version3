@@ -1,10 +1,10 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { Loader2, AlertCircle, Compass, RefreshCw, GripVertical } from 'lucide-react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
+import { Loader2, AlertCircle, Compass, RefreshCw } from 'lucide-react'
 import { ExploreToolbar } from './explore/ExploreToolbar'
 import { LandscapeView } from './explore/LandscapeView'
 import { NeighborhoodView } from './explore/NeighborhoodView'
 import { SourceGraphView } from './explore/SourceGraphView'
-import { ExploreMetadataPanel } from './explore/ExploreMetadataPanel'
+
 import { EntityBrowserTab } from './explore/EntityBrowserTab'
 import { useExploreData } from '../hooks/useExploreData'
 import { useExploreFilters } from '../hooks/useExploreFilters'
@@ -12,13 +12,9 @@ import { useEntityBrowser } from '../hooks/useEntityBrowser'
 import type { ClusterData, EntityNode, SourceNode, SourceEdge, SourceGraphAnchor } from '../types/explore'
 import type { EntityEdge } from '../services/exploreQueries'
 import { useAuth } from '../hooks/useAuth'
-import { fetchCandidatesWithNodes, confirmAnchorCandidate, dismissAnchorCandidate } from '../services/anchorCandidates'
+import { fetchCandidatesWithNodes } from '../services/anchorCandidates'
 import type { AnchorCandidateWithNode } from '../types/anchors'
 
-// ─── Layout constants ────────────────────────────────────────────────────────
-const DEFAULT_LEFT_PCT = 67
-const MIN_LEFT_PCT = 30
-const MAX_LEFT_PCT = 80
 
 interface SuggestedClusterData {
   candidateId:             string
@@ -65,7 +61,7 @@ export function ExploreView() {
   // Suggested anchor candidates — for ghost cluster rendering
   const [suggestedCandidates, setSuggestedCandidates] = useState<AnchorCandidateWithNode[]>([])
   const [showCrossEdges, setShowCrossEdges] = useState(true)
-  const [selectedSuggestedId, setSelectedSuggestedId] = useState<string | null>(null)
+  const [, setSelectedSuggestedId] = useState<string | null>(null)
   const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null)
 
   // Fetch suggested candidates for ghost cluster rendering
@@ -96,13 +92,9 @@ export function ExploreView() {
     }
   }, [user, refetch])
 
-  // Track neighborhood entities + edges for metadata panel
-  const [neighborhoodEntities, setNeighborhoodEntities] = useState<EntityNode[]>([])
-  const [neighborhoodEdges, setNeighborhoodEdges] = useState<EntityEdge[]>([])
-
-  // Source graph data (managed by SourceGraphView, stored here for metadata panel + toolbar)
+  // Source graph data (managed by SourceGraphView, stored here for toolbar)
   const [allSources, setAllSources] = useState<SourceNode[]>([])
-  const [sourceEdges, setSourceEdges] = useState<SourceEdge[]>([])
+  const [, setSourceEdges] = useState<SourceEdge[]>([])
   const [sourceGraphAnchors, setSourceGraphAnchors] = useState<SourceGraphAnchor[]>([])
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
 
@@ -122,13 +114,6 @@ export function ExploreView() {
     setVisibleEdgeTypes(new Set(['direct', 'source', 'tag']))
   }, [toggleSpotlight])
 
-  // Resizable two-column layout
-  const [leftWidthPct, setLeftWidthPct] = useState(DEFAULT_LEFT_PCT)
-  const [isDragging, setIsDragging] = useState(false)
-  const [isHandleHovered, setIsHandleHovered] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const dragStartX = useRef(0)
-  const dragStartPct = useRef(DEFAULT_LEFT_PCT)
 
   const clusters = data?.clusters ?? []
   const stats = data?.stats ?? { nodeCount: 0, edgeCount: 0, sourceCount: 0, anchorCount: 0 }
@@ -178,12 +163,6 @@ export function ExploreView() {
       }))
   }, [suggestedCandidates])
 
-  const selectedSuggestedCandidate = useMemo(() =>
-    selectedSuggestedId
-      ? suggestedCandidates.find(c => c.id === selectedSuggestedId) ?? null
-      : null,
-  [selectedSuggestedId, suggestedCandidates])
-
   // Unique source types present in data (for toolbar dropdown)
   const sourceTypesPresent = useMemo(() => {
     const types = new Set(allSources.map(s => s.sourceType))
@@ -201,31 +180,6 @@ export function ExploreView() {
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [setSelectedEntityId])
-
-  // Drag-to-resize
-  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragStartX.current = e.clientX
-    dragStartPct.current = leftWidthPct
-    setIsDragging(true)
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!containerRef.current) return
-      const containerWidth = containerRef.current.offsetWidth
-      const delta = ev.clientX - dragStartX.current
-      const deltaPct = (delta / containerWidth) * 100
-      setLeftWidthPct(Math.max(MIN_LEFT_PCT, Math.min(MAX_LEFT_PCT, dragStartPct.current + deltaPct)))
-    }
-
-    const onMouseUp = () => {
-      setIsDragging(false)
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [leftWidthPct])
 
   // Mode switching: clear selection
   const handleViewModeChange = useCallback((mode: typeof viewMode) => {
@@ -265,12 +219,12 @@ export function ExploreView() {
     setSourceGraphAnchors(anchors)
   }, [])
 
-  const handleEntitiesLoaded = useCallback((entities: EntityNode[]) => {
-    setNeighborhoodEntities(entities)
+  const handleEntitiesLoaded = useCallback((_entities: EntityNode[]) => {
+    // Entities available for neighborhood view context
   }, [])
 
-  const handleEdgesLoaded = useCallback((edges: EntityEdge[]) => {
-    setNeighborhoodEdges(edges)
+  const handleEdgesLoaded = useCallback((_edges: EntityEdge[]) => {
+    // Edges available for neighborhood view context
   }, [])
 
   const handleToggleShowEdges = useCallback(() => {
@@ -282,27 +236,6 @@ export function ExploreView() {
     setSelectedEntityId(null)
     setSelectedSourceId(null)
   }, [setSelectedEntityId])
-
-  const handleConfirmFromExplore = useCallback(async (candidateId: string, nodeId: string) => {
-    const success = await confirmAnchorCandidate(candidateId, nodeId)
-    if (success) {
-      setSuggestedCandidates(prev => prev.filter(c => c.id !== candidateId))
-      setSelectedSuggestedId(null)
-      refetch()
-      setTimeout(() => refetch(), 35000)
-      window.dispatchEvent(new CustomEvent('synapse:anchor-suggestions-changed'))
-      window.dispatchEvent(new CustomEvent('synapse:anchor-confirmed', { detail: { nodeId } }))
-    }
-  }, [refetch])
-
-  const handleDismissFromExplore = useCallback(async (candidateId: string, dismissCount: number) => {
-    const success = await dismissAnchorCandidate(candidateId, dismissCount, 30)
-    if (success) {
-      setSuggestedCandidates(prev => prev.filter(c => c.id !== candidateId))
-      setSelectedSuggestedId(null)
-      window.dispatchEvent(new CustomEvent('synapse:anchor-suggestions-changed'))
-    }
-  }, [])
 
   // Shared toolbar props
   const toolbarProps = {
@@ -394,99 +327,14 @@ export function ExploreView() {
         </div>
       ) : (
 
-      /* ── SOURCE GRAPH: Split panel layout ── */
-      <div
-        ref={containerRef}
-        className="flex-1 flex overflow-hidden"
-        style={{
-          userSelect: isDragging ? 'none' : undefined,
-          cursor: isDragging ? 'col-resize' : undefined,
-        }}
-      >
-        {/* ── LEFT: Graph visualization ── */}
-        <div
-          className="h-full overflow-hidden"
-          style={{
-            width: `${leftWidthPct}%`,
-            flexShrink: 0,
-            transition: isDragging ? 'none' : 'width 0.2s ease',
-          }}
-        >
-          {viewMode === 'sources' && (
-            <SourceGraphView
-              filters={filters}
-              selectedSourceId={selectedSourceId}
-              onSelectSource={handleSelectSource}
-              onSourcesLoaded={handleSourcesLoaded}
-            />
-          )}
-        </div>
-
-        {/* ── Resize handle ── */}
-        <div
-          className="flex-shrink-0 flex items-center justify-center"
-          onMouseDown={handleDividerMouseDown}
-          onMouseEnter={() => setIsHandleHovered(true)}
-          onMouseLeave={() => setIsHandleHovered(false)}
-          style={{
-            width: 16,
-            cursor: 'col-resize',
-            position: 'relative',
-            flexShrink: 0,
-            zIndex: 1,
-          }}
-        >
-          <div style={{
-            position: 'absolute',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            top: 0,
-            bottom: 0,
-            width: 2,
-            background: (isDragging || isHandleHovered) ? 'var(--color-accent-500)' : 'var(--border-subtle)',
-            transition: 'background 0.15s ease',
-            borderRadius: 1,
-          }} />
-          <GripVertical
-            size={14}
-            style={{
-              position: 'relative',
-              zIndex: 1,
-              color: (isDragging || isHandleHovered) ? 'var(--color-accent-500)' : 'var(--color-text-placeholder)',
-              transition: 'color 0.15s ease',
-              background: 'var(--color-bg-content)',
-              borderRadius: 2,
-            }}
-          />
-        </div>
-
-        {/* ── RIGHT: Metadata panel ── */}
-        <div
-          className="flex-1 h-full overflow-hidden"
-          style={{ minWidth: 0 }}
-        >
-          <ExploreMetadataPanel
-            viewMode={viewMode}
-            zoomLevel={zoomLevel}
-            activeCluster={activeCluster}
-            neighborhoodEntities={neighborhoodEntities}
-            neighborhoodEdges={neighborhoodEdges}
-            allSources={allSources}
-            sourceEdges={sourceEdges}
-            sourceGraphAnchors={sourceGraphAnchors}
-            selectedEntityId={selectedEntityId}
-            selectedSourceId={selectedSourceId}
-            onSelectEntity={handleSelectEntity}
-            onSelectSource={handleSelectSource}
-            onBack={returnToLandscape}
-            filters={filters}
-            onClearSpotlight={() => toggleSpotlight(null)}
-            selectedSuggestedCandidate={selectedSuggestedCandidate}
-            onConfirmSuggested={handleConfirmFromExplore}
-            onDismissSuggested={handleDismissFromExplore}
-            onClearSuggested={() => setSelectedSuggestedId(null)}
-          />
-        </div>
+      /* ── SOURCE GRAPH: Full-screen canvas (matching neighborhood style) ── */
+      <div className="flex-1 overflow-hidden relative">
+        <SourceGraphView
+          filters={filters}
+          selectedSourceId={selectedSourceId}
+          onSelectSource={handleSelectSource}
+          onSourcesLoaded={handleSourcesLoaded}
+        />
       </div>
       )}
     </div>

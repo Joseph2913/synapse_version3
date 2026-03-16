@@ -266,7 +266,47 @@ node.x = worldX - offsetX
 node.y = worldY - offsetY
 ```
 
-### Group Dragging Rules
+### Connected Node Drift (Directional Delta Model)
+
+When a node is dragged, connected nodes respond with a **very subtle drift in the same direction** as the drag movement. This is NOT a pull-toward-the-dragged-node force — connected nodes never collapse or converge on the dragged node. They glide gently in the same direction, staying in their own position.
+
+**How it works:**
+
+Each animation frame during a drag, compute the **movement delta** of the dragged node (how far it moved since the previous frame). Apply that delta as a tiny velocity nudge to connected nodes, scaled by connection weight:
+
+```
+moveDx = dragNode.x - dragNode.previousX
+moveDy = dragNode.y - dragNode.previousY
+
+// 1st-degree connections:
+strength = 0.003 + connectionWeight × 0.025
+connectedNode.vx += moveDx × strength
+connectedNode.vy += moveDy × strength
+
+// 2nd-degree connections:
+secStrength = 0.0005 + connectionWeight × 0.003
+secondDegreeNode.vx += moveDx × secStrength
+secondDegreeNode.vy += moveDy × secStrength
+```
+
+**Effective speeds at each degree:**
+
+| Connection | Weight ~1.0 | Weight ~0.1 |
+|------------|------------|------------|
+| 1st degree | ~2.8% of drag speed | ~0.5% of drag speed |
+| 2nd degree | ~0.35% of drag speed | ~0.08% of drag speed |
+| Unconnected | No movement | No movement |
+
+**Key principles:**
+- The effect must be **barely perceptible** — the user should notice connected nodes gently drifting if they look for it, but the graph should not visibly distort or cluster
+- Connected nodes NEVER move toward or converge on the dragged node
+- Stronger connections (higher weight) drift slightly more than weaker ones
+- The movement is **velocity-based**, not positional — nodes accelerate slowly and decelerate via damping (0.94), creating natural momentum
+- Damping at 0.94 during drag ensures nudges dissipate quickly and don't accumulate into large displacements
+- Floating animation continues for all non-dragged nodes during the drag
+- Unconnected nodes are completely unaffected
+
+### Group Dragging Rules (Landscape/Neighborhood Views)
 
 | What's Dragged | What Moves With It |
 |---------------|--------------------|
@@ -276,8 +316,13 @@ node.y = worldY - offsetY
 
 Children are NOT dragged when a sibling is dragged. The parent is NOT dragged when a child is dragged.
 
+Note: The connected-node-drift model (above) applies to the **Source Graph view**. The landscape and neighborhood views use the simpler group-drag rules in this table.
+
 ### After Release
-The node resumes floating from its new position. Its velocity is zeroed. The gentle parent gravity (for children) will slowly drift it back toward its parent.
+The node resumes floating from its new position. Its velocity is zeroed. Connected nodes retain any residual velocity from drag nudges and decelerate naturally via damping.
+
+### Reset Node Positions
+A dedicated reset button (↺) or the **R key** snaps all nodes back to their original layout-computed positions with velocity zeroed. This is useful after extensive dragging has displaced nodes from their territory clusters.
 
 ---
 
