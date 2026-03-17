@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ClusterBubble } from '../../components/explore/ClusterBubble'
 import { NodeTooltip } from '../../components/explore/NodeTooltip'
+import { AnchorConnectionsCard } from '../../components/explore/AnchorConnectionsCard'
 import { getEntityColor } from '../../config/entityTypes'
 import { useClusterLayout } from '../../hooks/useClusterLayout'
 import type { ClusterData } from '../../types/explore'
@@ -110,6 +111,7 @@ export function LandscapeView({
   const liveNodesRef = useRef<LiveNode[]>([])
   const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
   const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
   const rafRef = useRef<number>(0)
 
   // Initialize live nodes when layout changes — all nodes get the same floating params
@@ -131,8 +133,7 @@ export function LandscapeView({
     }))
   }, [layoutClusters])
 
-  // Animation loop — identical gentle floating for ALL nodes
-  // Sub-anchors just have a mild gravity toward their parent
+  // Animation loop — gentle floating for ALL nodes + directional drag drift
   useEffect(() => {
     let lastTime = performance.now()
 
@@ -145,28 +146,51 @@ export function LandscapeView({
       const w = sizeRef.current.width
       const h = sizeRef.current.height
 
+      const nodeMap = new Map<string, LiveNode>()
+      for (const n of nodes) nodeMap.set(n.id, n)
+
+      // Directional drag drift — connected nodes follow in same direction
+      if (dragRef.current && dragPrevPos.current) {
+        const dragNode = nodeMap.get(dragRef.current.id)
+        if (dragNode) {
+          const moveDx = dragNode.x - dragPrevPos.current.x
+          const moveDy = dragNode.y - dragPrevPos.current.y
+          if (Math.abs(moveDx) > 0.1 || Math.abs(moveDy) > 0.1) {
+            const connections = connectivityRef.current.get(dragRef.current.id)
+            if (connections) {
+              for (const [connId, weight] of connections) {
+                const connNode = nodeMap.get(connId)
+                if (!connNode) continue
+                // Very subtle — barely perceptible drift in the same direction
+                const strength = 0.0005 + weight * 0.004
+                connNode.vx += moveDx * strength
+                connNode.vy += moveDy * strength
+              }
+            }
+          }
+          dragPrevPos.current = { x: dragNode.x, y: dragNode.y }
+        }
+      }
+
       for (const n of nodes) {
-        // Skip dragged node (and nodes being group-dragged)
         if (dragRef.current?.id === n.id) {
           n.vx = 0
           n.vy = 0
           continue
         }
 
-        // Floating drift — same for all nodes
-        n.floatPhase += dt
-        const fx = Math.sin(n.floatPhase * n.floatSpeedX) * n.floatAmpX
-        const fy = Math.cos(n.floatPhase * n.floatSpeedY) * n.floatAmpY
-        n.vx += fx * dt
-        n.vy += fy * dt
-
-        // Sub-anchors: gentle gravity toward parent (not a rigid spring)
-        // Just a mild pull — they're free to drift around
+        // Sub-anchors: gentle gravity toward parent, but only if far enough away
         if (n.parentAnchorId) {
-          const parent = nodes.find(p => p.id === n.parentAnchorId)
+          const parent = nodeMap.get(n.parentAnchorId)
           if (parent) {
-            n.vx += (parent.x - n.x) * 0.003 * dt
-            n.vy += (parent.y - n.y) * 0.003 * dt
+            const dx = parent.x - n.x
+            const dy = parent.y - n.y
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1
+            // Only pull if beyond a comfortable separation distance
+            if (dist > 80) {
+              n.vx += dx * 0.002 * dt
+              n.vy += dy * 0.002 * dt
+            }
           }
         }
 
@@ -185,7 +209,6 @@ export function LandscapeView({
         n.y += n.vy
       }
 
-      // Update React state at ~30fps
       const newPos = new Map<string, { x: number; y: number }>()
       for (const n of nodes) newPos.set(n.id, { x: n.x, y: n.y })
       setLivePositions(newPos)
@@ -210,6 +233,7 @@ export function LandscapeView({
     if (!node) return
 
     dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
+    dragPrevPos.current = { x: node.x, y: node.y }
 
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current || !svgRef.current) return
@@ -219,25 +243,16 @@ export function LandscapeView({
       const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
       const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
       if (n) {
-        const dx = (wx - dragRef.current.offsetX) - n.x
-        const dy = (wy - dragRef.current.offsetY) - n.y
-        n.x += dx
-        n.y += dy
-
-        // If dragging a parent, also move its sub-anchors
-        if (!n.parentAnchorId) {
-          for (const other of liveNodesRef.current) {
-            if (other.parentAnchorId === n.id) {
-              other.x += dx
-              other.y += dy
-            }
-          }
-        }
+        n.x = wx - dragRef.current.offsetX
+        n.y = wy - dragRef.current.offsetY
       }
     }
 
     const onUp = () => {
+      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current?.id)
+      if (n) { n.vx = 0; n.vy = 0 }
       dragRef.current = null
+      dragPrevPos.current = null
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -284,6 +299,33 @@ export function LandscapeView({
 
   const layoutClustersRef = useRef(layoutClusters)
   useEffect(() => { layoutClustersRef.current = layoutClusters }, [layoutClusters])
+
+  // Connectivity map for drag drift — weight based on cross-cluster edge weight
+  const connectivityRef = useRef(new Map<string, Map<string, number>>())
+  useEffect(() => {
+    const map = new Map<string, Map<string, number>>()
+    const addLink = (a: string, b: string, weight: number) => {
+      if (!map.has(a)) map.set(a, new Map())
+      if (!map.has(b)) map.set(b, new Map())
+      const existing = map.get(a)!.get(b) ?? 0
+      if (weight > existing) {
+        map.get(a)!.set(b, weight)
+        map.get(b)!.set(a, weight)
+      }
+    }
+    const maxWeight = Math.max(...clusters.flatMap(c => c.crossClusterEdges.map(e => e.totalWeight)), 1)
+    for (const c of clusters) {
+      for (const edge of c.crossClusterEdges) {
+        addLink(c.anchor.id, edge.targetClusterId, Math.min(edge.totalWeight / maxWeight, 1))
+      }
+    }
+    // Parent-child links
+    for (const c of clusters) {
+      if (c.anchor.parentAnchorId) addLink(c.anchor.id, c.anchor.parentAnchorId, 0.8)
+    }
+    connectivityRef.current = map
+  }, [clusters])
+
   // Tooltip state
   const [tooltip, setTooltip] = useState<{ data: TooltipData; x: number; y: number } | null>(null)
 
@@ -306,6 +348,14 @@ export function LandscapeView({
   const zoomIn = useCallback(() => { zoomAround(1.25, sizeRef.current.width / 2, sizeRef.current.height / 2) }, [zoomAround])
   const zoomOut = useCallback(() => { zoomAround(0.8, sizeRef.current.width / 2, sizeRef.current.height / 2) }, [zoomAround])
   const resetCamera = useCallback(() => { setCamera({ zoom: 1, panX: 0, panY: 0 }) }, [])
+  const resetNodes = useCallback(() => {
+    for (const n of liveNodesRef.current) {
+      n.x = n.homeX
+      n.y = n.homeY
+      n.vx = 0
+      n.vy = 0
+    }
+  }, [])
 
   // Wheel zoom
   useEffect(() => {
@@ -347,10 +397,11 @@ export function LandscapeView({
       if (e.key === '+' || e.key === '=') { zoomIn(); e.preventDefault() }
       else if (e.key === '-' || e.key === '_') { zoomOut(); e.preventDefault() }
       else if (e.key === '0') { resetCamera(); e.preventDefault() }
+      else if (e.key === 'r' || e.key === 'R') { resetNodes(); e.preventDefault() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoomIn, zoomOut, resetCamera])
+  }, [zoomIn, zoomOut, resetCamera, resetNodes])
 
   // Pan on SVG background drag
   const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -379,14 +430,14 @@ export function LandscapeView({
     <div
       ref={containerRef}
       className="relative w-full h-full"
-      style={{ overflow: 'hidden', background: 'var(--color-bg-content)' }}
+      style={{ overflow: 'hidden', background: 'var(--color-bg-content)', userSelect: 'none', WebkitUserSelect: 'none' }}
     >
       {size.width > 0 && size.height > 0 && (
         <svg
           ref={svgRef}
           width={size.width}
           height={size.height}
-          style={{ display: 'block' }}
+          style={{ display: 'block', userSelect: 'none', WebkitUserSelect: 'none' }}
           onMouseDown={handleSvgMouseDown}
           onMouseMove={handleSvgMouseMove}
           onMouseUp={handleSvgMouseUp}
@@ -441,9 +492,9 @@ export function LandscapeView({
                 const pos2 = livePositions.get(target.anchor.id)
 
                 const bothVisible = isClusterVisible(cluster) && isClusterVisible(target)
-                const baseOpacity = Math.min(0.06 + (edge.totalWeight / 30) * 0.14, 0.20)
+                const baseOpacity = Math.min(0.03 + (edge.totalWeight / 30) * 0.07, 0.10)
                 const opacity = hasActiveFilter && !bothVisible ? 0.01 : baseOpacity
-                const strokeWidth = Math.min(0.5 + edge.totalWeight * 0.2, 3)
+                const strokeWidth = Math.min(0.3 + edge.totalWeight * 0.1, 1.5)
 
                 return (
                   <line
@@ -577,9 +628,10 @@ export function LandscapeView({
       {/* Zoom controls */}
       <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 20 }}>
         {[
-          { label: '+', title: 'Zoom in', action: zoomIn },
-          { label: '−', title: 'Zoom out', action: zoomOut },
-          { label: '⊙', title: 'Reset', action: resetCamera },
+          { label: '+', title: 'Zoom in (+ key)', action: zoomIn },
+          { label: '−', title: 'Zoom out (− key)', action: zoomOut },
+          { label: '⊙', title: 'Reset view (0 key)', action: resetCamera },
+          { label: '↺', title: 'Reset node positions (R key)', action: resetNodes },
         ].map(({ label, title, action }) => (
           <button key={label} type="button" onClick={action} title={title}
             className="flex items-center justify-center font-body font-bold cursor-pointer"
@@ -667,6 +719,26 @@ export function LandscapeView({
 
       {/* Tooltip */}
       {tooltip && <NodeTooltip tooltip={tooltip.data} x={tooltip.x} y={tooltip.y} />}
+
+      {/* Right-side connections card — opens when a cluster is selected */}
+      {selectedClusterId && (() => {
+        const sel = clusters.find(c => c.anchor.id === selectedClusterId)
+        if (!sel) return null
+        return (
+          <AnchorConnectionsCard
+            cluster={sel}
+            allClusters={clusters}
+            onClose={() => onClearSelection?.()}
+            onNavigateToCluster={(clusterId) => {
+              // Select the target cluster and scroll to it
+              const target = clusters.find(c => c.anchor.id === clusterId)
+              if (target) {
+                onClusterClick(target)
+              }
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }

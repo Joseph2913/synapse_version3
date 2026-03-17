@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { NodeTooltip } from '../../components/explore/NodeTooltip'
+import { EntityDetailCard } from '../../components/explore/EntityDetailCard'
 import { useEntityLayout } from '../../hooks/useEntityLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchClusterEntities, fetchEntityEdges } from '../../services/exploreQueries'
-import { getEntityColor } from '../../config/entityTypes'
+import { getEntityColor, ENTITY_TYPE_COLORS } from '../../config/entityTypes'
 import type { ClusterData, EntityNode, ExploreFilters } from '../../types/explore'
 import type { EntityEdge } from '../../services/exploreQueries'
 import type { TooltipData } from '../../components/explore/NodeTooltip'
@@ -20,6 +21,7 @@ interface NeighborhoodViewProps {
   onBack: () => void
   onEntitiesLoaded?: (entities: EntityNode[]) => void
   onEdgesLoaded?: (edges: EntityEdge[]) => void
+  onNavigateToEntityBrowser?: (searchQuery: string) => void
 }
 
 const MIN_ZOOM = 0.2
@@ -53,6 +55,7 @@ export function NeighborhoodView({
   onBack,
   onEntitiesLoaded,
   onEdgesLoaded,
+  onNavigateToEntityBrowser,
 }: NeighborhoodViewProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -140,6 +143,7 @@ export function NeighborhoodView({
   const liveNodesRef = useRef<LiveNode[]>([])
   const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
   const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
   const rafRef = useRef<number>(0)
 
   // Compute node radii per spec Section 3 (connection count based)
@@ -156,6 +160,26 @@ export function NeighborhoodView({
     }
     return radii
   }, [entities, size.width, size.height, cluster.anchor.id])
+
+  // Connectivity map for directional drag drift
+  const connectivityRef = useRef(new Map<string, Map<string, number>>())
+  useEffect(() => {
+    const map = new Map<string, Map<string, number>>()
+    const addLink = (a: string, b: string, weight: number) => {
+      if (!map.has(a)) map.set(a, new Map())
+      if (!map.has(b)) map.set(b, new Map())
+      const existing = map.get(a)!.get(b) ?? 0
+      if (weight > existing) {
+        map.get(a)!.set(b, weight)
+        map.get(b)!.set(a, weight)
+      }
+    }
+    const maxWeight = Math.max(...edges.map(e => e.weight ?? 1), 1)
+    for (const e of edges) {
+      addLink(e.sourceNodeId, e.targetNodeId, Math.min((e.weight ?? 1) / maxWeight, 1))
+    }
+    connectivityRef.current = map
+  }, [edges])
 
   // Initialize live nodes when layout changes
   useEffect(() => {
@@ -175,18 +199,39 @@ export function NeighborhoodView({
     }))
   }, [layoutPositions, nodeRadii])
 
-  // Animation loop — identical to LandscapeView floating
+  // Animation loop — drag drift + boundary push (no auto-floating)
   useEffect(() => {
-    let lastTime = performance.now()
-
-    const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05)
-      lastTime = now
+    const tick = () => {
       const nodes = liveNodesRef.current
       if (nodes.length === 0) { rafRef.current = requestAnimationFrame(tick); return }
 
       const w = sizeRef.current.width
       const h = sizeRef.current.height
+
+      const nodeMap = new Map<string, LiveNode>()
+      for (const n of nodes) nodeMap.set(n.id, n)
+
+      // Directional drag drift — subtle, matching anchor landscape view
+      if (dragRef.current && dragPrevPos.current) {
+        const dragNode = nodeMap.get(dragRef.current.id)
+        if (dragNode) {
+          const moveDx = dragNode.x - dragPrevPos.current.x
+          const moveDy = dragNode.y - dragPrevPos.current.y
+          if (Math.abs(moveDx) > 0.1 || Math.abs(moveDy) > 0.1) {
+            const connections = connectivityRef.current.get(dragRef.current.id)
+            if (connections) {
+              for (const [connId, weight] of connections) {
+                const connNode = nodeMap.get(connId)
+                if (!connNode) continue
+                const strength = 0.0005 + weight * 0.004
+                connNode.vx += moveDx * strength
+                connNode.vy += moveDy * strength
+              }
+            }
+          }
+          dragPrevPos.current = { x: dragNode.x, y: dragNode.y }
+        }
+      }
 
       for (const n of nodes) {
         if (dragRef.current?.id === n.id) {
@@ -194,11 +239,6 @@ export function NeighborhoodView({
           n.vy = 0
           continue
         }
-
-        // Floating drift
-        n.floatPhase += dt
-        n.vx += Math.sin(n.floatPhase * n.floatSpeedX) * n.floatAmpX * dt
-        n.vy += Math.cos(n.floatPhase * n.floatSpeedY) * n.floatAmpY * dt
 
         // Boundary soft push
         const pad = 30
@@ -240,6 +280,7 @@ export function NeighborhoodView({
     if (!node) return
 
     dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
+    dragPrevPos.current = { x: node.x, y: node.y }
 
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current || !svgRef.current) return
@@ -256,10 +297,10 @@ export function NeighborhoodView({
     }
 
     const onUp = () => {
-      // After release, node resumes floating from new position, velocity zeroed
       const n = liveNodesRef.current.find(nd => nd.id === dragRef.current?.id)
       if (n) { n.vx = 0; n.vy = 0 }
       dragRef.current = null
+      dragPrevPos.current = null
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -385,6 +426,19 @@ export function NeighborhoodView({
     setCamera({ zoom: 1, panX: 0, panY: 0 })
   }, [])
 
+  const resetNodes = useCallback(() => {
+    if (layoutPositions.size === 0) return
+    for (const n of liveNodesRef.current) {
+      const orig = layoutPositions.get(n.id)
+      if (orig) {
+        n.x = orig.x
+        n.y = orig.y
+        n.vx = 0
+        n.vy = 0
+      }
+    }
+  }, [layoutPositions])
+
   // Wheel zoom
   useEffect(() => {
     const el = containerRef.current
@@ -436,11 +490,12 @@ export function NeighborhoodView({
       if (e.key === '+' || e.key === '=') { zoomIn(); e.preventDefault() }
       else if (e.key === '-' || e.key === '_') { zoomOut(); e.preventDefault() }
       else if (e.key === '0') { resetCamera(); e.preventDefault() }
+      else if (e.key === 'r' || e.key === 'R') { resetNodes(); e.preventDefault() }
       else if (e.key === 'Escape') { onSelectEntity(null) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoomIn, zoomOut, resetCamera, onSelectEntity])
+  }, [zoomIn, zoomOut, resetCamera, resetNodes, onSelectEntity])
 
   // ── SVG interaction ───────────────────────────────────────────────────────
   const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -468,6 +523,7 @@ export function NeighborhoodView({
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.target === e.currentTarget && !hasDraggedRef.current) {
       onSelectEntity(null)
+      setExploringEntityId(null)
     }
   }
 
@@ -495,7 +551,9 @@ export function NeighborhoodView({
 
   const handleEntityClick = useCallback((entity: EntityNode) => {
     if (hasDraggedRef.current) return
-    onSelectEntity(selectedEntityId === entity.id ? null : entity)
+    const deselecting = selectedEntityId === entity.id
+    onSelectEntity(deselecting ? null : entity)
+    setExploringEntityId(deselecting ? null : entity.id)
   }, [onSelectEntity, selectedEntityId])
 
   useEffect(() => {
@@ -509,6 +567,24 @@ export function NeighborhoodView({
     () => selectedEntityId ? entities.find(e => e.id === selectedEntityId) ?? null : null,
     [selectedEntityId, entities]
   )
+
+  // ── Detail panel state ──────────────────────────────────────────────────────
+  const [exploringEntityId, setExploringEntityId] = useState<string | null>(null)
+  const exploringEntity = useMemo(
+    () => exploringEntityId ? entities.find(e => e.id === exploringEntityId) ?? null : null,
+    [exploringEntityId, entities]
+  )
+
+  // ── Legend: entity types present in this cluster ────────────────────────────
+  const legendItems = useMemo(() => {
+    const typeCount = new Map<string, number>()
+    for (const e of entities) {
+      typeCount.set(e.entityType, (typeCount.get(e.entityType) ?? 0) + 1)
+    }
+    return Array.from(typeCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => ({ type, count, color: ENTITY_TYPE_COLORS[type] ?? '#808080' }))
+  }, [entities])
 
   if (loading) {
     return (
@@ -527,13 +603,13 @@ export function NeighborhoodView({
   }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)' }}>
+    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)', userSelect: 'none', WebkitUserSelect: 'none' }}>
       {size.width > 0 && size.height > 0 && (
         <svg
           ref={svgRef}
           width={size.width}
           height={size.height}
-          style={{ display: 'block' }}
+          style={{ display: 'block', userSelect: 'none', WebkitUserSelect: 'none' }}
           onMouseDown={handleSvgMouseDown}
           onMouseMove={handleSvgMouseMove}
           onMouseUp={handleSvgMouseUp}
@@ -586,7 +662,7 @@ export function NeighborhoodView({
               if (!sp || !tp) return null
 
               const weight = edge.weight ?? 1
-              const baseOpacity = Math.min(0.06 + (weight / 30) * 0.14, 0.20)
+              const baseOpacity = Math.min(0.08 + (weight / 30) * 0.17, 0.25)
               const strokeWidth = Math.min(0.5 + weight * 0.2, 3)
 
               const isSelected = selectedEntityId === edge.sourceNodeId || selectedEntityId === edge.targetNodeId
@@ -908,6 +984,7 @@ export function NeighborhoodView({
           { label: '+', title: 'Zoom in (+ key)', action: zoomIn },
           { label: '−', title: 'Zoom out (− key)', action: zoomOut },
           { label: '⊙', title: 'Reset view (0 key)', action: resetCamera },
+          { label: '↺', title: 'Reset node positions (R key)', action: resetNodes },
         ].map(({ label, title, action }) => (
           <button
             key={label}
@@ -1000,6 +1077,57 @@ export function NeighborhoodView({
           </div>
         )
       })()}
+
+      {/* Entity type legend — bottom-left */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 16,
+          left: 16,
+          background: 'rgba(255,255,255,0.92)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8,
+          padding: '8px 10px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          zIndex: 20,
+          maxHeight: 200,
+          overflowY: 'auto',
+        }}
+      >
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, color: 'var(--color-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
+          Legend
+        </span>
+        {legendItems.map(item => (
+          <div key={item.type} className="flex items-center gap-2">
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', flex: 1 }}>
+              {item.type}
+            </span>
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, fontWeight: 600, color: 'var(--color-text-placeholder)' }}>
+              {item.count}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Right-side entity detail card */}
+      {exploringEntity && (
+        <EntityDetailCard
+          entity={exploringEntity}
+          allEntities={entities}
+          edges={edges}
+          cluster={cluster}
+          allClusters={allClusters}
+          onClose={() => {
+            setExploringEntityId(null)
+            onSelectEntity(null)
+          }}
+          onNavigateToEntityBrowser={onNavigateToEntityBrowser}
+        />
+      )}
 
       {/* Tooltip */}
       {tooltip && (

@@ -198,10 +198,10 @@ export function GraphCanvas({
   }, [])
 
   return (
-    <div ref={containerRef} className="w-full h-full relative">
+    <div ref={containerRef} className="w-full h-full relative" style={{ userSelect: 'none', WebkitUserSelect: 'none' }}>
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: dims.width, height: dims.height }}
+        style={{ display: 'block', width: dims.width, height: dims.height, userSelect: 'none' }}
       />
 
       {/* Zoom controls — bottom-right overlay */}

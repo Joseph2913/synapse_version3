@@ -7,13 +7,15 @@ export interface SourcePosition {
   radius: number
 }
 
-/** Dot radius — small: min 3, max 10 */
-export function dotRadius(entityCount: number): number {
-  if (entityCount <= 0) return 3
-  return Math.min(3 + Math.sqrt(entityCount) * 0.8, 10)
+/** Source dot radius — standardized to match entity/anchor sizing */
+export function dotRadius(entityCount: number, maxEntityCount: number = 50): number {
+  if (entityCount <= 0) return 6
+  const minR = 6
+  const maxR = 18
+  return minR + Math.sqrt(entityCount / Math.max(maxEntityCount, 1)) * (maxR - minR)
 }
 
-export const ANCHOR_RADIUS = 7
+export const ANCHOR_RADIUS = 10
 
 /**
  * Territory-based layout:
@@ -41,6 +43,7 @@ export function useSourceLayout(
     const cx = width / 2
     const cy = height / 2
     const result = new Map<string, SourcePosition>()
+    const maxEntityCount = Math.max(...sources.map(s => s.entityCount), 1)
 
     // ── Step 1: Classify sources ─────────────────────────────────────────────
     // For each source, find which anchors it connects to
@@ -82,7 +85,7 @@ export function useSourceLayout(
         result.set(s.id, {
           x: spacingX * (col + 1) + (Math.random() - 0.5) * 10,
           y: spacingY * (row + 1) + (Math.random() - 0.5) * 10,
-          radius: dotRadius(s.entityCount),
+          radius: dotRadius(s.entityCount, maxEntityCount),
         })
       })
       return result
@@ -92,18 +95,17 @@ export function useSourceLayout(
     const clusterSizes = anchors.map(a => (primaryByAnchor.get(a.id) ?? []).length)
     const maxClusterSize = Math.max(...clusterSizes, 1)
 
-    // Each cluster gets a territory radius
-    const minTerritoryR = 30
-    const maxTerritoryR = Math.min(width, height) * 0.15
+    // Each cluster gets a territory radius — tighter spacing
+    const minTerritoryR = 25
+    const maxTerritoryR = Math.min(width, height) * 0.10
     const territoryRadii = clusterSizes.map(size =>
       minTerritoryR + Math.sqrt(size / maxClusterSize) * (maxTerritoryR - minTerritoryR)
     )
 
-    // Place anchors on an ellipse that fills the viewport
-    // Use separate X and Y radii so the layout stretches to use full width AND height
-    const pad = 60
-    const ellipseRx = (width / 2) - pad   // horizontal radius fills width
-    const ellipseRy = (height / 2) - pad  // vertical radius fills height
+    // Place anchors on an ellipse — tighter to center for better clustering
+    const pad = 80
+    const ellipseRx = (width / 2) - pad
+    const ellipseRy = (height / 2) - pad
 
     // ── Step 3: Place anchors on the ellipse ─────────────────────────────────
     // Cumulative angle placement so larger clusters get more arc space
@@ -115,37 +117,35 @@ export function useSourceLayout(
     for (let i = 0; i < anchorCount; i++) {
       const a = anchors[i]!
       const tr = territoryRadii[i]!
-      // This anchor's share of the ellipse
       const arcShare = (tr / totalWeight) * Math.PI * 2
       const angle = cumulativeAngle + arcShare / 2
       cumulativeAngle += arcShare
 
-      // Ellipse point: stretches horizontally and vertically to fill viewport
-      const ax = cx + Math.cos(angle) * ellipseRx * 0.7
-      const ay = cy + Math.sin(angle) * ellipseRy * 0.7
+      // Tighter ellipse — 0.55 instead of 0.7 to bring anchors closer together
+      const ax = cx + Math.cos(angle) * ellipseRx * 0.55
+      const ay = cy + Math.sin(angle) * ellipseRy * 0.55
 
       anchorPositions.set(a.id, { x: ax, y: ay, territoryR: tr })
       result.set(a.id, { x: ax, y: ay, radius: ANCHOR_RADIUS })
     }
 
-    // ── Step 4: Place primary sources in territory rings ─────────────────────
+    // ── Step 4: Place primary sources in territory rings (tighter) ───────────
     for (const a of anchors) {
       const pos = anchorPositions.get(a.id)!
       const primaries = primaryByAnchor.get(a.id) ?? []
       if (primaries.length === 0) continue
 
-      // Golden-angle spiral within the territory
+      // Golden-angle spiral within the territory — tighter starting distance
       for (let i = 0; i < primaries.length; i++) {
         const s = primaries[i]!
         const angle = i * 2.399963 // golden angle
-        // Distance from anchor: spread evenly within territory, starting from 12px out
         const t = (i + 1) / (primaries.length + 1)
-        const dist = 12 + t * (pos.territoryR - 12)
+        const dist = 10 + t * (pos.territoryR - 10)
 
         result.set(s.id, {
           x: pos.x + Math.cos(angle) * dist,
           y: pos.y + Math.sin(angle) * dist,
-          radius: dotRadius(s.entityCount),
+          radius: dotRadius(s.entityCount, maxEntityCount),
         })
       }
     }
@@ -155,15 +155,15 @@ export function useSourceLayout(
       const anchorIds = sourceAnchorMap.get(s.id) ?? []
 
       if (anchorIds.length === 0) {
-        // Unconnected: place in outer ellipse ring
+        // Unconnected: place in outer ring but not too far
         const angle = Math.random() * Math.PI * 2
         result.set(s.id, {
-          x: cx + Math.cos(angle) * ellipseRx * 0.85 + (Math.random() - 0.5) * 30,
-          y: cy + Math.sin(angle) * ellipseRy * 0.85 + (Math.random() - 0.5) * 30,
-          radius: dotRadius(s.entityCount),
+          x: cx + Math.cos(angle) * ellipseRx * 0.7 + (Math.random() - 0.5) * 20,
+          y: cy + Math.sin(angle) * ellipseRy * 0.7 + (Math.random() - 0.5) * 20,
+          radius: dotRadius(s.entityCount, maxEntityCount),
         })
       } else {
-        // Multi-anchor: place at the midpoint of connected anchors, outside territories
+        // Multi-anchor: place at the midpoint of connected anchors
         let avgX = 0, avgY = 0
         for (const aid of anchorIds) {
           const apos = anchorPositions.get(aid)
@@ -172,16 +172,16 @@ export function useSourceLayout(
         avgX /= anchorIds.length
         avgY /= anchorIds.length
 
-        // Push outward from center slightly so it sits between clusters
+        // Slight push outward from center so it sits between clusters
         const dxFromCenter = avgX - cx
         const dyFromCenter = avgY - cy
         const distFromCenter = Math.sqrt(dxFromCenter * dxFromCenter + dyFromCenter * dyFromCenter) || 1
-        const pushOut = 20 + Math.random() * 15
+        const pushOut = 15 + Math.random() * 10
 
         result.set(s.id, {
-          x: avgX + (dxFromCenter / distFromCenter) * pushOut + (Math.random() - 0.5) * 15,
-          y: avgY + (dyFromCenter / distFromCenter) * pushOut + (Math.random() - 0.5) * 15,
-          radius: dotRadius(s.entityCount),
+          x: avgX + (dxFromCenter / distFromCenter) * pushOut + (Math.random() - 0.5) * 10,
+          y: avgY + (dyFromCenter / distFromCenter) * pushOut + (Math.random() - 0.5) * 10,
+          radius: dotRadius(s.entityCount, maxEntityCount),
         })
       }
     }
@@ -201,7 +201,7 @@ export function useSourceLayout(
           const dx = b.x - a.x
           const dy = b.y - a.y
           const dist = Math.sqrt(dx * dx + dy * dy) || 0.1
-          const minDist = a.r + b.r + 8
+          const minDist = a.r + b.r + 4
 
           if (dist < minDist) {
             const push = (minDist - dist) * 0.3

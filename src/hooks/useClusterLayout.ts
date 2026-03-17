@@ -55,7 +55,7 @@ export function useClusterLayout(
     const subNodes = subClusters.map((c, i) => {
       const parentPos = rootPosMap.get(c.anchor.parentAnchorId!) ?? { x: width / 2, y: height / 2 }
       const angle = (i * 2.4) // golden angle spread
-      const offset = 60 + Math.random() * 30
+      const offset = 100 + Math.random() * 40
       return {
         cluster: c,
         x: parentPos.x + Math.cos(angle) * offset,
@@ -78,12 +78,19 @@ export function useClusterLayout(
         n.vx += (width / 2 - n.x) * 0.001
         n.vy += (height / 2 - n.y) * 0.001
 
-        // Sub-anchors: gentle gravity toward parent (not a rigid spring)
+        // Sub-anchors: very gentle gravity toward parent — keep them nearby but clearly separated
         if (n.parentId) {
           const parent = allNodes.find(p => p.cluster.anchor.id === n.parentId)
           if (parent) {
-            n.vx += (parent.x - n.x) * 0.008
-            n.vy += (parent.y - n.y) * 0.008
+            const dx = parent.x - n.x
+            const dy = parent.y - n.y
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1
+            // Only pull if further than ideal separation (parent.r + n.r + 40)
+            const idealSep = parent.r + n.r + 40
+            if (dist > idealSep) {
+              n.vx += dx * 0.004
+              n.vy += dy * 0.004
+            }
           }
         }
       }

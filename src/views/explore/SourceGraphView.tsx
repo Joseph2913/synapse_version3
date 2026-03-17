@@ -114,10 +114,11 @@ export function SourceGraphView({
     connectivityRef.current = map
   }, [edges, anchors])
 
-  // Node radii
+  // Node radii — standardized sizing
   const nodeRadii = useMemo(() => {
+    const maxEntityCount = Math.max(...sources.map(s => s.entityCount), 1)
     const radii = new Map<string, number>()
-    for (const s of sources) radii.set(s.id, dotRadius(s.entityCount))
+    for (const s of sources) radii.set(s.id, dotRadius(s.entityCount, maxEntityCount))
     for (const a of anchors) radii.set(a.id, ANCHOR_RADIUS)
     return radii
   }, [sources, anchors])
@@ -133,10 +134,10 @@ export function SourceGraphView({
       vy: 0,
       radius: nodeRadii.get(id) ?? pos.radius,
       floatPhase: Math.random() * Math.PI * 2,
-      floatSpeedX: 0.2 + Math.random() * 0.25,
-      floatSpeedY: 0.15 + Math.random() * 0.2,
-      floatAmpX: 0.06 + Math.random() * 0.1,
-      floatAmpY: 0.05 + Math.random() * 0.08,
+      floatSpeedX: 0.25 + Math.random() * 0.35,
+      floatSpeedY: 0.18 + Math.random() * 0.25,
+      floatAmpX: 0.12 + Math.random() * 0.2,
+      floatAmpY: 0.1 + Math.random() * 0.16,
     }))
   }, [layoutPositions, nodeRadii])
 
@@ -151,10 +152,7 @@ export function SourceGraphView({
   // Stronger connections get a bigger nudge, weaker ones barely move.
   // Nodes stay in their own area; they just drift along with the movement.
   useEffect(() => {
-    let lastTime = performance.now()
-    const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05)
-      lastTime = now
+    const tick = () => {
       const nodes = liveNodesRef.current
       if (nodes.length === 0) { rafRef.current = requestAnimationFrame(tick); return }
 
@@ -177,26 +175,10 @@ export function SourceGraphView({
               for (const [connId, weight] of connections) {
                 const connNode = nodeMap.get(connId)
                 if (!connNode) continue
-
-                // Very subtle nudge in the same direction as the drag
-                // Strong connections (weight ~1): ~3% of drag speed
-                // Weak connections (weight ~0.1): ~0.5% of drag speed
-                const strength = 0.003 + weight * 0.025
+                // Subtle nudge — matching anchor/neighborhood views
+                const strength = 0.0005 + weight * 0.004
                 connNode.vx += moveDx * strength
                 connNode.vy += moveDy * strength
-
-                // 2nd degree: barely perceptible
-                const secondDeg = connectivityRef.current.get(connId)
-                if (secondDeg) {
-                  for (const [secId, secWeight] of secondDeg) {
-                    if (secId === dragRef.current!.id) continue
-                    const secNode = nodeMap.get(secId)
-                    if (!secNode) continue
-                    const secStrength = 0.0005 + secWeight * 0.003
-                    secNode.vx += moveDx * secStrength
-                    secNode.vy += moveDy * secStrength
-                  }
-                }
               }
             }
           }
@@ -209,11 +191,6 @@ export function SourceGraphView({
       for (const n of nodes) {
         if (dragRef.current?.id === n.id) { n.vx = 0; n.vy = 0; continue }
 
-        // Floating drift
-        n.floatPhase += dt
-        n.vx += Math.sin(n.floatPhase * n.floatSpeedX) * n.floatAmpX * dt
-        n.vy += Math.cos(n.floatPhase * n.floatSpeedY) * n.floatAmpY * dt
-
         // Boundary soft push
         const w = sizeRef.current.width
         const h = sizeRef.current.height
@@ -225,9 +202,9 @@ export function SourceGraphView({
           if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
         }
 
-        // Damping
-        n.vx *= 0.94
-        n.vy *= 0.94
+        // Damping — matching anchor/neighborhood views
+        n.vx *= 0.97
+        n.vy *= 0.97
         n.x += n.vx
         n.y += n.vy
       }
@@ -566,13 +543,13 @@ export function SourceGraphView({
   }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)' }}>
+    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)', userSelect: 'none', WebkitUserSelect: 'none' }}>
       {size.width > 0 && size.height > 0 && (
         <svg
           ref={svgRef}
           width={size.width}
           height={size.height}
-          style={{ display: 'block' }}
+          style={{ display: 'block', userSelect: 'none', WebkitUserSelect: 'none' }}
           onMouseDown={handleSvgMouseDown}
           onMouseMove={handleSvgMouseMove}
           onMouseUp={handleSvgMouseUp}
@@ -629,16 +606,18 @@ export function SourceGraphView({
               })
             })}
 
-            {/* 3. Source circles — plain colored, no icons */}
+            {/* 3. Source circles — standardized rendering matching anchor/entity views */}
             {sources.map(source => {
               const pos = livePositions.get(source.id)
               if (!pos) return null
 
-              const r = nodeRadii.get(source.id) ?? 3
+              const r = nodeRadii.get(source.id) ?? 6
               const cfg = getSourceConfig(source.sourceType)
               const isDimmed = !filteredSourceIds.has(source.id)
               const isSelected = selectedSourceId === source.id
               const isHovered = hoveredSourceId === source.id
+              const scale = isHovered && !isDimmed ? 1.08 : 1
+              const label = source.title.length > 20 ? source.title.slice(0, 19) + '…' : source.title
 
               return (
                 <g
@@ -654,56 +633,77 @@ export function SourceGraphView({
                   }}
                 >
                   <g transform={`translate(${pos.x}, ${pos.y})`}>
-                    {/* Selection ring */}
-                    {isSelected && !isDimmed && (
-                      <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.5} opacity={0.7} />
-                    )}
+                    <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
+                      {/* Selection ring — spec: r+5, 2px, 60% */}
+                      {isSelected && !isDimmed && (
+                        <circle r={r + 5} fill="none" stroke="var(--color-accent-500)" strokeWidth={2} opacity={0.6} />
+                      )}
 
-                    {/* Hover ring */}
-                    {isHovered && !isDimmed && !isSelected && (
-                      <circle r={r + 3} fill="none" stroke={`${cfg.color}50`} strokeWidth={1} />
-                    )}
+                      {/* Hover glow ring — spec: r+4, 2px, {color}35 */}
+                      {isHovered && !isDimmed && !isSelected && (
+                        <circle r={r + 4} fill="none" stroke={`${cfg.color}35`} strokeWidth={2} />
+                      )}
 
-                    {/* Solid filled circle — no icon */}
-                    <circle
-                      r={r}
-                      fill={cfg.color}
-                      fillOpacity={0.75}
-                      stroke={cfg.color}
-                      strokeWidth={isSelected ? 1.5 : 0.5}
-                      strokeOpacity={0.9}
-                    />
+                      {/* Translucent filled circle — matching anchor/entity pattern */}
+                      <circle
+                        r={r}
+                        fill={`${cfg.color}22`}
+                        stroke={cfg.color}
+                        strokeWidth={2}
+                      />
 
-                    {/* Label — only on hover, select, or sufficient zoom */}
-                    {(isHovered || isSelected || camera.zoom > 0.6) && (
-                      <text
-                        y={r + 10}
-                        textAnchor="middle"
-                        style={{
-                          fontFamily: 'var(--font-body)',
-                          fontSize: 7,
-                          fontWeight: isSelected ? 700 : 500,
-                          fill: isSelected ? 'var(--color-accent-500)'
-                            : isHovered ? 'var(--color-text-primary)'
-                            : 'var(--color-text-secondary)',
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                          opacity: isHovered || isSelected ? 1 : 0.7,
-                        }}
-                      >
-                        {source.title.length > 18 ? source.title.slice(0, 16) + '…' : source.title}
-                      </text>
-                    )}
+                      {/* Connection count inside — on hover or deep zoom */}
+                      {(isHovered || camera.zoom >= 1.8) && source.entityCount > 0 && (
+                        <text
+                          y={1}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          style={{
+                            fontFamily: 'var(--font-body)',
+                            fontSize: Math.max(7, r * 0.5),
+                            fontWeight: 700,
+                            fill: cfg.color,
+                            opacity: 0.45,
+                            pointerEvents: 'none',
+                            userSelect: 'none',
+                          }}
+                        >
+                          {source.entityCount}
+                        </text>
+                      )}
+                    </g>
+
+                    {/* Label below circle — always visible, spec-aligned */}
+                    <text
+                      y={r + 12}
+                      textAnchor="middle"
+                      style={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 9,
+                        fontWeight: 600,
+                        fill: isSelected ? 'var(--color-accent-500)'
+                          : isHovered ? 'var(--color-text-primary)'
+                          : 'var(--color-text-secondary)',
+                        pointerEvents: 'none',
+                        userSelect: 'none',
+                        transition: 'fill 0.15s ease',
+                      }}
+                    >
+                      {label}
+                    </text>
                   </g>
                 </g>
               )
             })}
 
-            {/* 4. Anchor dots — small filled circles */}
+            {/* 4. Anchor nodes — standardized rendering */}
             {anchors.map(anchor => {
               const pos = livePositions.get(anchor.id)
               if (!pos) return null
               const isActive = hoveredAnchorId === anchor.id || filters.sourceAnchorFilter === anchor.id
+              const r = ANCHOR_RADIUS
+              const scale = isActive ? 1.08 : 1
+              const label = anchor.label.length > 20 ? anchor.label.slice(0, 19) + '…' : anchor.label
 
               return (
                 <g
@@ -714,43 +714,44 @@ export function SourceGraphView({
                   style={{ cursor: dragRef.current?.id === anchor.id ? 'grabbing' : 'pointer' }}
                 >
                   <g transform={`translate(${pos.x}, ${pos.y})`}>
-                    {isActive && (
-                      <circle r={ANCHOR_RADIUS + 4} fill={`${ANCHOR_COLOR}15`} />
-                    )}
-                    <circle
-                      r={ANCHOR_RADIUS}
-                      fill={ANCHOR_COLOR}
-                      fillOpacity={isActive ? 0.85 : 0.6}
-                      stroke={ANCHOR_COLOR}
-                      strokeWidth={isActive ? 1.5 : 0.5}
-                      strokeOpacity={0.8}
-                    />
-                    {/* Small diamond inside */}
-                    <text
-                      y={0.5}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      style={{ fontSize: 5, fill: '#fff', pointerEvents: 'none', userSelect: 'none', fontWeight: 700 }}
-                    >
-                      ◆
-                    </text>
-                    {/* Label */}
-                    {(isActive || camera.zoom > 0.6) && (
+                    <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
+                      {/* Hover glow */}
+                      {isActive && (
+                        <circle r={r + 4} fill="none" stroke={`${ANCHOR_COLOR}35`} strokeWidth={2} />
+                      )}
+                      {/* Translucent filled circle */}
+                      <circle
+                        r={r}
+                        fill={`${ANCHOR_COLOR}22`}
+                        stroke={ANCHOR_COLOR}
+                        strokeWidth={2}
+                      />
+                      {/* Small diamond inside */}
                       <text
-                        y={ANCHOR_RADIUS + 9}
+                        y={0.5}
                         textAnchor="middle"
-                        style={{
-                          fontFamily: 'var(--font-display)',
-                          fontSize: 6,
-                          fontWeight: 700,
-                          fill: isActive ? ANCHOR_COLOR : `${ANCHOR_COLOR}99`,
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                        }}
+                        dominantBaseline="middle"
+                        style={{ fontSize: 5, fill: ANCHOR_COLOR, opacity: 0.6, pointerEvents: 'none', userSelect: 'none', fontWeight: 700 }}
                       >
-                        {anchor.label.length > 16 ? anchor.label.slice(0, 14) + '…' : anchor.label}
+                        ◆
                       </text>
-                    )}
+                    </g>
+                    {/* Label below — always visible */}
+                    <text
+                      y={r + 12}
+                      textAnchor="middle"
+                      style={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 9,
+                        fontWeight: 600,
+                        fill: isActive ? ANCHOR_COLOR : 'var(--color-text-secondary)',
+                        pointerEvents: 'none',
+                        userSelect: 'none',
+                        transition: 'fill 0.15s ease',
+                      }}
+                    >
+                      {label}
+                    </text>
                   </g>
                 </g>
               )
@@ -846,11 +847,7 @@ export function SourceGraphView({
         </span>
         {legendItems.map(item => (
           <div key={item.label} className="flex items-center gap-2">
-            {item.dashed ? (
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: item.color, opacity: 0.7, flexShrink: 0 }} />
-            ) : (
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: item.color, opacity: 0.75, flexShrink: 0 }} />
-            )}
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
             <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)' }}>
               {item.label}
             </span>

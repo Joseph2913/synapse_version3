@@ -23,6 +23,14 @@
 ### Background
 - Colour: `var(--color-bg-content)` — clean, no grid lines, no dots, no pattern.
 
+### Text Selection Prevention (MANDATORY)
+All graph containers (SVG and Canvas) **must** disable text selection to prevent browser selection artifacts during drag interactions:
+```css
+user-select: none;
+-webkit-user-select: none;
+```
+Apply to **both** the container `<div>` and the `<svg>` or `<canvas>` element. This prevents label text from being selected when dragging nodes, which causes rendering slowdowns and visual glitches. All `<text>` elements within SVG graphs should also have `pointer-events: none` and `user-select: none` in their inline styles.
+
 ### Camera Controls
 
 | Input | Behaviour |
@@ -211,33 +219,17 @@ Run synchronously on mount (not animated). Produces the starting positions.
    - **Damping**: `0.8`
 6. Clamp to viewport bounds with `r + 20` padding
 
-### 7.2 Live Floating Animation
-Every node has a continuous ambient drift, creating a "floating in space" effect.
+### 7.2 Node Motion Behaviour
 
-**Per-node parameters** (randomised on init):
-```
-floatPhase:  random × 2π
-floatSpeedX: 0.25 + random × 0.35
-floatSpeedY: 0.18 + random × 0.25
-floatAmpX:   0.12 + random × 0.20
-floatAmpY:   0.10 + random × 0.16
-```
+**No automatic floating.** Nodes are static after initial layout. They do NOT drift, bob, or animate on their own. Movement only occurs when the user drags a node.
 
-**Every frame:**
-```
-floatPhase += deltaTime
-vx += sin(floatPhase × floatSpeedX) × floatAmpX × deltaTime
-vy += cos(floatPhase × floatSpeedY) × floatAmpY × deltaTime
-```
+**Child node gravity** (sub-anchors only, live):
+- Only activates when distance exceeds `80px` from parent
+- Strength: `0.002 × deltaTime` — very gentle pull back
 
-**Child node gravity** (live, not just layout):
-```
-vx += (parentX - childX) × 0.003 × deltaTime
-vy += (parentY - childY) × 0.003 × deltaTime
-```
-This is extremely gentle — children drift freely but slowly gravitate back.
+**Damping:** `0.97` per frame — applied to all velocity, so nodes decelerate smoothly after drag release.
 
-**Damping:** `0.97` per frame.
+**Boundary soft-push:** Nodes near viewport edges get a gentle push inward (pad `30px`, strength `0.01`).
 
 **Boundary push:** soft force when within 30px of viewport edge.
 

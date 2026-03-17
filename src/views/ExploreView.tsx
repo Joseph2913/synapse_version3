@@ -100,7 +100,7 @@ export function ExploreView() {
 
   // Neighborhood edge-type visibility (lifted so toolbar can control it)
   const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Set<string>>(
-    () => new Set(['direct', 'source', 'tag'])
+    () => new Set(['direct'])
   )
   const toggleNeighborhoodEdgeType = useCallback((type: string) => {
     setVisibleEdgeTypes(prev => {
@@ -111,7 +111,7 @@ export function ExploreView() {
   }, [])
   const clearAllFilters = useCallback(() => {
     toggleSpotlight(null)
-    setVisibleEdgeTypes(new Set(['direct', 'source', 'tag']))
+    setVisibleEdgeTypes(new Set(['direct']))
   }, [toggleSpotlight])
 
 
@@ -323,6 +323,11 @@ export function ExploreView() {
             onBack={returnToLandscape}
             onEntitiesLoaded={handleEntitiesLoaded}
             onEdgesLoaded={handleEdgesLoaded}
+            onNavigateToEntityBrowser={(query) => {
+              entityBrowser.setSearchQuery(query)
+              entityBrowser.setViewMode('list')
+              handleViewModeChange('entity-browser')
+            }}
           />
         </div>
       ) : (
