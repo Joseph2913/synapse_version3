@@ -18,7 +18,7 @@ function verifyCronAuth(req: VercelRequest): boolean {
   return !!(auth && auth === `Bearer ${CRON_SECRET}`)
 }
 
-// ─── DEFAULTS (identical copy to score-post-extraction — required by serverless constraint) ──
+// ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
 const DEFAULT_CONFIG = {
@@ -31,13 +31,13 @@ const DEFAULT_CONFIG = {
 }
 
 const SIGNAL_WEIGHTS: Record<ScoringProfile, {
-  centrality: number; diversity: number; velocity: number; richness: number; behavioural: number
+  centrality: number; diversity: number; richness: number
 }> = {
-  balanced:        { centrality: 0.35, diversity: 0.25, velocity: 0.20, richness: 0.15, behavioural: 0.05 },
-  emerging_topics: { centrality: 0.15, diversity: 0.15, velocity: 0.55, richness: 0.10, behavioural: 0.05 },
-  deep_concepts:   { centrality: 0.45, diversity: 0.15, velocity: 0.10, richness: 0.25, behavioural: 0.05 },
-  active_focus:    { centrality: 0.20, diversity: 0.20, velocity: 0.45, richness: 0.10, behavioural: 0.05 },
-  well_evidenced:  { centrality: 0.25, diversity: 0.50, velocity: 0.10, richness: 0.10, behavioural: 0.05 },
+  balanced:        { centrality: 0.50, diversity: 0.30, richness: 0.20 },
+  emerging_topics: { centrality: 0.25, diversity: 0.25, richness: 0.50 },
+  deep_concepts:   { centrality: 0.55, diversity: 0.20, richness: 0.25 },
+  active_focus:    { centrality: 0.35, diversity: 0.25, richness: 0.40 },
+  well_evidenced:  { centrality: 0.30, diversity: 0.50, richness: 0.20 },
 }
 
 function resolveUserConfig(processingPreferences: Record<string, unknown> | null) {
@@ -45,169 +45,204 @@ function resolveUserConfig(processingPreferences: Record<string, unknown> | null
   return { ...DEFAULT_CONFIG, ...stored }
 }
 
-// ─── SIGNAL COMPUTATION (identical copy — required by serverless constraint) ──
+// ─── MOMENTUM CONSTANTS ───────────────────────────────────────────────────────
+// Exponential decay weights for the 7-day window.
+// Day 0 (last 24h) = 1.0, each prior day decays by ~0.6×.
+const MOMENTUM_WINDOW_DAYS = 7
+const MOMENTUM_DECAY = 0.6
+const DAY_WEIGHTS = Array.from({ length: MOMENTUM_WINDOW_DAYS }, (_, i) =>
+  Math.pow(MOMENTUM_DECAY, i)
+)
+// DAY_WEIGHTS = [1.0, 0.6, 0.36, 0.216, 0.1296, 0.0778, 0.0467]
 
-interface NodeSignals {
-  nodeId: string; totalEdges: number; uniqueNeighbourTypes: number
-  uniqueSources: number; uniqueSourceTypes: number; daysActive: number
-  mentionsLast14d: number; mentionsPrior14d: number; uniqueRelationTypes: number
-  anchorNeighbourCount: number; totalNeighbourCount: number
-  velocityDirection: 'rising' | 'stable' | 'falling'; recentVelocity: number
+// Maximum possible momentum if a node had edges on every day (for normalisation)
+const MAX_MOMENTUM = DAY_WEIGHTS.reduce((s, w) => s + w, 0) // ≈ 2.44
+
+// Minimum distinct active days to even be considered a pattern
+const MIN_ACTIVE_DAYS = 2
+
+// Minimum momentum score (normalised 0–1) to proceed to Phase 2
+const MOMENTUM_THRESHOLD = 0.15
+
+// Streak bonus: consecutive recent days multiply momentum
+// 2 consecutive = 1.1×, 3 = 1.2×, 4 = 1.3×, etc.
+const STREAK_BONUS_PER_DAY = 0.1
+const MAX_STREAK_BONUS = 1.5
+
+// ─── PHASE 1: MOMENTUM COMPUTATION ───────────────────────────────────────────
+// Given all edges from the last 7 days, compute a momentum score per node.
+// Returns only nodes that pass the momentum gate.
+
+interface MomentumResult {
+  nodeId: string
+  momentumScore: number     // 0–1, normalised
+  activeDays: number        // How many of the 7 days had activity
+  consecutiveStreak: number // Longest recent streak ending at day 0 or 1
+  edgeCount7d: number       // Total edges in the 7-day window
+  dayDistribution: number[] // Edge count per day bucket (index 0 = today)
 }
 
-interface ComputedScores {
-  centralityScore: number; diversityScore: number; velocityScore: number
-  richnessScore: number; compositeScore: number; reasoningText: string
+function computeMomentum(
+  nodeEdgeMap: Map<string, Array<{ created_at: string }>>,
+  now: number
+): MomentumResult[] {
+  const oneDayMs = 86400000
+  const results: MomentumResult[] = []
+
+  for (const [nodeId, edges] of nodeEdgeMap) {
+    // Bucket edges into 7 day slots
+    const dayBuckets = new Array(MOMENTUM_WINDOW_DAYS).fill(0)
+    for (const edge of edges) {
+      const ageMs = now - new Date(edge.created_at).getTime()
+      const dayIndex = Math.floor(ageMs / oneDayMs)
+      if (dayIndex >= 0 && dayIndex < MOMENTUM_WINDOW_DAYS) {
+        dayBuckets[dayIndex]++
+      }
+    }
+
+    // Count active days
+    const activeDays = dayBuckets.filter(c => c > 0).length
+    if (activeDays < MIN_ACTIVE_DAYS) continue
+
+    // Weighted momentum: sum of (has_activity_on_day × day_weight)
+    // We use presence (0 or 1) not count, so a day with 10 edges
+    // doesn't dominate — the pattern is about recurring, not volume.
+    let rawMomentum = 0
+    for (let i = 0; i < MOMENTUM_WINDOW_DAYS; i++) {
+      if (dayBuckets[i] > 0) rawMomentum += DAY_WEIGHTS[i]
+    }
+
+    // Consecutive streak starting from today (day 0) or yesterday (day 1)
+    let streak = 0
+    const startDay = dayBuckets[0] > 0 ? 0 : (dayBuckets[1] > 0 ? 1 : -1)
+    if (startDay >= 0) {
+      for (let i = startDay; i < MOMENTUM_WINDOW_DAYS; i++) {
+        if (dayBuckets[i] > 0) streak++
+        else break
+      }
+    }
+
+    // Apply streak bonus
+    const streakMultiplier = Math.min(
+      1 + Math.max(streak - 1, 0) * STREAK_BONUS_PER_DAY,
+      MAX_STREAK_BONUS
+    )
+    const boostedMomentum = rawMomentum * streakMultiplier
+
+    // Normalise to 0–1
+    const momentumScore = Math.min(boostedMomentum / (MAX_MOMENTUM * MAX_STREAK_BONUS), 1.0)
+
+    if (momentumScore >= MOMENTUM_THRESHOLD) {
+      results.push({
+        nodeId,
+        momentumScore,
+        activeDays,
+        consecutiveStreak: streak,
+        edgeCount7d: edges.length,
+        dayDistribution: dayBuckets,
+      })
+    }
+  }
+
+  // Sort by momentum descending
+  results.sort((a, b) => b.momentumScore - a.momentumScore)
+  return results
 }
 
-function computeScores(signals: NodeSignals, profile: ScoringProfile): ComputedScores {
-  const degreeScore     = Math.min(signals.totalEdges / 50, 1.0)
-  const diversityFactor = Math.min(signals.uniqueNeighbourTypes / 8, 1.0)
-  const centralityScore = (degreeScore * 0.6) + (diversityFactor * 0.4)
+// ─── PHASE 2: FULL SIGNAL SCORING (centrality, diversity, richness) ──────────
+// Only runs for momentum-qualified nodes. Computed from data already fetched.
 
-  const sourceCountScore = Math.min(signals.uniqueSources / 8, 1.0)
-  const typeCountScore   = Math.min(signals.uniqueSourceTypes / 3, 1.0)
-  const diversityScore   = (sourceCountScore * 0.65) + (typeCountScore * 0.35)
+interface QualifiedNodeSignals {
+  nodeId: string
+  momentum: MomentumResult
+  totalEdges: number
+  uniqueNeighbourTypes: number
+  uniqueSources: number
+  uniqueSourceTypes: number
+  uniqueRelationTypes: number
+  anchorNeighbourCount: number
+  totalNeighbourCount: number
+  daysActive: number
+}
 
-  const sustainedScore = Math.min(signals.daysActive / 30, 1.0)
-  const recentRatio    = signals.mentionsLast14d / Math.max(signals.mentionsPrior14d, 1)
-  const acceleration   = Math.min(recentRatio / 3.0, 1.0)
-  const velocityScore  = (sustainedScore * 0.45) + (acceleration * 0.55)
+interface ScoredCandidate {
+  signals: QualifiedNodeSignals
+  centralityScore: number
+  diversityScore: number
+  richnessScore: number
+  compositeScore: number
+  reasoningText: string
+}
 
-  const richnessScore = Math.min(signals.uniqueRelationTypes / 6, 1.0)
-
+function scoreQualifiedNodes(
+  qualifiedSignals: QualifiedNodeSignals[],
+  profile: ScoringProfile
+): ScoredCandidate[] {
   const w = SIGNAL_WEIGHTS[profile]
-  let composite = (centralityScore * w.centrality) + (diversityScore * w.diversity) +
-    (velocityScore * w.velocity) + (richnessScore * w.richness)
 
-  const overlapRatio = signals.anchorNeighbourCount / Math.max(signals.totalNeighbourCount, 1)
-  if (overlapRatio > 0.70) composite *= 0.75
+  return qualifiedSignals.map(signals => {
+    // Centrality: structural importance
+    const degreeScore     = Math.min(signals.totalEdges / 50, 1.0)
+    const diversityFactor = Math.min(signals.uniqueNeighbourTypes / 8, 1.0)
+    const centralityScore = (degreeScore * 0.6) + (diversityFactor * 0.4)
 
-  composite = Math.min(Math.max(composite, 0), 1.0)
+    // Diversity: cross-source coverage
+    const sourceCountScore = Math.min(signals.uniqueSources / 8, 1.0)
+    const typeCountScore   = Math.min(signals.uniqueSourceTypes / 3, 1.0)
+    const diversityScore   = (sourceCountScore * 0.65) + (typeCountScore * 0.35)
 
-  const parts: string[] = []
-  if (signals.uniqueSources >= 5)       parts.push(`Appeared across ${signals.uniqueSources} sources`)
-  else if (signals.uniqueSources >= 2)  parts.push(`Referenced in ${signals.uniqueSources} different sources`)
-  else                                  parts.push(`Referenced in ${signals.uniqueSources} source`)
-  if (signals.uniqueSourceTypes >= 2)   parts.push(`spanning ${signals.uniqueSourceTypes} content types`)
-  if (signals.daysActive >= 14)         parts.push(`over ${signals.daysActive} days`)
-  if (signals.velocityDirection === 'rising')  parts.push('with activity increasing recently')
-  else if (signals.velocityDirection === 'falling') parts.push('though activity has slowed recently')
-  if (signals.uniqueRelationTypes >= 4) parts.push(`participates in ${signals.uniqueRelationTypes} relationship types`)
-  if (signals.anchorNeighbourCount >= 2) parts.push(`connects to ${signals.anchorNeighbourCount} of your existing anchors`)
+    // Richness: relationship type variety
+    const richnessScore = Math.min(signals.uniqueRelationTypes / 6, 1.0)
 
-  return {
-    centralityScore, diversityScore, velocityScore, richnessScore,
-    compositeScore: composite, reasoningText: parts.join(', ') + '.',
-  }
-}
+    // Composite: momentum is the gatekeeper, these three determine ranking
+    let composite = (centralityScore * w.centrality) +
+      (diversityScore * w.diversity) +
+      (richnessScore * w.richness)
 
-// ─── BATCH SIGNAL FETCH (same logic as score-post-extraction, accepts any nodeIds) ──
+    // Overlap penalty: avoid clustering anchors together
+    const overlapRatio = signals.anchorNeighbourCount / Math.max(signals.totalNeighbourCount, 1)
+    if (overlapRatio > 0.70) composite *= 0.75
 
-async function fetchNodeSignalsBatch(
-  supabase: ReturnType<typeof getSupabase>,
-  userId: string,
-  nodeIds: string[]
-): Promise<Map<string, NodeSignals>> {
-  const result = new Map<string, NodeSignals>()
-  if (nodeIds.length === 0) return result
+    // Momentum amplifier: scale composite by momentum (0.5–1.0 range)
+    // so momentum still influences ranking among qualified nodes
+    const momentumBoost = 0.5 + (signals.momentum.momentumScore * 0.5)
+    composite *= momentumBoost
 
-  for (const id of nodeIds) {
-    result.set(id, {
-      nodeId: id, totalEdges: 0, uniqueNeighbourTypes: 0,
-      uniqueSources: 0, uniqueSourceTypes: 0, daysActive: 0,
-      mentionsLast14d: 0, mentionsPrior14d: 0, uniqueRelationTypes: 0,
-      anchorNeighbourCount: 0, totalNeighbourCount: 0,
-      velocityDirection: 'stable', recentVelocity: 1,
-    })
-  }
+    composite = Math.min(Math.max(composite, 0), 1.0)
 
-  const now = Date.now()
-  const fourteenDaysMs = 14 * 86400000
+    // Reasoning text
+    const parts: string[] = []
+    const m = signals.momentum
+    if (m.consecutiveStreak >= 3)
+      parts.push(`Active ${m.consecutiveStreak} days in a row`)
+    else if (m.activeDays >= 3)
+      parts.push(`Appeared on ${m.activeDays} of the last 7 days`)
+    else
+      parts.push(`Appeared on ${m.activeDays} of the last 7 days`)
 
-  const [outEdgesRes, inEdgesRes, nodesRes] = await Promise.all([
-    supabase.from('knowledge_edges').select('source_node_id, target_node_id, relation_type, created_at')
-      .in('source_node_id', nodeIds).eq('user_id', userId),
-    supabase.from('knowledge_edges').select('source_node_id, target_node_id, relation_type, created_at')
-      .in('target_node_id', nodeIds).eq('user_id', userId),
-    supabase.from('knowledge_nodes').select('id, source_id, source_type, entity_type, is_anchor, created_at')
-      .in('id', nodeIds).eq('user_id', userId),
-  ])
+    if (signals.uniqueSources >= 5)
+      parts.push(`across ${signals.uniqueSources} sources`)
+    else if (signals.uniqueSources >= 2)
+      parts.push(`in ${signals.uniqueSources} different sources`)
 
-  const outEdges = outEdgesRes.data ?? []
-  const inEdges  = inEdgesRes.data ?? []
-  const nodes    = nodesRes.data ?? []
+    if (signals.uniqueSourceTypes >= 2)
+      parts.push(`spanning ${signals.uniqueSourceTypes} content types`)
+    if (signals.uniqueRelationTypes >= 4)
+      parts.push(`with ${signals.uniqueRelationTypes} relationship types`)
+    if (signals.anchorNeighbourCount >= 2)
+      parts.push(`connects to ${signals.anchorNeighbourCount} existing anchors`)
+    if (m.consecutiveStreak >= 2 && m.dayDistribution[0] > 0)
+      parts.push('and still active today')
 
-  const neighbourIds = new Set<string>()
-  for (const e of [...outEdges, ...inEdges]) {
-    if (nodeIds.includes(e.source_node_id)) neighbourIds.add(e.target_node_id)
-    if (nodeIds.includes(e.target_node_id)) neighbourIds.add(e.source_node_id)
-  }
-
-  const nbList = Array.from(neighbourIds)
-  const { data: nbNodes } = nbList.length > 0
-    ? await supabase.from('knowledge_nodes').select('id, entity_type, is_anchor, source_id, source_type, created_at')
-        .in('id', nbList).eq('user_id', userId)
-    : { data: [] }
-
-  const neighbourMap = new Map((nbNodes ?? []).map(n => [n.id as string, n]))
-  const nodeMap      = new Map(nodes.map(n => [n.id as string, n]))
-
-  for (const nodeId of nodeIds) {
-    const signals   = result.get(nodeId)!
-    const nodeRow   = nodeMap.get(nodeId)
-    const myOut     = outEdges.filter(e => e.source_node_id === nodeId)
-    const myIn      = inEdges.filter(e => e.target_node_id === nodeId)
-    const myAll     = [...myOut, ...myIn]
-
-    signals.totalEdges = myAll.length
-    const relTypes = new Set(myAll.map(e => e.relation_type).filter(Boolean))
-    signals.uniqueRelationTypes = relTypes.size
-
-    const nbTypeSet = new Set<string>()
-    let anchorNb = 0, totalNb = 0
-    for (const e of myOut) {
-      const nb = neighbourMap.get(e.target_node_id)
-      if (nb) { nbTypeSet.add(nb.entity_type as string); totalNb++; if (nb.is_anchor) anchorNb++ }
+    return {
+      signals,
+      centralityScore,
+      diversityScore,
+      richnessScore,
+      compositeScore: composite,
+      reasoningText: parts.join(', ') + '.',
     }
-    for (const e of myIn) {
-      const nb = neighbourMap.get(e.source_node_id)
-      if (nb) { nbTypeSet.add(nb.entity_type as string); totalNb++; if (nb.is_anchor) anchorNb++ }
-    }
-    signals.uniqueNeighbourTypes = nbTypeSet.size
-    signals.anchorNeighbourCount = anchorNb
-    signals.totalNeighbourCount  = totalNb
-
-    const srcIdSet = new Set<string>()
-    const srcTypeSet = new Set<string>()
-    if (nodeRow?.source_id)   srcIdSet.add(nodeRow.source_id as string)
-    if (nodeRow?.source_type) srcTypeSet.add(nodeRow.source_type as string)
-    for (const e of myAll) {
-      const nbId = nodeIds.includes(e.source_node_id) ? e.target_node_id : e.source_node_id
-      const nb = neighbourMap.get(nbId)
-      if (nb?.source_id)   srcIdSet.add(nb.source_id as string)
-      if (nb?.source_type) srcTypeSet.add(nb.source_type as string)
-    }
-    signals.uniqueSources     = srcIdSet.size
-    signals.uniqueSourceTypes = srcTypeSet.size
-
-    if (nodeRow?.created_at) {
-      signals.daysActive = Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000)
-    }
-    let last14 = 0, prior14 = 0
-    for (const e of myAll) {
-      const t = new Date(e.created_at as string).getTime()
-      if (t > now - fourteenDaysMs) last14++
-      else if (t > now - 2 * fourteenDaysMs) prior14++
-    }
-    signals.mentionsLast14d  = last14
-    signals.mentionsPrior14d = prior14
-    const ratio = last14 / Math.max(prior14, 1)
-    signals.recentVelocity   = ratio
-    signals.velocityDirection = ratio > 1.3 ? 'rising' : ratio < 0.7 ? 'falling' : 'stable'
-  }
-
-  return result
+  })
 }
 
 // ─── LIFECYCLE TRANSITIONS ─────────────────────────────────────────────────────
@@ -229,15 +264,17 @@ async function runLifecycleTransitions(
     .eq('status', 'suggested')
     .lt('suggested_at', autoDismissCutoff)
 
-  for (const row of stale ?? []) {
-    const resurface = new Date(now.getTime() + (config.resurfaceCooldownDays as number) * 86400000).toISOString()
-    await supabase.from('anchor_candidates').update({
-      status:          'dismissed',
-      reviewed_at:     now.toISOString(),
-      resurface_after: resurface,
-      dismiss_count:   (row.dismiss_count as number ?? 0) + 1,
-    }).eq('id', row.id as string)
-    autoDismissed++
+  if (stale && stale.length > 0) {
+    for (const row of stale) {
+      const resurface = new Date(now.getTime() + (config.resurfaceCooldownDays as number) * 86400000).toISOString()
+      await supabase.from('anchor_candidates').update({
+        status:          'dismissed',
+        reviewed_at:     now.toISOString(),
+        resurface_after: resurface,
+        dismiss_count:   (row.dismiss_count as number ?? 0) + 1,
+      }).eq('id', row.id as string)
+      autoDismissed++
+    }
   }
 
   // 2. Mark dormant: 'confirmed' anchors with no new edges in dormantAfterDays
@@ -250,7 +287,6 @@ async function runLifecycleTransitions(
 
   for (const row of confirmedCandidates ?? []) {
     if (!row.node_id) continue
-    // Check most recent edge on this node
     const { data: recentEdge } = await supabase
       .from('knowledge_edges')
       .select('created_at')
@@ -263,7 +299,7 @@ async function runLifecycleTransitions(
     const lastActivity = recentEdge?.created_at as string | undefined
     if (!lastActivity || lastActivity < dormantCutoff) {
       await supabase.from('anchor_candidates').update({
-        status:       'dormant',
+        status:        'dormant',
         dormant_since: now.toISOString(),
       }).eq('id', row.id as string)
       markedDormant++
@@ -290,7 +326,7 @@ async function runLifecycleTransitions(
 
     if (recentEdge) {
       await supabase.from('anchor_candidates').update({
-        status:       'confirmed',
+        status:        'confirmed',
         dormant_since: null,
       }).eq('id', row.id as string)
     }
@@ -305,7 +341,6 @@ async function runLifecycleTransitions(
     .lt('resurface_after', now.toISOString())
 
   for (const row of readyToResurface ?? []) {
-    // Only re-surface if score is still above threshold
     if ((row.composite_score as number) >= (config.suggestionThreshold as number)) {
       await supabase.from('anchor_candidates').update({
         status:          'suggested',
@@ -314,7 +349,6 @@ async function runLifecycleTransitions(
       }).eq('id', row.id as string)
       resurfaced++
     } else {
-      // Score dropped below threshold — move back to pending for re-scoring
       await supabase.from('anchor_candidates').update({
         status: 'pending',
       }).eq('id', row.id as string)
@@ -338,7 +372,6 @@ async function runLifecycleTransitions(
       .maybeSingle()
 
     if (!existingCandidate) {
-      // Create a confirmed candidate row for this orphaned anchor
       const nowStr = now.toISOString()
       await supabase.from('anchor_candidates').insert({
         user_id: userId, node_id: node.id as string,
@@ -355,7 +388,7 @@ async function runLifecycleTransitions(
     }
   }
 
-  // 6. Auto-archive dormant anchors (if user has enabled this opt-in feature)
+  // 6. Auto-archive dormant anchors (opt-in)
   if (config.autoArchiveDormantAfterDays !== null) {
     const archiveCutoff = new Date(
       now.getTime() - (config.autoArchiveDormantAfterDays as number) * 86400000
@@ -394,27 +427,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const startTime = Date.now()
   const sb = getSupabase()
-  const BATCH_SIZE = 100
+  const now = Date.now()
+  const sevenDaysAgo = new Date(now - MOMENTUM_WINDOW_DAYS * 86400000).toISOString()
 
   const results: Record<string, {
-    scored: number; surfaced: number; lifecycle: { autoDismissed: number; markedDormant: number; resurfaced: number; healed: number }
+    momentumCandidates: number; qualifiedForPhase2: number; scored: number; surfaced: number
+    lifecycle: { autoDismissed: number; markedDormant: number; resurfaced: number; healed: number }
   }> = {}
 
   try {
-    // Fetch all distinct user IDs with knowledge_nodes
-    const { data: userRows } = await sb
-      .from('knowledge_nodes')
-      .select('user_id')
-      .neq('user_id', null)
+    // ── Query 1: All edges created in the last 7 days ────────────────────────
+    // This is the ONLY large query. Everything else is derived from this.
+    const { data: recentEdges, error: edgesError } = await sb
+      .from('knowledge_edges')
+      .select('source_node_id, target_node_id, relation_type, created_at, user_id')
+      .gte('created_at', sevenDaysAgo)
 
-    if (!userRows || userRows.length === 0) {
-      return res.status(200).json({ success: true, users: 0, duration_ms: Date.now() - startTime })
+    if (edgesError) throw new Error(`Failed to fetch recent edges: ${edgesError.message}`)
+    if (!recentEdges || recentEdges.length === 0) {
+      return res.status(200).json({
+        success: true, users: 0, message: 'No edge activity in last 7 days',
+        duration_ms: Date.now() - startTime,
+      })
     }
 
-    const userIds = [...new Set((userRows as { user_id: string }[]).map(r => r.user_id))]
+    // Group edges by user_id
+    const edgesByUser = new Map<string, typeof recentEdges>()
+    for (const edge of recentEdges) {
+      const uid = edge.user_id as string
+      if (!edgesByUser.has(uid)) edgesByUser.set(uid, [])
+      edgesByUser.get(uid)!.push(edge)
+    }
 
-    for (const userId of userIds) {
-      // 1. Load user config
+    for (const [userId, userEdges] of edgesByUser) {
+      // ── Phase 1: Compute momentum per node from edge timestamps ──────────
+      // Build map: nodeId → edges touching that node
+      const nodeEdgeMap = new Map<string, Array<{ created_at: string }>>()
+      for (const edge of userEdges) {
+        const src = edge.source_node_id as string
+        const tgt = edge.target_node_id as string
+        if (!nodeEdgeMap.has(src)) nodeEdgeMap.set(src, [])
+        if (!nodeEdgeMap.has(tgt)) nodeEdgeMap.set(tgt, [])
+        nodeEdgeMap.get(src)!.push({ created_at: edge.created_at as string })
+        nodeEdgeMap.get(tgt)!.push({ created_at: edge.created_at as string })
+      }
+
+      const momentumResults = computeMomentum(nodeEdgeMap, now)
+
+      if (momentumResults.length === 0) {
+        results[userId] = {
+          momentumCandidates: nodeEdgeMap.size, qualifiedForPhase2: 0,
+          scored: 0, surfaced: 0,
+          lifecycle: { autoDismissed: 0, markedDormant: 0, resurfaced: 0, healed: 0 },
+        }
+        continue
+      }
+
+      // Load user config
       const { data: profileRow } = await sb
         .from('user_profiles')
         .select('processing_preferences')
@@ -425,103 +494,222 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         (profileRow?.processing_preferences ?? null) as Record<string, unknown> | null
       )
 
-      // 2. Lifecycle transitions first
+      // Run lifecycle transitions
       const lifecycle = await runLifecycleTransitions(sb, userId, config)
 
-      // 3. Fetch all non-anchor nodes for this user (batched)
-      let offset = 0
-      let scored = 0, surfaced = 0
+      // ── Phase 2: Full signal scoring for momentum-qualified nodes ────────
+      const qualifiedIds = momentumResults.map(m => m.nodeId)
 
-      while (true) {
-        const { data: batch } = await sb
-          .from('knowledge_nodes')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('is_anchor', false)
-          .order('created_at', { ascending: false })
-          .range(offset, offset + BATCH_SIZE - 1)
+      // Query 2: Node metadata for qualified nodes only
+      const [nodesRes, outEdgesRes, inEdgesRes] = await Promise.all([
+        sb.from('knowledge_nodes')
+          .select('id, source_id, source_type, entity_type, is_anchor, created_at')
+          .in('id', qualifiedIds)
+          .eq('user_id', userId),
+        sb.from('knowledge_edges')
+          .select('source_node_id, target_node_id, relation_type')
+          .in('source_node_id', qualifiedIds)
+          .eq('user_id', userId),
+        sb.from('knowledge_edges')
+          .select('source_node_id, target_node_id, relation_type')
+          .in('target_node_id', qualifiedIds)
+          .eq('user_id', userId),
+      ])
 
-        if (!batch || batch.length === 0) break
+      const nodes = nodesRes.data ?? []
+      const outEdges = outEdgesRes.data ?? []
+      const inEdges = inEdgesRes.data ?? []
+      const nodeMap = new Map(nodes.map(n => [n.id as string, n]))
 
-        const batchIds = (batch as { id: string }[]).map(n => n.id)
-        const signalsMap = await fetchNodeSignalsBatch(sb, userId, batchIds)
+      // Filter out nodes that are already anchors
+      const nonAnchorMomentum = momentumResults.filter(m => {
+        const node = nodeMap.get(m.nodeId)
+        return node && !node.is_anchor
+      })
 
-        for (const [nodeId, signals] of signalsMap) {
-          const scores = computeScores(signals, config.scoringProfile as ScoringProfile)
-
-          // Check existing status
-          const { data: existing } = await sb
-            .from('anchor_candidates')
-            .select('id, status, dismiss_count')
-            .eq('user_id', userId)
-            .eq('node_id', nodeId)
-            .maybeSingle()
-
-          const protectedStatuses = ['confirmed', 'dismissed', 'archived', 'dormant']
-          const shouldSurface = scores.compositeScore >= (config.suggestionThreshold as number)
-          const now = new Date().toISOString()
-
-          if (existing) {
-            const updatePayload: Record<string, unknown> = {
-              composite_score: scores.compositeScore,
-              centrality_score: scores.centralityScore,
-              diversity_score: scores.diversityScore,
-              velocity_score: scores.velocityScore,
-              richness_score: scores.richnessScore,
-              mention_count: signals.mentionsLast14d + signals.mentionsPrior14d,
-              source_count: signals.uniqueSources,
-              unique_source_types: signals.uniqueSourceTypes,
-              days_active: signals.daysActive,
-              recent_velocity: signals.recentVelocity,
-              velocity_direction: signals.velocityDirection,
-              scoring_profile: config.scoringProfile,
-              reasoning_text: scores.reasoningText,
-              last_scored_at: now,
-            }
-            if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
-              updatePayload.status = 'suggested'
-              updatePayload.suggested_at = now
-              surfaced++
-            }
-            await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
-          } else {
-            const insertStatus = shouldSurface ? 'suggested' : 'pending'
-            await sb.from('anchor_candidates').insert({
-              user_id: userId, node_id: nodeId,
-              composite_score: scores.compositeScore, centrality_score: scores.centralityScore,
-              diversity_score: scores.diversityScore, velocity_score: scores.velocityScore,
-              richness_score: scores.richnessScore, behavioural_score: 0,
-              mention_count: signals.mentionsLast14d + signals.mentionsPrior14d,
-              source_count: signals.uniqueSources, unique_source_types: signals.uniqueSourceTypes,
-              days_active: signals.daysActive, recent_velocity: signals.recentVelocity,
-              velocity_direction: signals.velocityDirection, status: insertStatus,
-              scoring_profile: config.scoringProfile, reasoning_text: scores.reasoningText,
-              threshold_at_scoring: config.suggestionThreshold,
-              suggested_at: insertStatus === 'suggested' ? now : null,
-              first_scored_at: now, last_scored_at: now,
-            })
-            if (insertStatus === 'suggested') surfaced++
-          }
-          scored++
+      if (nonAnchorMomentum.length === 0) {
+        results[userId] = {
+          momentumCandidates: nodeEdgeMap.size, qualifiedForPhase2: 0,
+          scored: 0, surfaced: 0, lifecycle,
         }
-
-        offset += BATCH_SIZE
-        if (batch.length < BATCH_SIZE) break
+        continue
       }
 
-      results[userId] = { scored, surfaced, lifecycle }
-      console.log(`[score-daily] userId=${userId} scored=${scored} surfaced=${surfaced}`)
+      // Collect all neighbour IDs
+      const allEdges = [...outEdges, ...inEdges]
+      const neighbourIds = new Set<string>()
+      const qualifiedIdSet = new Set(qualifiedIds)
+      for (const e of allEdges) {
+        if (qualifiedIdSet.has(e.source_node_id as string)) neighbourIds.add(e.target_node_id as string)
+        if (qualifiedIdSet.has(e.target_node_id as string)) neighbourIds.add(e.source_node_id as string)
+      }
+      // Remove qualified nodes themselves from neighbour set
+      for (const id of qualifiedIds) neighbourIds.delete(id)
+
+      // Query 3: Neighbour metadata
+      const nbList = Array.from(neighbourIds)
+      const { data: nbNodes } = nbList.length > 0
+        ? await sb.from('knowledge_nodes')
+            .select('id, entity_type, is_anchor, source_id, source_type')
+            .in('id', nbList)
+            .eq('user_id', userId)
+        : { data: [] }
+
+      const neighbourMap = new Map((nbNodes ?? []).map(n => [n.id as string, n]))
+
+      // Build full signals per qualified node
+      const qualifiedSignals: QualifiedNodeSignals[] = []
+      for (const m of nonAnchorMomentum) {
+        const nodeRow = nodeMap.get(m.nodeId)
+        const myOut = outEdges.filter(e => e.source_node_id === m.nodeId)
+        const myIn  = inEdges.filter(e => e.target_node_id === m.nodeId)
+        const myAll = [...myOut, ...myIn]
+
+        const relTypes = new Set(myAll.map(e => e.relation_type).filter(Boolean))
+
+        const nbTypeSet = new Set<string>()
+        let anchorNb = 0, totalNb = 0
+        for (const e of myOut) {
+          const nb = neighbourMap.get(e.target_node_id as string)
+          if (nb) { nbTypeSet.add(nb.entity_type as string); totalNb++; if (nb.is_anchor) anchorNb++ }
+        }
+        for (const e of myIn) {
+          const nb = neighbourMap.get(e.source_node_id as string)
+          if (nb) { nbTypeSet.add(nb.entity_type as string); totalNb++; if (nb.is_anchor) anchorNb++ }
+        }
+
+        const srcIdSet = new Set<string>()
+        const srcTypeSet = new Set<string>()
+        if (nodeRow?.source_id) srcIdSet.add(nodeRow.source_id as string)
+        if (nodeRow?.source_type) srcTypeSet.add(nodeRow.source_type as string)
+        for (const e of myAll) {
+          const nbId = qualifiedIdSet.has(e.source_node_id as string) ? e.target_node_id : e.source_node_id
+          const nb = neighbourMap.get(nbId as string)
+          if (nb?.source_id) srcIdSet.add(nb.source_id as string)
+          if (nb?.source_type) srcTypeSet.add(nb.source_type as string)
+        }
+
+        let daysActive = 0
+        if (nodeRow?.created_at) {
+          daysActive = Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000)
+        }
+
+        qualifiedSignals.push({
+          nodeId: m.nodeId,
+          momentum: m,
+          totalEdges: myAll.length,
+          uniqueNeighbourTypes: nbTypeSet.size,
+          uniqueSources: srcIdSet.size,
+          uniqueSourceTypes: srcTypeSet.size,
+          uniqueRelationTypes: relTypes.size,
+          anchorNeighbourCount: anchorNb,
+          totalNeighbourCount: totalNb,
+          daysActive,
+        })
+      }
+
+      // Score all qualified nodes
+      const scored = scoreQualifiedNodes(qualifiedSignals, config.scoringProfile as ScoringProfile)
+
+      // ── Query 4: Batch-fetch existing candidates for all qualified nodes ──
+      const scoredNodeIds = scored.map(s => s.signals.nodeId)
+      const { data: existingCandidates } = await sb
+        .from('anchor_candidates')
+        .select('id, node_id, status, dismiss_count')
+        .eq('user_id', userId)
+        .in('node_id', scoredNodeIds)
+
+      const existingMap = new Map(
+        (existingCandidates ?? []).map(c => [c.node_id as string, c])
+      )
+
+      // ── Query 5: Bulk upsert all results ──────────────────────────────────
+      const nowStr = new Date().toISOString()
+      let surfaced = 0
+      const protectedStatuses = ['confirmed', 'dismissed', 'archived', 'dormant']
+
+      for (const candidate of scored) {
+        const nodeId = candidate.signals.nodeId
+        const existing = existingMap.get(nodeId)
+        const shouldSurface = candidate.compositeScore >= (config.suggestionThreshold as number)
+
+        if (existing) {
+          const updatePayload: Record<string, unknown> = {
+            composite_score:     candidate.compositeScore,
+            centrality_score:    candidate.centralityScore,
+            diversity_score:     candidate.diversityScore,
+            velocity_score:      candidate.signals.momentum.momentumScore,
+            richness_score:      candidate.richnessScore,
+            mention_count:       candidate.signals.momentum.edgeCount7d,
+            source_count:        candidate.signals.uniqueSources,
+            unique_source_types: candidate.signals.uniqueSourceTypes,
+            days_active:         candidate.signals.daysActive,
+            recent_velocity:     candidate.signals.momentum.momentumScore,
+            velocity_direction:  candidate.signals.momentum.consecutiveStreak >= 2 ? 'rising'
+              : candidate.signals.momentum.activeDays <= 2 ? 'stable' : 'rising',
+            scoring_profile:     config.scoringProfile,
+            reasoning_text:      candidate.reasoningText,
+            last_scored_at:      nowStr,
+            threshold_at_scoring: config.suggestionThreshold,
+          }
+
+          if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
+            updatePayload.status = 'suggested'
+            updatePayload.suggested_at = nowStr
+            surfaced++
+          }
+
+          await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
+        } else {
+          const insertStatus = shouldSurface ? 'suggested' : 'pending'
+          await sb.from('anchor_candidates').insert({
+            user_id: userId, node_id: nodeId,
+            composite_score:     candidate.compositeScore,
+            centrality_score:    candidate.centralityScore,
+            diversity_score:     candidate.diversityScore,
+            velocity_score:      candidate.signals.momentum.momentumScore,
+            richness_score:      candidate.richnessScore,
+            behavioural_score:   0,
+            mention_count:       candidate.signals.momentum.edgeCount7d,
+            source_count:        candidate.signals.uniqueSources,
+            unique_source_types: candidate.signals.uniqueSourceTypes,
+            days_active:         candidate.signals.daysActive,
+            recent_velocity:     candidate.signals.momentum.momentumScore,
+            velocity_direction:  candidate.signals.momentum.consecutiveStreak >= 2 ? 'rising' : 'stable',
+            status:              insertStatus,
+            scoring_profile:     config.scoringProfile,
+            reasoning_text:      candidate.reasoningText,
+            threshold_at_scoring: config.suggestionThreshold,
+            suggested_at:        insertStatus === 'suggested' ? nowStr : null,
+            first_scored_at:     nowStr,
+            last_scored_at:      nowStr,
+          })
+          if (insertStatus === 'suggested') surfaced++
+        }
+      }
+
+      results[userId] = {
+        momentumCandidates: nodeEdgeMap.size,
+        qualifiedForPhase2: nonAnchorMomentum.length,
+        scored: scored.length,
+        surfaced,
+        lifecycle,
+      }
+      console.log(
+        `[score-daily] userId=${userId} momentum_candidates=${nodeEdgeMap.size} ` +
+        `qualified=${nonAnchorMomentum.length} scored=${scored.length} surfaced=${surfaced}`
+      )
     }
 
-    const totalScored   = Object.values(results).reduce((s, r) => s + r.scored,   0)
+    const totalScored   = Object.values(results).reduce((s, r) => s + r.scored, 0)
     const totalSurfaced = Object.values(results).reduce((s, r) => s + r.surfaced, 0)
 
     return res.status(200).json({
-      success:      true,
-      users:        userIds.length,
+      success: true,
+      users: edgesByUser.size,
       totalScored,
       totalSurfaced,
-      duration_ms:  Date.now() - startTime,
+      duration_ms: Date.now() - startTime,
       results,
     })
   } catch (err) {
