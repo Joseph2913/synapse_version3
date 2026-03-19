@@ -324,7 +324,7 @@ async function sendEmail(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'Synapse <digest@send.connectsynapse.com>',
+      from: 'Synapse <onboarding@resend.dev>',
       to: [to],
       subject,
       html,
