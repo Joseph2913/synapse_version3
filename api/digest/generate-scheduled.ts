@@ -363,7 +363,7 @@ async function sendEmail(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'Synapse <digest@send.connectsynapse.com>',
+      from: 'Synapse <onboarding@resend.dev>',
       to: [to],
       subject,
       html,
@@ -583,7 +583,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }>).filter(c => c.channel_type === 'email' && c.is_active)
 
         for (const channel of emailChannels) {
-          const emailAddress = channel.config?.email_address || channel.config?.address
+          const emailAddress = channel.config?.email_address || channel.config?.recipient_email || channel.config?.address || channel.config?.email
           if (!emailAddress) {
             deliveryResults.push({
               channelType: 'email', success: false,
