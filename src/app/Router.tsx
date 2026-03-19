@@ -8,8 +8,11 @@ import { AutomateView } from '../views/AutomateView'
 import { OrientView } from '../views/OrientView'
 import { PipelineView } from '../views/PipelineView'
 import { AnchorsView } from '../views/AnchorsView'
+import OnboardingDemoPage from '../views/OnboardingDemoPage'
 
 const router = createBrowserRouter([
+  // Standalone onboarding demo — no auth, no providers
+  { path: '/onboarding', element: <OnboardingDemoPage /> },
   {
     element: <AppShell />,
     children: [

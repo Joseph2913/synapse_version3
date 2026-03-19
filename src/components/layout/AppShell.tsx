@@ -5,6 +5,8 @@ import { TopBar } from './TopBar'
 import { RightPanel } from './RightPanel'
 import { CommandPalette } from '../modals/CommandPalette'
 import { SettingsModal } from '../modals/SettingsModal'
+import { OnboardingOverlay, useOnboarding } from '../onboarding/OnboardingOverlay'
+import { DemoContent } from '../onboarding/DemoContent'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchSuggestedCount } from '../../services/anchorCandidates'
@@ -16,6 +18,12 @@ export function AppShell() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [suggestedAnchorCount, setSuggestedAnchorCount] = useState(0)
+  const {
+    active: onboardingActive,
+    complete: completeOnboarding,
+    step: onboardingStep,
+    setStep: setOnboardingStep,
+  } = useOnboarding()
 
   // Fetch anchor suggestion count (non-blocking — table may not exist yet)
   useEffect(() => {
@@ -41,7 +49,7 @@ export function AppShell() {
 
   const isAskView = location.pathname === '/ask'
   // Ask view has its own internal right panel, so skip the AppShell one
-  const showRightPanel = !isAskView && rightPanelContent !== null
+  const showRightPanel = !onboardingActive && !isAskView && rightPanelContent !== null
 
   // Global keyboard listener
   useEffect(() => {
@@ -73,8 +81,21 @@ export function AppShell() {
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           />
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden" style={{ position: 'relative' }}>
             <Outlet />
+            {onboardingActive && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 50,
+                  background: 'var(--color-bg-content)',
+                  overflow: 'hidden',
+                }}
+              >
+                <DemoContent step={onboardingStep} />
+              </div>
+            )}
           </div>
         </main>
 
@@ -90,6 +111,14 @@ export function AppShell() {
 
       {settingsOpen && (
         <SettingsModal onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {onboardingActive && (
+        <OnboardingOverlay
+          step={onboardingStep}
+          setStep={setOnboardingStep}
+          onComplete={completeOnboarding}
+        />
       )}
     </>
   )
