@@ -1,5 +1,7 @@
 # PRD-15C: RAG Pipeline — Hybrid Search Integration
 
+> **CORRECTION (March 17, 2026):** This PRD states the chunks table is `knowledge_source_chunks`. The table has been renamed to `source_chunks` to match the application code. The RPC functions `match_source_chunks` and `match_chunks` have been updated to reference the new name. See `supabase/migrations/20260317_rename_source_chunks_fix_rpcs.sql` for the migration.
+
 ## Overview
 
 Wire semantic (vector) search into the Synapse RAG pipeline so that every query benefits from both keyword matching AND meaning-based similarity search. This is the final PRD in the 15A→15B→15C sequence. After this PRD, the Ask view's conversational interface will return dramatically better results because it can find conceptually related content, not just exact keyword matches.

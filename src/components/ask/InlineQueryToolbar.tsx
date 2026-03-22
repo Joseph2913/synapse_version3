@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronDown, Zap, Layers, Clock, Rabbit, Brain } from 'lucide-react'
+import { ChevronDown, Zap, Layers, Clock, Rabbit, Brain, Sparkles } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { QUERY_MINDSETS } from '../../config/queryMindsets'
 import { MODEL_TIERS } from '../../config/queryMindsets'
@@ -129,17 +129,19 @@ export function InlineQueryToolbar({
         type="button"
         data-ask-dd
         className="font-body font-semibold cursor-pointer"
-        style={pill(config.mindset !== 'analytical', 'mindset')}
+        style={pill(config.mindset !== 'auto', 'mindset')}
         onClick={e => openPanel('mindset', e)}
       >
         {activeMindset && (
-          <span
-            style={{
-              width: 6, height: 6, borderRadius: '50%',
-              background: activeMindset.color,
-              display: 'inline-block', flexShrink: 0,
-            }}
-          />
+          activeMindset.id === 'auto'
+            ? <Sparkles size={11} style={{ flexShrink: 0 }} />
+            : <span
+                style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: activeMindset.color,
+                  display: 'inline-block', flexShrink: 0,
+                }}
+              />
         )}
         {activeMindset?.label ?? 'Mindset'}
         <ChevronDown size={10} style={{ opacity: 0.5 }} />
@@ -195,13 +197,16 @@ export function InlineQueryToolbar({
               style={row(config.mindset === m.id, m.color)}
               onClick={() => { onSetMindset(m.id as QueryMindsetId); setOpenDropdown(null) }}
             >
-              <span
-                style={{
-                  width: 7, height: 7, borderRadius: '50%',
-                  background: m.color,
-                  display: 'inline-block', flexShrink: 0, marginTop: 3,
-                }}
-              />
+              {m.id === 'auto'
+                ? <Sparkles size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+                : <span
+                    style={{
+                      width: 7, height: 7, borderRadius: '50%',
+                      background: m.color,
+                      display: 'inline-block', flexShrink: 0, marginTop: 3,
+                    }}
+                  />
+              }
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600 }}>{m.label}</div>
                 <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--color-text-secondary)', marginTop: 1 }}>

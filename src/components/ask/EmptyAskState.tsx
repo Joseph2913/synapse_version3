@@ -4,9 +4,13 @@ import { useAuth } from '../../hooks/useAuth'
 import { fetchTopAnchor } from '../../services/supabase'
 import { QUERY_MINDSETS } from '../../config/queryMindsets'
 
+import type { ChatSession } from '../../services/chatHistory'
+
 interface EmptyAskStateProps {
   onSendSuggestion: (text: string) => void
   isEmpty?: boolean
+  sessions?: ChatSession[]
+  onLoadSession?: (sessionId: string) => void
 }
 
 const STATIC_SUGGESTIONS = [
@@ -14,7 +18,18 @@ const STATIC_SUGGESTIONS = [
   'What are the key risks across my active projects?',
 ]
 
-export function EmptyAskState({ onSendSuggestion, isEmpty = false }: EmptyAskStateProps) {
+function formatRelativeTime(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 30) return `${days}d ago`
+  return `${Math.floor(days / 30)}mo ago`
+}
+
+export function EmptyAskState({ onSendSuggestion, isEmpty = false, sessions = [], onLoadSession }: EmptyAskStateProps) {
   const { user } = useAuth()
   const [topAnchorLabel, setTopAnchorLabel] = useState<string | null>(null)
 
@@ -142,6 +157,62 @@ export function EmptyAskState({ onSendSuggestion, isEmpty = false }: EmptyAskSta
           Customise via the toolbar below ↓
         </p>
       </div>
+
+      {/* Recent Conversations (PRD-D §2.8) */}
+      {sessions.length > 0 && onLoadSession && (
+        <div style={{ marginTop: 32, width: '100%', maxWidth: 520 }}>
+          <span
+            className="font-display font-bold uppercase"
+            style={{
+              fontSize: 10,
+              color: 'var(--color-text-secondary)',
+              letterSpacing: '0.08em',
+              display: 'block',
+              marginBottom: 10,
+            }}
+          >
+            Recent Conversations
+          </span>
+          <div className="flex flex-col" style={{ gap: 6 }}>
+            {sessions.map(session => (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => onLoadSession(session.id)}
+                className="w-full font-body cursor-pointer text-left"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: 'var(--color-text-body)',
+                  background: 'var(--color-bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 10,
+                  padding: '10px 16px',
+                  transition: 'border-color 0.15s ease',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.borderColor = 'var(--border-default)'
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.borderColor = 'var(--border-subtle)'
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span style={{ fontWeight: 600 }}>
+                    {session.title ?? 'Untitled conversation'}
+                  </span>
+                  <span style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}>
+                    {formatRelativeTime(session.updated_at)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                  {session.message_count} messages
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

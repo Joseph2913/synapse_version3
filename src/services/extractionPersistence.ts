@@ -216,9 +216,12 @@ export async function saveChunks(
     return row
   })
 
-  const { error } = await supabase.from('source_chunks').insert(toInsert)
+  const { error, data } = await supabase.from('source_chunks').insert(toInsert).select('id')
 
   if (error) throw new PersistenceError('Failed to save chunks', error)
+  if (!data || data.length === 0) {
+    console.error('[saveChunks] Insert returned 0 rows — possible table name mismatch or RLS rejection')
+  }
 }
 
 // --- Save Extraction Session ---

@@ -1,5 +1,7 @@
 # PRD-15B: Re-Embedding Pipeline + Persistence Fix
 
+> **CORRECTION (March 17, 2026):** This PRD references the table name `knowledge_source_chunks`. The table has been renamed to `source_chunks` to match the application code. The re-embedding script (`scripts/reembed-all.mjs`) has been updated accordingly. See `supabase/migrations/20260317_rename_source_chunks_fix_rpcs.sql` for the migration.
+
 ## Overview
 
 After the schema migration in PRD-15A, all embedding columns are NULL. This PRD builds a re-embedding pipeline that generates fresh 3072-dimensional embeddings for all existing source chunks and knowledge nodes using `gemini-embedding-001`, and fixes the application code so future ingestions store embeddings correctly.

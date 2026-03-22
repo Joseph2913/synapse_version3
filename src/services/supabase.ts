@@ -938,18 +938,25 @@ export async function traverseGraphFromNodes(
   const allNodeIds = Array.from(visitedNodeIds)
   if (allNodeIds.length === 0) return { nodes: [], edges: allEdges }
 
-  const { data: nodes, error: nodeError } = await supabase
-    .from('knowledge_nodes')
-    .select('id, user_id, label, entity_type, description, source, source_type, source_url, source_id, confidence, is_anchor, tags, user_tags, quote, created_at')
-    .in('id', allNodeIds)
+  // Batch node fetches to avoid Supabase URL length limits with large .in() arrays
+  const BATCH_SIZE = 50
+  const allNodes: KnowledgeNode[] = []
+  for (let i = 0; i < allNodeIds.length; i += BATCH_SIZE) {
+    const batch = allNodeIds.slice(i, i + BATCH_SIZE)
+    const { data: nodes, error: nodeError } = await supabase
+      .from('knowledge_nodes')
+      .select('id, user_id, label, entity_type, description, source, source_type, source_url, source_id, confidence, is_anchor, tags, user_tags, quote, created_at')
+      .in('id', batch)
 
-  if (nodeError) {
-    console.warn('[supabase] Node fetch in traversal failed:', nodeError.message)
-    return { nodes: [], edges: allEdges }
+    if (nodeError) {
+      console.warn('[supabase] Node fetch in traversal failed (batch):', nodeError.message)
+      continue
+    }
+    allNodes.push(...((nodes ?? []) as KnowledgeNode[]))
   }
 
   return {
-    nodes: (nodes ?? []) as KnowledgeNode[],
+    nodes: allNodes,
     edges: allEdges,
   }
 }
@@ -2117,4 +2124,74 @@ export async function fetchNodeWithEmbedding(
   }
 
   return data as (KnowledgeNode & { embedding: number[] | null }) | null
+}
+
+/**
+ * Fetch a node's stored embedding vector by ID.
+ * Used by "Find Similar" to search with the entity's own vector
+ * rather than generating a new embedding from the question text.
+ */
+export async function fetchNodeEmbedding(
+  nodeId: string
+): Promise<number[] | null> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('embedding')
+    .eq('id', nodeId)
+    .maybeSingle()
+
+  if (error) {
+    console.warn('[supabase] fetchNodeEmbedding failed:', error.message)
+    return null
+  }
+
+  return (data as { embedding: number[] | null } | null)?.embedding ?? null
+}
+
+/**
+ * Fetch all entities extracted from a specific source, returning full node records.
+ * Alias for fetchEntitiesForSource — matches PRD-A naming convention.
+ */
+export async function fetchNodesForSource(
+  sourceId: string,
+  userId: string,
+  limit: number = 50
+): Promise<KnowledgeNode[]> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('source_id', sourceId)
+    .limit(limit)
+
+  if (error) {
+    console.warn('[supabase] fetchNodesForSource failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeNode[]
+}
+
+/**
+ * Fetch all edges directly connected to a specific node.
+ * Returns edges where the node is either source or target.
+ */
+export async function fetchDirectEdges(
+  nodeId: string,
+  userId: string,
+  limit: number = 20
+): Promise<KnowledgeEdge[]> {
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('*')
+    .eq('user_id', userId)
+    .or(`source_node_id.eq.${nodeId},target_node_id.eq.${nodeId}`)
+    .limit(limit)
+
+  if (error) {
+    console.warn('[supabase] fetchDirectEdges failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeEdge[]
 }

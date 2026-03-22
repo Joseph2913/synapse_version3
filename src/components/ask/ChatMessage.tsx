@@ -6,6 +6,9 @@ import type { ChatMessage as ChatMessageType, InlineCitation } from '../../types
 interface ChatMessageProps {
   message: ChatMessageType
   onCitationClick?: (index: number) => void
+  onFollowUpClick?: (question: string) => void
+  onCitationHoverChange?: (index: number | null) => void
+  isLatest?: boolean
 }
 
 interface HoveredCitation {
@@ -86,7 +89,7 @@ function parseContent(
   })
 }
 
-export function ChatMessage({ message, onCitationClick }: ChatMessageProps) {
+export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitationHoverChange, isLatest }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false)
   const [hoveredCitation, setHoveredCitation] = useState<HoveredCitation | null>(null)
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -106,11 +109,13 @@ export function ChatMessage({ message, onCitationClick }: ChatMessageProps) {
     tooltipTimerRef.current = setTimeout(() => {
       setHoveredCitation({ citation, rect })
     }, 200)
+    onCitationHoverChange?.(citation.index)
   }
 
   const handleCitationLeave = () => {
     if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
     setHoveredCitation(null)
+    onCitationHoverChange?.(null)
   }
 
   if (isSystem) {
@@ -227,6 +232,39 @@ export function ChatMessage({ message, onCitationClick }: ChatMessageProps) {
             </button>
           )}
         </div>
+
+        {/* PRD-C: Follow-up suggestion pill — only on latest assistant message */}
+        {!isUser && isLatest && message.followUp && (
+          <button
+            type="button"
+            onClick={() => onFollowUpClick?.(message.followUp!.question)}
+            className="font-body font-semibold cursor-pointer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              marginTop: 10,
+              padding: '7px 14px',
+              borderRadius: 20,
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'var(--color-accent-500)',
+              background: 'var(--color-accent-50)',
+              border: '1px solid rgba(214,58,0,0.15)',
+              transition: 'background 0.15s ease, border-color 0.15s ease',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(214,58,0,0.1)'
+              e.currentTarget.style.borderColor = 'rgba(214,58,0,0.25)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'var(--color-accent-50)'
+              e.currentTarget.style.borderColor = 'rgba(214,58,0,0.15)'
+            }}
+          >
+            {message.followUp.label} →
+          </button>
+        )}
       </div>
 
       {/* Citation tooltip portal-like overlay */}

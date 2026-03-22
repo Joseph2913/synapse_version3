@@ -19,6 +19,7 @@ import { DEFAULT_QUERY_CONFIG } from '../types/rag'
 import type { ChatEntryContext } from '../types/chatRouting'
 import type { KnowledgeNode, KnowledgeEdge } from '../types/database'
 import { QUERY_MINDSETS, MODEL_TIERS } from '../config/queryMindsets'
+import { getResponseFormatForEntryPoint, getThinkingBudgetForEntryPoint } from '../config/responseFormats'
 
 export { buildRAGResponseContext }
 
@@ -156,15 +157,16 @@ async function generateFromContext(
   conversationHistory: { role: string; content: string }[],
   ctx: ChatEntryContext,
   signal?: AbortSignal
-): Promise<{ answer: string; citations: import('../types/rag').InlineCitation[] }> {
+): Promise<import('../types/rag').RAGGenerationResult> {
   const config = resolveConfig(ctx)
   const mindset = QUERY_MINDSETS.find(m => m.id === config.mindset)
   const modelTier = MODEL_TIERS.find(t => t.id === config.modelTier)
   const temperature = mindset?.temperatureOverride ?? modelTier?.generationConfig.temperature
   const maxOutputTokens = modelTier?.generationConfig.maxOutputTokens
 
-  // Compose the directive + mindset prompt
-  const directiveAndMindset = [ctx.systemDirective, mindset?.promptAddition].filter(Boolean).join('\n\n')
+  // PRD-C: Entry-point-specific response format and thinking budget
+  const responseFormatInstruction = getResponseFormatForEntryPoint(ctx.entryPoint)
+  const thinkingBudget = getThinkingBudgetForEntryPoint(ctx.entryPoint)
 
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
 
@@ -173,9 +175,12 @@ async function generateFromContext(
     question,
     conversationHistory.slice(-6),
     '',
-    directiveAndMindset || undefined,
+    mindset?.promptAddition,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    ctx.systemDirective || undefined,
+    responseFormatInstruction,
+    thinkingBudget
   )
 }
 
@@ -243,7 +248,7 @@ async function pipelineEntityExplore(
   onStepChange?.({ step: 'generating', status: 'running' })
   const result = await generateFromContext(ragContext, question, conversationHistory, ctx, signal)
 
-  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: allEdges }
+  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: allEdges, followUp: result.followUp }
 }
 
 async function pipelineEntityFindSimilar(
@@ -304,7 +309,7 @@ async function pipelineEntityFindSimilar(
   onStepChange?.({ step: 'generating', status: 'running' })
   const result = await generateFromContext(ragContext, question, conversationHistory, ctx, signal)
 
-  return { answer: result.answer, citations: result.citations, sourceChunks: [], relatedNodes: allNodes, relatedEdges: graphEdges }
+  return { answer: result.answer, citations: result.citations, sourceChunks: [], relatedNodes: allNodes, relatedEdges: graphEdges, followUp: result.followUp }
 }
 
 async function pipelineRelationshipChat(
@@ -372,7 +377,7 @@ async function pipelineRelationshipChat(
   onStepChange?.({ step: 'generating', status: 'running' })
   const result = await generateFromContext(ragContext, question, conversationHistory, ctx, signal)
 
-  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: allEdges }
+  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: allEdges, followUp: result.followUp }
 }
 
 async function pipelineSourceChat(
@@ -441,7 +446,7 @@ async function pipelineSourceChat(
   onStepChange?.({ step: 'generating', status: 'running' })
   const result = await generateFromContext(ragContext, question, conversationHistory, ctx, signal)
 
-  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: entities, relatedEdges: internalEdges }
+  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: entities, relatedEdges: internalEdges, followUp: result.followUp }
 }
 
 async function pipelineSourceAnchorRelate(
@@ -518,7 +523,7 @@ async function pipelineSourceAnchorRelate(
   onStepChange?.({ step: 'generating', status: 'running' })
   const result = await generateFromContext(ragContext, question, conversationHistory, ctx, signal)
 
-  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: anchorEdges }
+  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: anchorEdges, followUp: result.followUp }
 }
 
 async function pipelineSourceCompare(
@@ -594,7 +599,7 @@ async function pipelineSourceCompare(
   onStepChange?.({ step: 'generating', status: 'running' })
   const result = await generateFromContext(ragContext, question, conversationHistory, ctx, signal)
 
-  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: crossEdges }
+  return { answer: result.answer, citations: result.citations, sourceChunks: enrichedChunks, relatedNodes: allNodes, relatedEdges: crossEdges, followUp: result.followUp }
 }
 
 // ─── Deduplication Helper ────────────────────────────────────────────────────
@@ -621,31 +626,48 @@ export async function routedQuery(
   const ep = entryContext.entryPoint
 
   switch (ep) {
+    // Entity explore pipelines
     case 'entity_explore':
+    case 'home_entity_explore':
     case 'explore_entity_browse':
     case 'explore_node_detail':
+    case 'explore_entity_graph':
+    case 'anchors_explore':
       return pipelineEntityExplore(question, userId, conversationHistory, entryContext, onStepChange, signal)
 
+    // Find similar pipeline
     case 'entity_find_similar':
+    case 'home_entity_similar':
       return pipelineEntityFindSimilar(question, userId, conversationHistory, entryContext, onStepChange, signal)
 
+    // Relationship / connection pipeline
     case 'relationship_chat':
+    case 'home_relationship_chat':
     case 'explore_source_connection':
       return pipelineRelationshipChat(question, userId, conversationHistory, entryContext, onStepChange, signal)
 
+    // Single source pipeline
     case 'source_chat':
+    case 'home_source_chat':
+    case 'capture_post_extraction':
+    case 'pipeline_extraction_detail':
       return pipelineSourceChat(question, userId, conversationHistory, entryContext, onStepChange, signal)
 
+    // Source × anchor pipeline
     case 'source_anchor_relate':
+    case 'home_source_anchor':
       return pipelineSourceAnchorRelate(question, userId, conversationHistory, entryContext, onStepChange, signal)
 
+    // Source compare pipeline
     case 'source_compare':
+    case 'home_source_compare':
       return pipelineSourceCompare(question, userId, conversationHistory, entryContext, onStepChange, signal)
 
+    // Orient digest — broad graph search, standard pipeline
+    case 'orient_digest_drilldown':
     case 'direct':
     case 'suggestion_pill':
     default:
-      // Fall back to standard generic pipeline
       return queryGraph(question, userId, conversationHistory, resolveConfig(entryContext), onStepChange, signal)
   }
 }

@@ -10,6 +10,8 @@ interface ChatMessageListProps {
   pipelineEvents: RAGStepEvent[]
   scroll: UseChatScrollReturn
   onCitationClick?: (index: number) => void
+  onFollowUpClick?: (question: string) => void
+  onCitationHoverChange?: (index: number | null) => void
 }
 
 export function ChatMessageList({
@@ -18,6 +20,8 @@ export function ChatMessageList({
   pipelineEvents,
   scroll,
   onCitationClick,
+  onFollowUpClick,
+  onCitationHoverChange,
 }: ChatMessageListProps) {
   return (
     <div
@@ -30,9 +34,22 @@ export function ChatMessageList({
         className="flex flex-col mx-auto"
         style={{ maxWidth: 840, padding: '24px 48px', gap: 16 }}
       >
-        {messages.map(message => (
-          <ChatMessage key={message.id} message={message} onCitationClick={onCitationClick} />
-        ))}
+        {messages.map((message, i) => {
+          // PRD-C: Only show follow-up pill on the latest assistant message
+          const isLatestAssistant = message.role === 'assistant'
+            && i === messages.length - 1
+            || (message.role === 'assistant' && messages.slice(i + 1).every(m => m.role !== 'assistant'))
+          return (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              onCitationClick={onCitationClick}
+              onFollowUpClick={onFollowUpClick}
+              onCitationHoverChange={onCitationHoverChange}
+              isLatest={isLatestAssistant}
+            />
+          )
+        })}
 
         {isLoading && (
           <div className="flex justify-start">

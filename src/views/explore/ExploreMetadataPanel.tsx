@@ -5,7 +5,7 @@ import { EntityBadge } from '../../components/shared/EntityBadge'
 import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { fetchNodesByIds } from '../../services/supabase'
-import { buildSourceCompareContext } from '../../config/chatEntryContexts'
+import { buildSourceConnectionContext } from '../../config/chatEntryContexts'
 import type {
   ExploreViewMode,
   ZoomLevel,
@@ -782,10 +782,12 @@ function SourceListPanel({
 
   const handleAskAboutConnection = useCallback((otherSource: SourceNode, _edge: SourceEdge) => {
     if (!selectedSource) return
-    const ctx = buildSourceCompareContext(
-      { id: selectedSource.id, title: selectedSource.title },
-      { id: otherSource.id, title: otherSource.title }
-    )
+    const connectionPrompt = `What is the connection between "${selectedSource.title}" and "${otherSource.title}"? What shared entities, themes, or insights link these two sources?`
+    const ctx = buildSourceConnectionContext({
+      sourceA: { id: selectedSource.id, title: selectedSource.title },
+      sourceB: { id: otherSource.id, title: otherSource.title },
+      connectionPrompt,
+    })
     navigate('/ask', { state: { chatContext: ctx } })
   }, [selectedSource, navigate])
 

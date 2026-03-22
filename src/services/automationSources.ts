@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { fetchPlaylistMetadata } from './youtube'
+import { getMicrosoftIntegration, getMicrosoftQueueStats } from './microsoft'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -19,7 +20,7 @@ export const DEFAULT_SOURCE_SETTINGS: SourceSettings = {
 
 export interface AutomationSource {
   id: string
-  category: 'youtube-playlist' | 'meeting'
+  category: 'youtube-playlist' | 'meeting' | 'microsoft'
   name: string
   handle?: string
   channel?: string
@@ -200,6 +201,47 @@ export async function fetchAutomationSources(): Promise<AutomationSource[]> {
     })
   }
 
+  // Microsoft 365 integration
+  try {
+    const msIntegration = await getMicrosoftIntegration()
+    if (msIntegration) {
+      const msQueue = await getMicrosoftQueueStats()
+      sources.push({
+        id: 'microsoft-integration',
+        category: 'microsoft',
+        name: msIntegration.display_name
+          ? `Microsoft 365 (${msIntegration.display_name})`
+          : 'Microsoft 365',
+        handle: msIntegration.microsoft_email ?? 'Outlook & Teams',
+        description: [
+          msIntegration.sync_calendar ? 'Calendar' : '',
+          msIntegration.sync_mail ? 'Email' : '',
+          msIntegration.sync_transcripts ? 'Teams Transcripts' : '',
+        ].filter(Boolean).join(' + ') || 'Outlook & Teams Integration',
+        status: msIntegration.status === 'connected' ? 'connected'
+          : msIntegration.status === 'paused' ? 'paused'
+          : msIntegration.status === 'expired' ? 'error'
+          : 'error',
+        meetingsIngested: msQueue.completed,
+        lastSync: toRelativeTime(msIntegration.last_calendar_sync ?? msIntegration.last_mail_sync),
+        mode: msIntegration.extraction_mode,
+        emphasis: msIntegration.anchor_emphasis,
+        linkedAnchors: msIntegration.linked_anchor_ids ?? [],
+        customInstructions: msIntegration.custom_instructions ?? undefined,
+        iconUrl: '/logos/microsoft.svg',
+        provider: 'microsoft',
+        queue: {
+          pending: msQueue.pending,
+          processing: msQueue.processing,
+          complete: msQueue.completed,
+          failed: msQueue.failed,
+        },
+      })
+    }
+  } catch {
+    // microsoft_integrations table may not exist yet
+  }
+
   return sources
 }
 
@@ -344,6 +386,28 @@ export async function fetchIngestedContent(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
+  // ── Microsoft 365 ────────────────────────────────────────────────────────────
+  if (category === 'microsoft') {
+    try {
+      const { data } = await supabase
+        .from('microsoft_ingestion_queue')
+        .select('id, title, created_at, nodes_created, edges_created')
+        .eq('user_id', user.id)
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(50)
+      return ((data ?? []) as Record<string, unknown>[]).map(s => ({
+        id: s.id as string,
+        title: (s.title as string) || 'Untitled Item',
+        ingestedAt: toRelativeTime(s.created_at as string),
+        nodes: (s.nodes_created as number) || undefined,
+        edges: (s.edges_created as number) || undefined,
+      }))
+    } catch {
+      return []
+    }
+  }
+
   // ── Meetings ────────────────────────────────────────────────────────────────
   if (category === 'meeting') {
     const { data } = await supabase
@@ -466,6 +530,14 @@ export async function updateSourceSettings(
       .from('youtube_playlists')
       .update(baseUpdate)
       .eq('id', sourceId)
+    if (error) throw new Error(error.message)
+  } else if (category === 'microsoft') {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('Not authenticated')
+    const { error } = await supabase
+      .from('microsoft_integrations')
+      .update(baseUpdate)
+      .eq('user_id', user.id)
     if (error) throw new Error(error.message)
   }
   // meeting integration: no persistent record to update
@@ -623,9 +695,20 @@ export async function callScanNowAPI(
 
 export async function callProcessNowAPI(
   authToken: string,
-  sourceType?: 'youtube' | 'meeting'
+  sourceType?: 'youtube' | 'meeting' | 'microsoft'
 ): Promise<{ processed: number }> {
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` }
+
+  if (sourceType === 'microsoft') {
+    // Fetch content then extract for Microsoft items
+    await fetch('/api/microsoft/fetch-transcripts', { method: 'POST', headers })
+    const extractRes = await fetch('/api/microsoft/extract-knowledge', { method: 'POST', headers })
+    if (!extractRes.ok) {
+      const err = await extractRes.json().catch(() => ({ error: 'Processing failed' })) as { error?: string }
+      throw new Error(err.error ?? `Processing failed: ${extractRes.status}`)
+    }
+    return extractRes.json() as Promise<{ processed: number }>
+  }
 
   if (sourceType === 'meeting') {
     // Process meeting items directly

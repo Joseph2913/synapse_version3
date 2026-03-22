@@ -23,9 +23,10 @@ interface SourceCardProps {
   isHighlighted?: boolean
   /** When true, show "Same source" label instead of full summary (dedup) */
   isSameSourceAsPrevious?: boolean
+  onClick?: () => void
 }
 
-export function SourceCard({ chunk, citationIndex, isHighlighted, isSameSourceAsPrevious }: SourceCardProps) {
+export function SourceCard({ chunk, citationIndex, isHighlighted, isSameSourceAsPrevious, onClick }: SourceCardProps) {
   const timeAgo = timeAgoShort(chunk.sourceCreatedAt)
 
   return (
@@ -36,8 +37,9 @@ export function SourceCard({ chunk, citationIndex, isHighlighted, isSameSourceAs
         borderRadius: 8,
         padding: '10px 12px',
         transition: 'background 0.5s ease, border-color 0.15s ease, box-shadow 0.15s ease',
-        cursor: 'default',
+        cursor: onClick ? 'pointer' : 'default',
       }}
+      onClick={onClick}
       onMouseEnter={e => {
         const el = e.currentTarget as HTMLDivElement
         el.style.borderColor = 'var(--border-default)'

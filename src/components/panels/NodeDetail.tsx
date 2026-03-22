@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Pencil, X, Check, AlertCircle, ExternalLink, GitBranch } from 'lucide-react'
+import { Pencil, X, Check, AlertCircle, ExternalLink, GitBranch, MessageSquare } from 'lucide-react'
 import { SectionLabel } from '../ui/SectionLabel'
 import { EntityDot } from '../shared/EntityDot'
 import { EntityBadge } from '../shared/EntityBadge'
@@ -55,9 +55,11 @@ interface NodeDetailProps {
   node: KnowledgeNode
   onClose?: () => void
   onNavigateToNode?: (nodeId: string) => void
+  isAskView?: boolean
+  onAskAbout?: (node: KnowledgeNode) => void
 }
 
-export function NodeDetail({ node: initialNode, onClose, onNavigateToNode }: NodeDetailProps) {
+export function NodeDetail({ node: initialNode, onClose, onNavigateToNode, isAskView, onAskAbout }: NodeDetailProps) {
   const [node, setNode] = useState<KnowledgeNode>(initialNode)
   const [isEditing, setIsEditing] = useState(false)
   const [editLabel, setEditLabel] = useState(initialNode.label)
@@ -532,6 +534,23 @@ export function NodeDetail({ node: initialNode, onClose, onNavigateToNode }: Nod
       {/* Action Buttons */}
       {!isEditing && (
         <div className="flex flex-col gap-2 mt-auto">
+          {isAskView && onAskAbout && (
+            <button
+              type="button"
+              onClick={() => onAskAbout(node)}
+              className="w-full font-body text-[12px] font-semibold rounded-md py-2 cursor-pointer flex items-center justify-center gap-1.5"
+              style={{
+                background: 'var(--color-bg-inset)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--color-text-body)',
+                transition: 'background 0.15s ease',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-card)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-bg-inset)' }}
+            >
+              <MessageSquare size={12} /> Ask about this
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {

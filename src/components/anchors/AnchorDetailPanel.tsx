@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { X, ArrowRight, GitBranch, Compass, RotateCcw } from 'lucide-react'
+import { X, ArrowRight, GitBranch, Compass, RotateCcw, Sparkles } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { EntityBadge } from '../shared/EntityBadge'
 import { AnchorSignalBar } from './AnchorSignalBar'
 import { getEntityColor } from '../../config/entityTypes'
+import { buildAnchorExploreContext } from '../../config/chatEntryContexts'
 import { supabase } from '../../services/supabase'
 import { fetchAnchorHierarchyInfo, removeSubAnchorRelationship } from '../../services/anchorCandidates'
 import type { AnchorCandidateWithNode, AnchorHierarchyInfo } from '../../types/anchors'
@@ -381,6 +382,32 @@ export function AnchorDetailPanel({ candidate, onClose, onConfirm, onConfirmAsSu
 
       {/* Actions */}
       <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16, marginTop: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Explore with AI — PRD-B §3.13 */}
+        <button
+          type="button"
+          onClick={() => {
+            const ctx = buildAnchorExploreContext({
+              nodeId: node.id,
+              label: node.label,
+              entityType: node.entity_type,
+              description: node.description ?? null,
+            })
+            navigate('/ask', { state: { chatContext: ctx } })
+          }}
+          className="font-body w-full flex items-center justify-center gap-1.5"
+          style={{
+            background: 'var(--color-accent-50)',
+            color: 'var(--color-accent-500)',
+            fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 8,
+            border: '1px solid rgba(214,58,0,0.15)', cursor: 'pointer',
+            transition: 'background 0.12s ease',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(214,58,0,0.1)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-accent-50)' }}
+        >
+          <Sparkles size={13} /> Explore with AI
+        </button>
+
         {isSuggested ? (
           <>
             <button

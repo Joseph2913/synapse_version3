@@ -9,10 +9,10 @@ import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { fetchEntityNeighbors } from '../../services/exploreQueries'
 import { useAuth } from '../../hooks/useAuth'
-import { buildEntityExploreContext } from '../../config/chatEntryContexts'
+import { buildBrowseEntityExploreContext } from '../../config/chatEntryContexts'
 import type { EntityBrowserState } from '../../hooks/useEntityBrowser'
 import type { EntityNeighbor } from '../../services/exploreQueries'
-import type { KnowledgeNode } from '../../types/database'
+// KnowledgeNode import removed — buildBrowseEntityExploreContext takes a lightweight param
 
 interface EntityBrowserTabProps {
   browser: EntityBrowserState
@@ -249,8 +249,9 @@ function EntityDetailPanel({
       <div style={{ padding: '12px 18px' }}>
         <button type="button"
           onClick={() => {
-            const node = { id: entity.id, label: entity.label, entity_type: entity.entityType, user_id: '', is_anchor: false, created_at: entity.createdAt } as KnowledgeNode
-            navigate('/ask', { state: { chatContext: buildEntityExploreContext(node) } })
+            navigate('/ask', { state: { chatContext: buildBrowseEntityExploreContext({
+              id: entity.id, label: entity.label, entity_type: entity.entityType, source_id: entity.sourceId,
+            }) } })
           }}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,

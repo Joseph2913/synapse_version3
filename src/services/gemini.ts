@@ -141,7 +141,7 @@ export async function extractEntities(
   }
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -279,7 +279,7 @@ export async function embedQuery(text: string): Promise<number[]> {
 
 // ─── RAG: Response Generation ─────────────────────────────────────────────────
 
-function buildRAGSystemPrompt(context: RAGContext, sourceContextNote?: string, mindsetPromptAddition?: string): string {
+function buildRAGSystemPrompt(context: RAGContext, sourceContextNote?: string, mindsetPromptAddition?: string, systemDirective?: string, responseFormatInstruction?: string): string {
   // Detect when multiple distinct sources are present — triggers comparison mode
   const distinctSources = new Set(context.sourceChunks.map(c => c.source_id))
   const isMultiSource = distinctSources.size >= 2
@@ -314,7 +314,7 @@ function buildRAGSystemPrompt(context: RAGContext, sourceContextNote?: string, m
 CORE MISSION: Give RICH, COMPREHENSIVE answers.
 ═══════════════════════════════════════════════════
 
-ANSWERING RULES (follow these exactly):
+${systemDirective ? `CONTEXT DIRECTIVE:\n${systemDirective}\n\n` : ''}${responseFormatInstruction ? `${responseFormatInstruction}\n\n` : ''}ANSWERING RULES (follow these exactly):
 1. LENGTH & DEPTH — Your answers must be detailed and thorough. Do NOT give one or two sentence summaries. Synthesize ALL relevant information from every chunk provided. The user explicitly values depth.
 2. USE ALL CHUNKS — Read every source chunk and extract relevant details. If 5 chunks are provided, your answer should draw from all 5, not just the first.
 3. SPECIFICITY — Include specific names, dates, quotes, decisions, questions raised, action items, and any numbers or metrics mentioned in the source material.
@@ -344,9 +344,16 @@ RESPONSE FORMAT — return ONLY valid JSON:
       "source_id": "the source UUID if citing a document chunk, otherwise null",
       "chunk_index": 0
     }
-  ]
+  ],
+  "followUp": {
+    "question": "A natural next question the user might ask, phrased as the user would phrase it",
+    "label": "2-4 word button label"
+  }
 }
 Ensure every [N] reference in your answer text has a corresponding entry in the citations array with matching index.
+
+FOLLOW-UP QUESTION:
+When the topic has natural depth to explore further, include a "followUp" object in your JSON response with a "question" (a natural next question the user might ask, phrased as the user would phrase it) and a "label" (2-4 word button label). The follow-up should deepen the current thread, not change topics. Omit the followUp object for simple factual answers that don't warrant further exploration.
 ═══════════════════════════════════════════════════
 
 SOURCE CHUNKS — your primary evidence (read all of them carefully):
@@ -362,32 +369,105 @@ Reminder: The source chunks contain actual words from the user's documents. They
 }
 
 function parseRAGResponse(responseText: string): RAGGenerationResult {
-  const cleaned = responseText
+  // Strip markdown code fences if present
+  let cleaned = responseText
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim()
 
-  try {
-    const parsed = JSON.parse(cleaned) as { answer?: unknown; citations?: unknown[] }
-    const answer = typeof parsed.answer === 'string' ? parsed.answer : cleaned
-    const citations: InlineCitation[] = Array.isArray(parsed.citations)
-      ? (parsed.citations as Record<string, unknown>[])
-          .filter(c => typeof c === 'object' && c !== null)
-          .map((c, i) => ({
-            index: typeof c['index'] === 'number' ? c['index'] : i + 1,
-            label: typeof c['label'] === 'string' ? c['label'] : '',
-            entity_type: typeof c['entity_type'] === 'string' ? c['entity_type'] : 'Topic',
-            node_id: typeof c['node_id'] === 'string' && c['node_id'] !== 'null' ? c['node_id'] : null,
-            source_id: typeof c['source_id'] === 'string' && c['source_id'] !== 'null' ? c['source_id'] : null,
-            chunk_index: typeof c['chunk_index'] === 'number' ? c['chunk_index'] : null,
-          }))
-      : []
-    return { answer, citations }
-  } catch {
-    console.warn('[gemini] Failed to parse RAG JSON, using raw text')
-    return { answer: cleaned, citations: [] }
+  // Gemini 2.5 Flash sometimes returns multiple JSON objects concatenated,
+  // or wraps the response in extra whitespace/newlines. Normalize.
+  // Also strip any leading/trailing non-JSON characters.
+  const firstBrace = cleaned.indexOf('{')
+  if (firstBrace > 0) {
+    cleaned = cleaned.slice(firstBrace)
   }
+
+  // Try standard JSON parse
+  let parsed: Record<string, unknown> | null = null
+  try {
+    parsed = JSON.parse(cleaned) as Record<string, unknown>
+  } catch {
+    // JSON might be truncated (maxOutputTokens hit). Try to fix common issues:
+    // 1. Missing closing braces/brackets
+    // 2. Trailing comma before closing
+    let fixAttempt = cleaned
+      .replace(/,\s*$/, '')  // trailing comma
+
+    // Count braces to see if we need to close them
+    let braceCount = 0
+    let bracketCount = 0
+    let inString = false
+    let escaped = false
+    for (const ch of fixAttempt) {
+      if (escaped) { escaped = false; continue }
+      if (ch === '\\') { escaped = true; continue }
+      if (ch === '"') { inString = !inString; continue }
+      if (inString) continue
+      if (ch === '{') braceCount++
+      if (ch === '}') braceCount--
+      if (ch === '[') bracketCount++
+      if (ch === ']') bracketCount--
+    }
+
+    // If we're inside a string, close it
+    if (inString) fixAttempt += '"'
+    // Close any open brackets/braces
+    while (bracketCount > 0) { fixAttempt += ']'; bracketCount-- }
+    while (braceCount > 0) { fixAttempt += '}'; braceCount-- }
+
+    // Remove trailing comma before closing brace/bracket
+    fixAttempt = fixAttempt.replace(/,\s*([}\]])/g, '$1')
+
+    try {
+      parsed = JSON.parse(fixAttempt) as Record<string, unknown>
+      console.debug('[gemini] Parsed RAG response after fix-up (truncated JSON)')
+    } catch (e2) {
+      console.warn('[gemini] JSON parse failed even after fix-up:', (e2 as Error).message)
+      console.debug('[gemini] First 300 chars:', cleaned.slice(0, 300))
+
+      // Last resort: regex extract the answer field
+      const answerMatch = cleaned.match(/"answer"\s*:\s*"((?:[^"\\]|\\.)*)/)
+      if (answerMatch?.[1]) {
+        const rawAnswer = answerMatch[1]
+          .replace(/\\n/g, '\n')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\')
+        return { answer: rawAnswer, citations: [] }
+      }
+
+      return { answer: cleaned, citations: [] }
+    }
+  }
+
+  if (!parsed) return { answer: cleaned, citations: [] }
+
+  const answer = typeof parsed.answer === 'string' ? parsed.answer : cleaned
+  const citations: InlineCitation[] = Array.isArray(parsed.citations)
+    ? (parsed.citations as Record<string, unknown>[])
+        .filter(c => typeof c === 'object' && c !== null)
+        .map((c, i) => ({
+          index: typeof c['index'] === 'number' ? c['index'] : i + 1,
+          label: typeof c['label'] === 'string' ? c['label'] : '',
+          entity_type: typeof c['entity_type'] === 'string' ? c['entity_type'] : 'Topic',
+          node_id: typeof c['node_id'] === 'string' && c['node_id'] !== 'null' ? c['node_id'] : null,
+          source_id: typeof c['source_id'] === 'string' && c['source_id'] !== 'null' ? c['source_id'] : null,
+          chunk_index: typeof c['chunk_index'] === 'number' ? c['chunk_index'] : null,
+        }))
+    : []
+
+  // PRD-C: Parse follow-up suggestion
+  const rawFollowUp = parsed.followUp as Record<string, unknown> | undefined
+  const followUp = rawFollowUp && typeof rawFollowUp === 'object'
+    && typeof rawFollowUp.question === 'string' && (rawFollowUp.question as string).length > 0
+    ? {
+        question: rawFollowUp.question as string,
+        label: typeof rawFollowUp.label === 'string' ? rawFollowUp.label : 'Go deeper',
+      }
+    : undefined
+
+  return { answer, citations, followUp }
 }
 
 // ─── RAG: Query Decomposition ─────────────────────────────────────────────────
@@ -406,7 +486,7 @@ export async function decomposeQuery(question: string): Promise<string[]> {
 
   try {
     const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -456,13 +536,23 @@ export async function generateRAGResponse(
   sourceContextNote?: string,
   mindsetPromptAddition?: string,
   temperatureOverride?: number,
-  maxOutputTokens?: number
+  maxOutputTokens?: number,
+  systemDirective?: string,
+  responseFormatInstruction?: string,
+  _thinkingBudget?: number
 ): Promise<RAGGenerationResult> {
   if (!GEMINI_API_KEY) {
     throw new ExtractionError('VITE_GEMINI_API_KEY is not configured')
   }
 
-  const systemPrompt = buildRAGSystemPrompt(context, sourceContextNote, mindsetPromptAddition)
+  // Truncate overly long directives (PRD-A §7: max 2000 chars)
+  let truncatedDirective = systemDirective
+  if (truncatedDirective && truncatedDirective.length > 2000) {
+    console.warn(`[gemini] systemDirective too long (${truncatedDirective.length} chars), truncating to 2000`)
+    truncatedDirective = truncatedDirective.slice(0, 2000) + '...'
+  }
+
+  const systemPrompt = buildRAGSystemPrompt(context, sourceContextNote, mindsetPromptAddition, truncatedDirective, responseFormatInstruction)
 
   const contents = [
     ...conversationHistory.map(msg => ({
@@ -472,29 +562,45 @@ export async function generateRAGResponse(
     { role: 'user', parts: [{ text: question }] },
   ]
 
+  // Build generation config (PRD-C §2.3)
+  // NOTE: thinkingConfig is NOT compatible with responseMimeType: 'application/json' in Gemini 2.5 Flash.
+  // Thinking budgets are disabled for now until Google adds JSON + thinking support.
+  const generationConfig: Record<string, unknown> = {
+    temperature: temperatureOverride ?? 0.3,
+    maxOutputTokens: maxOutputTokens ?? 8192,
+    responseMimeType: 'application/json',
+  }
+
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents,
-        generationConfig: {
-          temperature: temperatureOverride ?? 0.3,
-          maxOutputTokens: maxOutputTokens ?? 4096,
-          responseMimeType: 'application/json',
-        },
+        generationConfig,
       }),
     }
   )
 
   const data = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
   }
 
-  const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!responseText) throw new ExtractionError('Empty response from Gemini', data)
+  // Gemini 2.5 Flash may return thought parts before the real answer.
+  // Find the first non-thought text part, or fall back to any text part.
+  const parts = data.candidates?.[0]?.content?.parts ?? []
+  const textPart = parts.find(p => p.thought !== true && typeof p.text === 'string')
+    ?? parts.find(p => typeof p.text === 'string')
+  const responseText = textPart?.text
+
+  if (!responseText) {
+    console.error('[gemini] Empty RAG response. Parts:', JSON.stringify(parts.map(p => ({ thought: p.thought, textLen: p.text?.length }))))
+    throw new ExtractionError('Empty response from Gemini', data)
+  }
+
+  console.debug('[gemini] RAG response length:', responseText.length, '| starts with:', responseText.slice(0, 80))
 
   return parseRAGResponse(responseText)
 }

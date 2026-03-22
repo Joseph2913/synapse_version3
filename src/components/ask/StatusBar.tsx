@@ -7,9 +7,10 @@ interface StatusBarProps {
   hasError?: boolean
   hasMessages?: boolean
   onClearChat?: () => void
+  contextLabel?: string
 }
 
-export function StatusBar({ hasError = false, hasMessages = false, onClearChat }: StatusBarProps) {
+export function StatusBar({ hasError = false, hasMessages = false, onClearChat, contextLabel }: StatusBarProps) {
   const { user } = useAuth()
   const [stats, setStats] = useState<{ nodeCount: number; chunkCount: number } | null>(null)
 
@@ -73,6 +74,24 @@ export function StatusBar({ hasError = false, hasMessages = false, onClearChat }
         </span>
       )}
 
+      {contextLabel && (
+        <span
+          className="font-body"
+          style={{
+            fontSize: 11,
+            fontWeight: 500,
+            color: 'var(--color-text-secondary)',
+            marginLeft: 'auto',
+            maxWidth: 300,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {contextLabel}
+        </span>
+      )}
+
       {hasMessages && onClearChat && (
         <button
           type="button"
@@ -86,7 +105,7 @@ export function StatusBar({ hasError = false, hasMessages = false, onClearChat }
             border: '1px solid var(--border-subtle)',
             borderRadius: 20,
             padding: '5px 13px',
-            marginLeft: 'auto',
+            marginLeft: contextLabel ? undefined : 'auto',
             cursor: 'pointer',
             transition: 'color 0.15s ease, border-color 0.15s ease',
           }}

@@ -287,12 +287,17 @@ export function useExtraction(): UseExtractionReturn {
               statusText: `Embedding ${chunks.length} source chunks...`,
             })
 
-            const chunkEmbeddings = await generateEmbeddings(chunks, 5)
+            // Attempt embeddings, but save chunks regardless
+            let chunkEmbeddings: (number[] | null)[] = chunks.map(() => null)
+            try {
+              chunkEmbeddings = await generateEmbeddings(chunks, 5)
+            } catch (embErr) {
+              console.warn('[useExtraction] Chunk embedding failed, saving chunks without vectors:', embErr)
+            }
             await saveChunks(userId, sourceId, chunks, chunkEmbeddings)
           }
         } catch (chunkErr) {
-          console.warn('[useExtraction] Chunking/chunk embedding failed:', chunkErr)
-          // Continue — chunking failure is non-fatal
+          console.warn('[useExtraction] Chunking failed entirely:', chunkErr)
         }
 
         // Step 8: Discover cross-connections

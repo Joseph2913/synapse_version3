@@ -2,7 +2,7 @@
 /**
  * PRD-15B: Re-Embedding Pipeline
  *
- * Generates fresh 3072-dimensional embeddings for all knowledge_source_chunks
+ * Generates fresh 3072-dimensional embeddings for all source_chunks
  * and knowledge_nodes using gemini-embedding-001, then stores them as proper
  * vector(3072) values in the database.
  *
@@ -138,10 +138,10 @@ function fmtTime(ms) {
 
 // ── Phase 1: Source chunks ────────────────────────────────────────────────────
 async function reembedChunks() {
-  console.log('\n─── Phase 1: Source Chunks (knowledge_source_chunks) ────────────')
+  console.log('\n─── Phase 1: Source Chunks (source_chunks) ────────────')
 
   const { count, error: countErr } = await supabase
-    .from('knowledge_source_chunks')
+    .from('source_chunks')
     .select('*', { count: 'exact', head: true })
     .is('embedding', null)
 
@@ -164,7 +164,7 @@ async function reembedChunks() {
 
   while (true) {
     const { data: rows, error: fetchErr } = await supabase
-      .from('knowledge_source_chunks')
+      .from('source_chunks')
       .select('id, content')
       .is('embedding', null)
       .order('id')
@@ -179,7 +179,7 @@ async function reembedChunks() {
     const settled = await runConcurrent(rows, async (row) => {
       const vec = await embedText(row.content)
       const { error: upErr } = await supabase
-        .from('knowledge_source_chunks')
+        .from('source_chunks')
         .update({ embedding: vec })
         .eq('id', row.id)
       if (upErr) throw new Error(`DB update failed for chunk ${row.id}: ${upErr.message}`)
@@ -304,7 +304,7 @@ if (totalEmbedded > 0) {
   console.log('\n─── Next Step: Create IVFFlat Indexes ───────────────────────')
   console.log('  Paste these into Supabase SQL Editor:\n')
   console.log('  CREATE INDEX IF NOT EXISTS idx_source_chunks_embedding_ivfflat')
-  console.log('    ON knowledge_source_chunks USING ivfflat (embedding vector_cosine_ops)')
+  console.log('    ON source_chunks USING ivfflat (embedding vector_cosine_ops)')
   console.log('    WITH (lists = 100);\n')
   console.log('  CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_embedding_ivfflat')
   console.log('    ON knowledge_nodes USING ivfflat (embedding vector_cosine_ops)')

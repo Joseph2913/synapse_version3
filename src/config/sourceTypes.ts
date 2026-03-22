@@ -38,6 +38,7 @@ export const PROVIDER_CONFIG: Record<string, ProviderConfig> = {
   otter:      { logo: null,                     label: 'Otter.ai',   color: '#0ea5e9' },
   meetgeek:   { logo: '/logos/meetgeek.jpeg',   label: 'MeetGeek',   color: '#8b5cf6' },
   tldv:       { logo: '/logos/tldv.svg',        label: 'tl;dv',      color: '#ec4899' },
+  microsoft:  { logo: '/logos/microsoft.svg',   label: 'Microsoft 365', color: '#0078d4' },
 }
 
 export function getProviderConfig(provider: string | null | undefined): ProviderConfig | null {

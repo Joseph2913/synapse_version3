@@ -1,5 +1,7 @@
 # PRD-15A: Vector Embedding Schema Migration (768 → 3072)
 
+> **CORRECTION (March 17, 2026):** This PRD references the table name `knowledge_source_chunks` throughout. The table has since been renamed to `source_chunks` to match the application code. All SQL referencing the old name should use `source_chunks` instead. See `supabase/migrations/20260317_rename_source_chunks_fix_rpcs.sql` for the migration. The original SQL below is preserved as-is for historical reference since it was already executed.
+
 ## Overview
 
 Migrate the Synapse database from 768-dimensional vectors (`text-embedding-004`, now unavailable) to 3072-dimensional vectors (`gemini-embedding-001`, the only embedding model available on the current API key). This is a pure SQL migration — no application code changes.
