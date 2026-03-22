@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, Copy, Check } from 'lucide-react'
+import { ArrowLeft, Copy, Check, Plug2 } from 'lucide-react'
 import type { AutomationSource, SourceSettings } from '../../services/automationSources'
 import { addYouTubePlaylist, DEFAULT_SOURCE_SETTINGS } from '../../services/automationSources'
 import { connectMicrosoft } from '../../services/microsoft'
@@ -10,6 +10,7 @@ import { getEntityColor } from '../../config/entityTypes'
 
 interface NewSourcePanelProps {
   onSourceAdded: (source: AutomationSource) => void
+  onSelectMcp?: () => void
 }
 
 type SourceTypeId = 'youtube-playlist' | 'circleback' | 'firefly' | 'microsoft'
@@ -211,9 +212,10 @@ function ExtractionSettingsForm({ settings, onChange }: ExtractionSettingsFormPr
 
 interface StepPickProps {
   onPick: (type: SourceTypeId) => void
+  onSelectMcp?: () => void
 }
 
-function StepPick({ onPick }: StepPickProps) {
+function StepPick({ onPick, onSelectMcp }: StepPickProps) {
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}>
       <div style={{ padding: '24px 28px' }}>
@@ -230,6 +232,43 @@ function StepPick({ onPick }: StepPickProps) {
         {/* Active source types */}
         <SL>Available</SL>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
+          {/* API & MCP Access — first in the list */}
+          {onSelectMcp && (
+            <button
+              type="button"
+              onClick={onSelectMcp}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                padding: '14px 16px',
+                borderRadius: 10,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--color-bg-card)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s',
+                width: '100%',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'rgba(214,58,0,0.3)'
+                e.currentTarget.style.background = 'var(--color-accent-50)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--border-subtle)'
+                e.currentTarget.style.background = 'var(--color-bg-card)'
+              }}
+            >
+              <div style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-bg-inset)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Plug2 size={20} style={{ color: '#d63a00' }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="font-body" style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}>API &amp; MCP Access</div>
+                <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 1 }}>Connect Claude Code &amp; other AI tools</div>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-placeholder)', flexShrink: 0 }}>→</div>
+            </button>
+          )}
           {SOURCE_TYPES.map(st => (
             <button
               key={st.id}
@@ -522,7 +561,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-export function NewSourcePanel({ onSourceAdded }: NewSourcePanelProps) {
+export function NewSourcePanel({ onSourceAdded, onSelectMcp }: NewSourcePanelProps) {
   const [step, setStep] = useState<'pick' | 'configure'>('pick')
   const [selectedType, setSelectedType] = useState<SourceTypeId | null>(null)
 
@@ -541,5 +580,5 @@ export function NewSourcePanel({ onSourceAdded }: NewSourcePanelProps) {
     )
   }
 
-  return <StepPick onPick={handlePick} />
+  return <StepPick onPick={handlePick} onSelectMcp={onSelectMcp} />
 }

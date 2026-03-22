@@ -8,10 +8,11 @@ import { NewSourcePanel } from '../components/automate/NewSourcePanel'
 import { McpAccessPanel } from '../components/automate/McpAccessPanel'
 import type { AutomationSource } from '../services/automationSources'
 
-type FilterType = 'all' | 'youtube-playlist' | 'meeting' | 'microsoft'
+type FilterType = 'all' | 'youtube-playlist' | 'meeting' | 'microsoft' | 'api'
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'all', label: 'All Sources' },
+  { key: 'api', label: 'API & MCP' },
   { key: 'microsoft', label: 'Microsoft 365' },
   { key: 'meeting', label: 'Meeting Services' },
   { key: 'youtube-playlist', label: 'YouTube Playlists' },
@@ -99,7 +100,8 @@ export function AutomateView() {
   const selectedSource = selectedSourceId ? sources.find(s => s.id === selectedSourceId) ?? null : null
 
   const filterCount = useCallback((key: FilterType) => {
-    if (key === 'all') return sources.length
+    if (key === 'all') return sources.length + 1 // +1 for MCP card
+    if (key === 'api') return 1
     return sources.filter(s => s.category === key).length
   }, [sources])
 
@@ -289,32 +291,10 @@ export function AutomateView() {
             </div>
           )}
 
-          {/* ── Grouped source cards ─────────────────────────────────────── */}
-          {groupedSources.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-              {groupedSources.map(({ category, srcs }) => (
-                <div key={category}>
-                  {filter === 'all' && <SL>{CATEGORY_LABELS[category]}</SL>}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {srcs.map((source, index) => (
-                      <SourceCard
-                        key={source.id}
-                        source={source}
-                        isSelected={selectedSourceId === source.id}
-                        onClick={() => handleCardClick(source.id)}
-                        index={index}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── MCP Access integration card ──────────────────────────────── */}
-          {(filter === 'all') && (
-            <div style={{ marginTop: groupedSources.length > 0 ? 28 : 0 }}>
-              <SL>API</SL>
+          {/* ── MCP Access integration card (top of list) ─────────────── */}
+          {(filter === 'all' || filter === 'api') && (
+            <div style={{ marginBottom: groupedSources.length > 0 && filter === 'all' ? 28 : 0 }}>
+              {filter === 'all' && <SL>API &amp; MCP</SL>}
               <div
                 role="button"
                 tabIndex={0}
@@ -391,6 +371,28 @@ export function AutomateView() {
             </div>
           )}
 
+          {/* ── Grouped source cards ─────────────────────────────────────── */}
+          {groupedSources.length > 0 && filter !== 'api' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+              {groupedSources.map(({ category, srcs }) => (
+                <div key={category}>
+                  {filter === 'all' && <SL>{CATEGORY_LABELS[category]}</SL>}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {srcs.map((source, index) => (
+                      <SourceCard
+                        key={source.id}
+                        source={source}
+                        isSelected={selectedSourceId === source.id}
+                        onClick={() => handleCardClick(source.id)}
+                        index={index}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* ── Connect reminder at bottom ───────────────────────────────── */}
           {!loading && sources.length > 0 && (
             <div style={{ marginTop: 20 }}>
@@ -461,6 +463,7 @@ export function AutomateView() {
             : (
               <NewSourcePanel
                 onSourceAdded={handleSourceAdded}
+                onSelectMcp={handleMcpCardClick}
               />
             )
         }
