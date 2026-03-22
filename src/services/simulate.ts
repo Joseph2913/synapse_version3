@@ -86,7 +86,7 @@ export async function updateSimulationJobStatus(
   id: string,
   update: Partial<Pick<SimulationJob,
     'status' | 'progress' | 'progressMessage' | 'result' |
-    'errorMessage' | 'completedAt' | 'seedGraph' |
+    'errorMessage' | 'completedAt' | 'seedGraph' | 'personas' |
     'scopeNodeCount' | 'scopeEdgeCount' | 'scopeSourceCount'
   >>
 ): Promise<void> {
@@ -98,6 +98,7 @@ export async function updateSimulationJobStatus(
   if (update.errorMessage !== undefined) snakeUpdate.error_message = update.errorMessage
   if (update.completedAt !== undefined) snakeUpdate.completed_at = update.completedAt
   if (update.seedGraph !== undefined) snakeUpdate.seed_graph = update.seedGraph
+  if (update.personas !== undefined) snakeUpdate.personas = update.personas
   if (update.scopeNodeCount !== undefined) snakeUpdate.scope_node_count = update.scopeNodeCount
   if (update.scopeEdgeCount !== undefined) snakeUpdate.scope_edge_count = update.scopeEdgeCount
   if (update.scopeSourceCount !== undefined) snakeUpdate.scope_source_count = update.scopeSourceCount
@@ -668,6 +669,8 @@ function mapJobRow(row: Record<string, unknown>): SimulationJob {
     whatIfVariables: (row.what_if_variables as string[]) ?? [],
     excludedNodeIds: (row.excluded_node_ids as string[]) ?? [],
     seedGraph: row.seed_graph as SimulationSeedGraph | null,
+    config: (row.config as SimulationConfig) ?? null,
+    personas: (row.personas as SimulationPersona[]) ?? null,
     progress: row.progress as number,
     progressMessage: row.progress_message as string | null,
     result: row.result ? mapReportRow(row.result as Record<string, unknown>) : null,

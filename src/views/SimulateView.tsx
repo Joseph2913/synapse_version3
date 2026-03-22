@@ -314,7 +314,7 @@ export function SimulateView() {
   const {
     stage, activeJob, sidecarOnline, isCheckingSidecar, error,
     personas, diversity, excludedAgentIds, personaProgress,
-    checkSidecar, startPersonaGeneration, confirmAndRun,
+    checkSidecar, startPersonaGeneration, confirmAndRun, resumeJob,
     toggleAgentExclusion, backToSetup, resetBuilder,
     setStage, setActiveJob,
   } = useSimulate()
@@ -501,6 +501,34 @@ export function SimulateView() {
   const handleRerun = useCallback(() => {
     resetBuilder()
     setWizardStep('scope')
+  }, [resetBuilder])
+
+  // Re-run from a specific job — pre-populate builder with the job's config
+  const handleRerunJob = useCallback((job: SimulationJob) => {
+    resetBuilder()
+
+    // Reconstruct builder state from the job's stored config + top-level fields
+    const config = job.config
+
+    setBuilderState({
+      selectedAnchorIds: job.scopeAnchorIds,
+      timeWindowDays: job.scopeTimeWindowDays,
+      predictionQuestion: job.predictionQuestion,
+      whatIfVariables: job.whatIfVariables,
+      excludedNodeIds: job.excludedNodeIds,
+      currentWhatIfInput: '',
+      sourceTypeFilter: config?.sourceTypeFilter ?? null,
+      outputHorizon: config?.outputHorizon ?? '90d',
+      externalAgents: config?.externalAgents ?? [],
+      mode: config?.mode ?? 'prediction',
+      depth: config?.depth ?? 'standard',
+      surpriseSensitivity: config?.surpriseSensitivity ?? 'balanced',
+      presetUsed: config?.presetUsed ?? null,
+    })
+
+    // Jump to config step since all fields are pre-filled
+    setWizardStep('config')
+    setSelectedHistoryJobId(null)
   }, [resetBuilder])
 
   const handleIngest = useCallback(async (_jobId: string) => {
@@ -825,7 +853,15 @@ export function SimulateView() {
               job={selectedHistoryJob}
               onBack={() => setSelectedHistoryJobId(null)}
               onViewReport={handleViewReport}
-              onRerun={handleRerun}
+              onRerun={() => handleRerunJob(selectedHistoryJob)}
+              onResume={
+                selectedHistoryJob.seedGraph && selectedHistoryJob.personas && selectedHistoryJob.personas.length > 0
+                  ? () => {
+                      setSelectedHistoryJobId(null)
+                      resumeJob(selectedHistoryJob)
+                    }
+                  : undefined
+              }
             />
           ) : (
             <SimulationHistoryPanel

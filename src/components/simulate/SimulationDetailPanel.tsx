@@ -6,6 +6,7 @@ interface SimulationDetailPanelProps {
   onBack: () => void
   onViewReport: (job: SimulationJob) => void
   onRerun: () => void
+  onResume?: () => void
 }
 
 function statusLabel(status: string): { label: string; color: string } {
@@ -18,8 +19,9 @@ function statusLabel(status: string): { label: string; color: string } {
   }
 }
 
-export function SimulationDetailPanel({ job, onBack, onViewReport, onRerun }: SimulationDetailPanelProps) {
+export function SimulationDetailPanel({ job, onBack, onViewReport, onRerun, onResume }: SimulationDetailPanelProps) {
   const sl = statusLabel(job.status)
+  const canResume = job.status === 'failed' && job.seedGraph && job.personas && job.personas.length > 0
 
   return (
     <div style={{ padding: '16px 16px' }}>
@@ -145,6 +147,22 @@ export function SimulationDetailPanel({ job, onBack, onViewReport, onRerun }: Si
             View Full Report
           </button>
         )}
+        {canResume && onResume && (
+          <button
+            type="button"
+            onClick={onResume}
+            className="flex items-center justify-center gap-2 cursor-pointer font-body font-semibold w-full"
+            style={{
+              fontSize: 12, padding: '8px 14px', borderRadius: 20,
+              background: 'var(--color-accent-500)', border: 'none',
+              color: 'white',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <RotateCcw size={13} />
+            Resume Simulation
+          </button>
+        )}
         <button
           type="button"
           onClick={onRerun}
@@ -157,7 +175,7 @@ export function SimulationDetailPanel({ job, onBack, onViewReport, onRerun }: Si
           }}
         >
           <RotateCcw size={13} />
-          Re-run
+          Re-run from scratch
         </button>
       </div>
     </div>

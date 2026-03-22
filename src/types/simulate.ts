@@ -15,6 +15,8 @@ export interface SimulationJob {
   whatIfVariables: string[]
   excludedNodeIds: string[]
   seedGraph: SimulationSeedGraph | null
+  config: SimulationConfig | null
+  personas: SimulationPersona[] | null
   progress: number
   progressMessage: string | null
   result: SimulationReport | null

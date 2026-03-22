@@ -47,6 +47,7 @@ interface UseSimulateReturn {
   checkSidecar: () => Promise<void>
   startPersonaGeneration: (state: SimulationBuilderState) => Promise<void>
   confirmAndRun: (state: SimulationBuilderState) => Promise<void>
+  resumeJob: (job: SimulationJob) => Promise<void>
   toggleAgentExclusion: (agentId: string) => void
   backToSetup: () => void
   resetBuilder: () => void
@@ -186,6 +187,9 @@ export function useSimulate(): UseSimulateReturn {
     setError(null)
     setStage('confirmed')
 
+    // Track job ID outside try so the catch block can persist failure to Supabase
+    let createdJobId: string | null = null
+
     try {
       // Filter out excluded agents
       const activePersonas = personas.filter(p => !excludedAgentIds.has(p.agent_id))
@@ -205,6 +209,7 @@ export function useSimulate(): UseSimulateReturn {
 
       // Create job record
       const job = await createSimulationJob(state, title)
+      createdJobId = job.id
 
       // Log diversity override if user proceeded past a warning
       if (diversity && diversity.warning !== 'none') {
@@ -216,6 +221,7 @@ export function useSimulate(): UseSimulateReturn {
         progress: 10,
         progressMessage: 'Preparing knowledge graph export…',
         seedGraph,
+        personas: activePersonas,
         scopeNodeCount: seedGraph.nodes.length,
         scopeEdgeCount: seedGraph.edges.length,
         scopeSourceCount: [...new Set(seedGraph.nodes.map(n => n.sourceId).filter(Boolean))].length,
@@ -241,8 +247,81 @@ export function useSimulate(): UseSimulateReturn {
       const message = err instanceof Error ? err.message : 'Unknown error occurred'
       setError(message)
       setStage('failed')
+
+      // Persist failure to Supabase so the job doesn't stay stuck as "preparing"
+      if (createdJobId) {
+        try {
+          await updateSimulationJobStatus(createdJobId, {
+            status: 'failed',
+            errorMessage: message,
+          })
+        } catch (updateErr) {
+          console.error('[SIMULATE] Failed to persist error status to Supabase:', updateErr)
+        }
+      }
     }
   }, [personas, excludedAgentIds, diversity])
+
+  // Resume a failed job — reuses existing seed graph + personas, skips to sidecar call
+  const resumeJob = useCallback(async (job: SimulationJob) => {
+    if (!job.seedGraph || !job.personas || job.personas.length === 0) {
+      throw new Error('Cannot resume: job is missing seed graph or personas.')
+    }
+
+    setError(null)
+    setStage('confirmed')
+
+    try {
+      // Reset job status from 'failed' back to 'preparing'
+      await updateSimulationJobStatus(job.id, {
+        status: 'preparing',
+        progress: 10,
+        progressMessage: 'Resuming — retrying sidecar call…',
+        errorMessage: '',
+      })
+
+      setActiveJob({ ...job, status: 'preparing', progress: 10 })
+      setStage('running_simulation')
+      setActiveRound(0)
+      setRoundLog([])
+
+      const config = job.config ?? {
+        anchorNodeIds: job.scopeAnchorIds,
+        timeWindow: '90d' as const,
+        sourceTypeFilter: null,
+        outputHorizon: '90d' as const,
+        question: job.predictionQuestion,
+        whatIfVariables: job.whatIfVariables,
+        externalAgents: [],
+        mode: 'prediction' as const,
+        depth: 'standard' as const,
+        surpriseSensitivity: 'balanced' as const,
+        presetUsed: null,
+      }
+
+      await triggerSidecarSimulation(
+        job.id,
+        job.seedGraph,
+        job.predictionQuestion,
+        job.whatIfVariables,
+        config,
+        job.personas
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error occurred'
+      setError(message)
+      setStage('failed')
+
+      try {
+        await updateSimulationJobStatus(job.id, {
+          status: 'failed',
+          errorMessage: message,
+        })
+      } catch (updateErr) {
+        console.error('[SIMULATE] Failed to persist error status to Supabase:', updateErr)
+      }
+    }
+  }, [])
 
   const toggleAgentExclusion = useCallback((agentId: string) => {
     setExcludedAgentIds(prev => {
@@ -280,7 +359,7 @@ export function useSimulate(): UseSimulateReturn {
     stage, activeJob, sidecarOnline, isCheckingSidecar, error,
     personas, diversity, excludedAgentIds, activeRound, roundLog,
     personaProgress,
-    checkSidecar, startPersonaGeneration, confirmAndRun,
+    checkSidecar, startPersonaGeneration, confirmAndRun, resumeJob,
     toggleAgentExclusion, backToSetup, resetBuilder,
     setStage, setActiveJob,
   }
