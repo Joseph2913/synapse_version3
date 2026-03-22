@@ -1,22 +1,26 @@
 import { useState, useCallback, useRef, useMemo } from 'react'
-import { Plus, GripVertical } from 'lucide-react'
+import { Plus, GripVertical, Plug2 } from 'lucide-react'
 import { useAutomationSources } from '../hooks/useAutomationSources'
+import { useApiKeys } from '../hooks/useApiKeys'
 import { SourceCard } from '../components/automate/SourceCard'
 import { SourceDetailPanel } from '../components/automate/SourceDetailPanel'
 import { NewSourcePanel } from '../components/automate/NewSourcePanel'
+import { McpAccessPanel } from '../components/automate/McpAccessPanel'
 import type { AutomationSource } from '../services/automationSources'
 
-type FilterType = 'all' | 'youtube-playlist' | 'meeting'
+type FilterType = 'all' | 'youtube-playlist' | 'meeting' | 'microsoft'
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'all', label: 'All Sources' },
+  { key: 'microsoft', label: 'Microsoft 365' },
   { key: 'meeting', label: 'Meeting Services' },
   { key: 'youtube-playlist', label: 'YouTube Playlists' },
 ]
 
-// Ordered groups for "All" view: Meeting → Playlist
-const CATEGORY_ORDER: AutomationSource['category'][] = ['meeting', 'youtube-playlist']
+// Ordered groups for "All" view: Microsoft → Meeting → Playlist
+const CATEGORY_ORDER: AutomationSource['category'][] = ['microsoft', 'meeting', 'youtube-playlist']
 const CATEGORY_LABELS: Record<AutomationSource['category'], string> = {
+  'microsoft': 'Microsoft 365',
   'meeting': 'Meeting Services',
   'youtube-playlist': 'YouTube Playlists',
 }
@@ -39,11 +43,14 @@ function SL({ children }: { children: React.ReactNode }) {
 
 export function AutomateView() {
   const { sources, loading, error, refetch, queueSummary } = useAutomationSources()
+  const { keys: apiKeys } = useApiKeys()
   const [filter, setFilter] = useState<FilterType>('all')
 
   // null = right panel shows NewSourcePanel (default)
   // source.id = right panel shows SourceDetailPanel for that source
+  // 'mcp-access' = right panel shows McpAccessPanel
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<string | null>(null)
 
   // ─── Drag resize — always active (2:1 is permanent) ─────────────────────
   const containerRef = useRef<HTMLDivElement>(null)
@@ -104,11 +111,21 @@ export function AutomateView() {
 
   // Click card → show detail; click same card again → back to NewSourcePanel
   const handleCardClick = (id: string) => {
+    setSelectedIntegrationId(null)
     setSelectedSourceId(prev => prev === id ? null : id)
   }
 
+  // Click MCP card → show McpAccessPanel
+  const handleMcpCardClick = () => {
+    setSelectedSourceId(null)
+    setSelectedIntegrationId(prev => prev === 'mcp-access' ? null : 'mcp-access')
+  }
+
   // "Connect Source" button → reset right panel to NewSourcePanel
-  const handleConnectClick = () => setSelectedSourceId(null)
+  const handleConnectClick = () => {
+    setSelectedSourceId(null)
+    setSelectedIntegrationId(null)
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -294,6 +311,86 @@ export function AutomateView() {
             </div>
           )}
 
+          {/* ── MCP Access integration card ──────────────────────────────── */}
+          {(filter === 'all') && (
+            <div style={{ marginTop: groupedSources.length > 0 ? 28 : 0 }}>
+              <SL>API</SL>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={handleMcpCardClick}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleMcpCardClick() }}
+                style={{
+                  padding: '16px 20px',
+                  borderRadius: 8,
+                  background: selectedIntegrationId === 'mcp-access'
+                    ? 'rgba(254,242,237,0.5)'
+                    : 'var(--color-bg-card)',
+                  border: selectedIntegrationId === 'mcp-access'
+                    ? '1px solid rgba(214,58,0,0.3)'
+                    : '1px solid var(--border-subtle)',
+                  cursor: 'pointer',
+                  transition: 'all 0.18s ease',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  outline: 'none',
+                }}
+              >
+                {/* Left side */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 7,
+                      background: 'var(--color-bg-inset)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Plug2 size={14} style={{ color: '#d63a00' }} />
+                  </div>
+                  <div>
+                    <div
+                      className="font-display"
+                      style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)' }}
+                    >
+                      API &amp; MCP Access
+                    </div>
+                    <div
+                      className="font-body"
+                      style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 1 }}
+                    >
+                      Connect external AI tools to your knowledge graph
+                    </div>
+                  </div>
+                </div>
+                {/* Right side: status */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        background: apiKeys.length > 0 ? '#10b981' : 'var(--color-text-secondary)',
+                      }}
+                    />
+                    <span className="font-body" style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                      {apiKeys.length > 0 ? 'active' : 'not configured'}
+                    </span>
+                  </div>
+                  <span className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                    {apiKeys.length} key{apiKeys.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── Connect reminder at bottom ───────────────────────────────── */}
           {!loading && sources.length > 0 && (
             <div style={{ marginTop: 20 }}>
@@ -318,7 +415,7 @@ export function AutomateView() {
                   Connect a New Source
                 </div>
                 <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-placeholder)', marginTop: 2 }}>
-                  YouTube playlist or meeting service
+                  YouTube playlist, Microsoft 365, or meeting service
                 </div>
               </button>
             </div>
@@ -347,19 +444,25 @@ export function AutomateView() {
 
       {/* ── Right panel (1/3) — always visible ──────────────────────────── */}
       <div style={{ flex: 1, height: '100%', overflow: 'hidden', minWidth: 0 }}>
-        {selectedSource
+        {selectedIntegrationId === 'mcp-access'
           ? (
-            <SourceDetailPanel
-              source={selectedSource}
-              onClose={() => setSelectedSourceId(null)}
-              onRefetch={refetch}
+            <McpAccessPanel
+              onClose={() => setSelectedIntegrationId(null)}
             />
           )
-          : (
-            <NewSourcePanel
-              onSourceAdded={handleSourceAdded}
-            />
-          )
+          : selectedSource
+            ? (
+              <SourceDetailPanel
+                source={selectedSource}
+                onClose={() => setSelectedSourceId(null)}
+                onRefetch={refetch}
+              />
+            )
+            : (
+              <NewSourcePanel
+                onSourceAdded={handleSourceAdded}
+              />
+            )
         }
       </div>
       </div>
