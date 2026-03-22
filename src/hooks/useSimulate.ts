@@ -235,6 +235,8 @@ export function useSimulate(): UseSimulateReturn {
       const config = buildSimulationConfig(state)
 
       // Fire to sidecar with personas
+      console.log('[SIMULATE] About to call triggerSidecarSimulation for job:', job.id)
+      console.log('[SIMULATE] Active personas:', activePersonas.length)
       await triggerSidecarSimulation(
         job.id,
         seedGraph,
@@ -243,7 +245,9 @@ export function useSimulate(): UseSimulateReturn {
         config,
         activePersonas
       )
+      console.log('[SIMULATE] Sidecar call completed successfully')
     } catch (err) {
+      console.error('[SIMULATE] confirmAndRun failed:', err)
       const message = err instanceof Error ? err.message : 'Unknown error occurred'
       setError(message)
       setStage('failed')

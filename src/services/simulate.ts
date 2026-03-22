@@ -258,21 +258,41 @@ export async function triggerSidecarSimulation(
     },
   }
 
-  const response = await fetch(`${SIDECAR_URL}/simulate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      job_id: jobId,
-      seed_graph: snakeSeedGraph,
-      prediction_question: predictionQuestion,
-      what_if_variables: whatIfVariables,
-      ...(config ? { config } : {}),
-      ...(personas ? { personas } : {}),
-    }),
-  })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`Sidecar error: ${response.status} — ${text}`)
+  const targetUrl = `${SIDECAR_URL}/simulate`
+  console.log('[SIMULATE] Sidecar URL:', SIDECAR_URL)
+  console.log('[SIMULATE] POSTing to:', targetUrl, '| job_id:', jobId)
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout
+
+  try {
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        job_id: jobId,
+        seed_graph: snakeSeedGraph,
+        prediction_question: predictionQuestion,
+        what_if_variables: whatIfVariables,
+        ...(config ? { config } : {}),
+        ...(personas ? { personas } : {}),
+      }),
+    })
+    clearTimeout(timeout)
+
+    console.log('[SIMULATE] Sidecar response status:', response.status)
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`Sidecar error: ${response.status} — ${text}`)
+    }
+    console.log('[SIMULATE] Sidecar accepted job')
+  } catch (err) {
+    clearTimeout(timeout)
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Sidecar timeout: no response from ${targetUrl} after 30 seconds`)
+    }
+    throw err
   }
 }
 
