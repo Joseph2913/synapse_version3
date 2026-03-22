@@ -48,6 +48,8 @@ interface UseSimulateReturn {
   startPersonaGeneration: (state: SimulationBuilderState) => Promise<void>
   confirmAndRun: (state: SimulationBuilderState) => Promise<void>
   resumeJob: (job: SimulationJob) => Promise<void>
+  cancelSimulation: () => Promise<void>
+  exitSimulation: () => void
   toggleAgentExclusion: (agentId: string) => void
   backToSetup: () => void
   resetBuilder: () => void
@@ -339,6 +341,34 @@ export function useSimulate(): UseSimulateReturn {
     })
   }, [])
 
+  // Cancel a running simulation — marks it as failed in Supabase and resets UI
+  const cancelSimulation = useCallback(async () => {
+    if (activeJob?.id) {
+      try {
+        await updateSimulationJobStatus(activeJob.id, {
+          status: 'failed',
+          errorMessage: 'Cancelled by user.',
+        })
+      } catch (err) {
+        console.error('[SIMULATE] Failed to cancel job in Supabase:', err)
+      }
+    }
+    setStage('idle')
+    setActiveJob(null)
+    setError(null)
+    setActiveRound(0)
+    setRoundLog([])
+  }, [activeJob])
+
+  // Exit the simulation view — go back to builder, simulation continues in background
+  const exitSimulation = useCallback(() => {
+    setStage('idle')
+    setActiveJob(null)
+    setError(null)
+    setActiveRound(0)
+    setRoundLog([])
+  }, [])
+
   const backToSetup = useCallback(() => {
     setStage('idle')
     setPersonas([])
@@ -364,6 +394,7 @@ export function useSimulate(): UseSimulateReturn {
     personas, diversity, excludedAgentIds, activeRound, roundLog,
     personaProgress,
     checkSidecar, startPersonaGeneration, confirmAndRun, resumeJob,
+    cancelSimulation, exitSimulation,
     toggleAgentExclusion, backToSetup, resetBuilder,
     setStage, setActiveJob,
   }

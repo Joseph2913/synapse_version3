@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { AlertTriangle, CheckCircle2, Loader2, Clock, Zap, Users, MessageSquare } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, Clock, Zap, Users, MessageSquare, Square, ArrowLeft } from 'lucide-react'
 import type { SimulationJob, SimulationStage } from '../../types/simulate'
 
 interface RoundLogEntry {
@@ -16,6 +16,7 @@ interface SimulationRunnerProps {
   activeRound: number
   error: string | null
   onCancel?: () => void
+  onExit?: () => void
 }
 
 // ─── Pipeline stages with descriptions ──────────────────────────────────────
@@ -52,7 +53,7 @@ function RoundIcon({ label }: { label: string }) {
 // ─── Stale warning threshold (seconds with no progress update) ──────────────
 const STALE_THRESHOLD = 90
 
-export function SimulationRunner({ job, stage, roundLog, activeRound, error }: SimulationRunnerProps) {
+export function SimulationRunner({ job, stage, roundLog, activeRound, error, onCancel, onExit }: SimulationRunnerProps) {
   // Elapsed timer
   const [elapsed, setElapsed] = useState(0)
   const startTimeRef = useRef(Date.now())
@@ -364,6 +365,44 @@ export function SimulationRunner({ job, stage, roundLog, activeRound, error }: S
         </div>
       )}
 
+      {/* ── Action buttons ──────────────────────────────────────────────── */}
+      <div className="flex items-center justify-center gap-3" style={{ marginBottom: 16 }}>
+        {onExit && (
+          <button
+            type="button"
+            onClick={onExit}
+            className="flex items-center gap-2 cursor-pointer font-body font-semibold"
+            style={{
+              fontSize: 12, padding: '8px 16px', borderRadius: 20,
+              background: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--color-text-secondary)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <ArrowLeft size={13} />
+            Exit to builder
+          </button>
+        )}
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex items-center gap-2 cursor-pointer font-body font-semibold"
+            style={{
+              fontSize: 12, padding: '8px 16px', borderRadius: 20,
+              background: 'transparent',
+              border: '1px solid #fecaca',
+              color: '#b91c1c',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Square size={11} style={{ fill: '#b91c1c' }} />
+            Stop simulation
+          </button>
+        )}
+      </div>
+
       {/* ── Footer note ────────────────────────────────────────────────── */}
       {!error && (
         <p
@@ -373,7 +412,7 @@ export function SimulationRunner({ job, stage, roundLog, activeRound, error }: S
             textAlign: 'center', margin: 0,
           }}
         >
-          You can leave this page — the simulation runs on a hosted engine and will complete in the background.
+          The simulation runs on a hosted engine. You can exit and check progress from the history panel.
         </p>
       )}
     </div>

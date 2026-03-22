@@ -316,6 +316,7 @@ export function SimulateView() {
     personas, diversity, excludedAgentIds, personaProgress,
     activeRound, roundLog,
     checkSidecar, startPersonaGeneration, confirmAndRun, resumeJob,
+    cancelSimulation, exitSimulation,
     toggleAgentExclusion, backToSetup, resetBuilder,
     setStage, setActiveJob,
   } = useSimulate()
@@ -794,6 +795,8 @@ export function SimulateView() {
                 roundLog={roundLog}
                 activeRound={activeRound}
                 error={error}
+                onCancel={cancelSimulation}
+                onExit={exitSimulation}
               />
             </div>
           )}
@@ -808,6 +811,7 @@ export function SimulateView() {
                 roundLog={roundLog}
                 activeRound={activeRound}
                 error={error}
+                onExit={exitSimulation}
               />
             </div>
           )}
