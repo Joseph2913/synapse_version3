@@ -617,11 +617,8 @@ export function SimulateView() {
           <AlertCircle size={16} style={{ color: '#d97706', flexShrink: 0, marginTop: 1 }} />
           <div>
             <p className="font-body" style={{ fontSize: 13, color: '#92400e', margin: 0 }}>
-              The simulation engine isn't running. Start it on your machine:{' '}
-              <code style={{ fontSize: 12, background: 'rgba(0,0,0,0.06)', padding: '1px 6px', borderRadius: 4 }}>
-                python run.py
-              </code>{' '}
-              in your MiroFish directory.
+              The simulation engine isn't responding. It may be starting up — Railway services can take 10–20 seconds on cold start.{' '}
+              Click <strong>Check Again</strong> to retry.
             </p>
           </div>
         </div>
