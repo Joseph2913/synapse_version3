@@ -314,6 +314,7 @@ export function SimulateView() {
   const {
     stage, activeJob, sidecarOnline, isCheckingSidecar, error,
     personas, diversity, excludedAgentIds, personaProgress,
+    activeRound, roundLog,
     checkSidecar, startPersonaGeneration, confirmAndRun, resumeJob,
     toggleAgentExclusion, backToSetup, resetBuilder,
     setStage, setActiveJob,
@@ -785,17 +786,29 @@ export function SimulateView() {
 
           {/* RUNNING SIMULATION */}
           {(stage === 'confirmed' || stage === 'running_simulation') && activeJob && (
-            <div className="flex flex-col">
+            <div className="flex flex-col" style={{ flex: 1 }}>
               <PipelineStages currentStage="running_simulation" />
-              <SimulationRunner job={activeJob} />
+              <SimulationRunner
+                job={activeJob}
+                stage={stage}
+                roundLog={roundLog}
+                activeRound={activeRound}
+                error={error}
+              />
             </div>
           )}
 
           {/* GENERATING REPORT */}
           {stage === 'generating_report' && activeJob && (
-            <div className="flex flex-col">
+            <div className="flex flex-col" style={{ flex: 1 }}>
               <PipelineStages currentStage={stage} />
-              <SimulationRunner job={activeJob} />
+              <SimulationRunner
+                job={activeJob}
+                stage={stage}
+                roundLog={roundLog}
+                activeRound={activeRound}
+                error={error}
+              />
             </div>
           )}
 
