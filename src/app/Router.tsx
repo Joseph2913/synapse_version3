@@ -8,11 +8,13 @@ import { AutomateView } from '../views/AutomateView'
 import { OrientView } from '../views/OrientView'
 import { PipelineView } from '../views/PipelineView'
 import { AnchorsView } from '../views/AnchorsView'
-import { SimulateView } from '../views/SimulateView'
+import { SkillScanView } from '../views/SkillScanView'
 import OnboardingDemoPage from '../views/OnboardingDemoPage'
+import Landing from '../pages/Landing'
 
 const router = createBrowserRouter([
-  // Standalone onboarding demo — no auth, no providers
+  // Standalone pages — no auth, no providers
+  { path: '/landing', element: <Landing /> },
   { path: '/onboarding', element: <OnboardingDemoPage /> },
   {
     element: <AppShell />,
@@ -20,13 +22,13 @@ const router = createBrowserRouter([
       { path: '/', element: <HomeView /> },
       { path: '/explore', element: <ExploreView /> },
       { path: '/ask', element: <AskView /> },
-      { path: '/simulate', element: <SimulateView /> },
       { path: '/capture', element: <CaptureView /> },
       { path: '/ingest', element: <Navigate to="/capture" replace /> },
       { path: '/automate', element: <AutomateView /> },
       { path: '/orient', element: <OrientView /> },
       { path: '/pipeline', element: <PipelineView /> },
       { path: '/anchors', element: <AnchorsView /> },
+      { path: '/skill-scan', element: <SkillScanView /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },
