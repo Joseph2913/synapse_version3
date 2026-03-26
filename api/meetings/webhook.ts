@@ -130,6 +130,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Build meeting title
     const meetingTitle = payload.name || 'Untitled Meeting';
 
+    // ─── DEDUP GUARD ─────────────────────────────────────────────────────────
+    // Skip if a meeting with the same Circleback ID or same title+date already exists
+    if (payload.id) {
+      const { data: existing } = await supabase
+        .from('knowledge_sources')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('source_type', 'Meeting')
+        .contains('metadata', { circleback_meeting_id: payload.id })
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`[meetings/webhook] Dedup: circleback_meeting_id ${payload.id} already exists (${existing.id}), skipping`);
+        return res.status(200).json({
+          success: true,
+          source_id: existing.id,
+          title: meetingTitle,
+          duplicate: true,
+          message: 'Meeting already ingested',
+        });
+      }
+    }
+
+    // Also check by title + date as fallback (catches V1 ingestions without circleback_meeting_id)
+    if (payload.createdAt) {
+      const meetingDate = new Date(payload.createdAt).toISOString().split('T')[0];
+      const { data: titleMatch } = await supabase
+        .from('knowledge_sources')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('source_type', 'Meeting')
+        .eq('title', meetingTitle)
+        .gte('created_at', meetingDate)
+        .lt('created_at', meetingDate + 'T23:59:59.999Z')
+        .maybeSingle();
+
+      if (titleMatch) {
+        console.log(`[meetings/webhook] Dedup: "${meetingTitle}" on ${meetingDate} already exists (${titleMatch.id}), skipping`);
+        return res.status(200).json({
+          success: true,
+          source_id: titleMatch.id,
+          title: meetingTitle,
+          duplicate: true,
+          message: 'Meeting already ingested (matched by title+date)',
+        });
+      }
+    }
+
     // Build transcript text
     let transcriptText = '';
     if (payload.transcript && Array.isArray(payload.transcript) && payload.transcript.length > 0) {
