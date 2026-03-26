@@ -467,6 +467,7 @@ async function extractKnowledgeForItem(
 
     // ── STEP 6: SAVE EDGES ──────────────────────────────────────────────────────
     let edgesCreated = 0;
+    let crossConnectionCount = 0;
 
     for (const rel of relationships) {
       const sourceNodeId = savedNodeMap.get(rel.source);
@@ -496,7 +497,7 @@ async function extractKnowledgeForItem(
       if (!chunk) continue;
       try {
         const embedding = await generateEmbedding(chunk);
-        await supabase.from('source_chunks').insert({
+        await supabase.from('knowledge_source_chunks').insert({
           user_id: item.user_id,
           source_id: sourceId,
           chunk_index: i,
@@ -607,6 +608,7 @@ Return an empty array if no genuine cross-source connections exist.`;
                       weight: 0.8,
                     });
                     edgesCreated++;
+                    crossConnectionCount++;
                   }
                 }
               } catch { /* ignore cross-connection parse errors */ }
@@ -643,6 +645,8 @@ Return an empty array if no genuine cross-source connections exist.`;
       selected_anchor_ids: item.linked_anchor_ids ?? [],
       entity_count: nodesCreated,
       relationship_count: edgesCreated,
+      chunk_count: chunks.length,
+      cross_connection_count: crossConnectionCount,
       extraction_duration_ms: Date.now() - itemStartTime,
     });
 

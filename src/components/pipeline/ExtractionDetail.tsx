@@ -1,9 +1,8 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { X, RefreshCw, Eye, Trash2, AlertCircle } from 'lucide-react'
 import { StarRating } from '../shared/StarRating'
 import { getEntityColor } from '../../config/entityTypes'
 import { ProviderIcon } from '../shared/ProviderIcon'
-import { fetchExtractionEnrichment } from '../../services/supabase'
 import type { PipelineHistoryItem } from '../../types/pipeline'
 
 interface ExtractionDetailProps {
@@ -29,21 +28,7 @@ function formatRelativeTime(dateStr: string): string {
 
 export function ExtractionDetail({ item, onClose, onRate, onDelete }: ExtractionDetailProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [enrichment, setEnrichment] = useState<{ chunkCount: number; crossConnections: number } | null>(null)
   const isFailed = item.status === 'failed'
-
-  // Lazy-load chunk count + cross-connection count for completed items
-  useEffect(() => {
-    if (isFailed || !item.extractedNodeIds.length) return
-    let cancelled = false
-    fetchExtractionEnrichment(item.extractedNodeIds, item.extractedEdgeIds).then(result => {
-      if (!cancelled) setEnrichment(result)
-    })
-    return () => { cancelled = true }
-  }, [item.id, item.extractedNodeIds, item.extractedEdgeIds, isFailed])
-
-  const chunkCount = enrichment?.chunkCount ?? item.chunkCount
-  const crossConnections = enrichment?.crossConnections ?? item.crossConnections
 
   const confidencePct = Math.round(item.confidence * 100)
   const confidenceColor = confidencePct > 85
@@ -139,7 +124,7 @@ export function ExtractionDetail({ item, onClose, onRate, onDelete }: Extraction
             {[
               { label: 'Entities', value: String(item.entityCount) },
               { label: 'Relationships', value: String(item.relationshipCount) },
-              { label: 'Chunks', value: enrichment ? String(chunkCount) : '...' },
+              { label: 'Chunks', value: String(item.chunkCount) },
               { label: 'Duration', value: item.duration > 0 ? `${(item.duration / 1000).toFixed(1)}s` : '—' },
             ].map(stat => (
               <div
@@ -284,17 +269,13 @@ export function ExtractionDetail({ item, onClose, onRate, onDelete }: Extraction
               style={{
                 padding: '10px 14px',
                 borderRadius: 8,
-                background: crossConnections > 0 ? 'var(--color-accent-50)' : 'var(--color-bg-inset)',
-                border: `1px solid ${crossConnections > 0 ? 'rgba(214,58,0,0.1)' : 'var(--border-subtle)'}`,
+                background: item.crossConnections > 0 ? 'var(--color-accent-50)' : 'var(--color-bg-inset)',
+                border: `1px solid ${item.crossConnections > 0 ? 'rgba(214,58,0,0.1)' : 'var(--border-subtle)'}`,
               }}
             >
-              {!enrichment ? (
-                <span className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                  Loading...
-                </span>
-              ) : crossConnections > 0 ? (
+              {item.crossConnections > 0 ? (
                 <span className="font-body" style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-accent-600, #c2410c)' }}>
-                  {crossConnections} discovered
+                  {item.crossConnections} discovered
                 </span>
               ) : (
                 <span className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>

@@ -399,6 +399,7 @@ async function processMeeting(
 
     // ── STEP 5: SAVE EDGES ──────────────────────────────────────────────────────
     let edgesCreated = 0;
+    let crossConnectionCount = 0;
 
     for (const rel of relationships) {
       const sourceNodeId = savedNodeMap.get(rel.source);
@@ -428,7 +429,7 @@ async function processMeeting(
       if (!chunk) continue;
       try {
         const embedding = await generateEmbedding(chunk);
-        await supabase.from('source_chunks').insert({
+        await supabase.from('knowledge_source_chunks').insert({
           user_id: meeting.user_id,
           source_id: meeting.id,
           chunk_index: i,
@@ -537,6 +538,7 @@ Return an empty array if no genuine cross-source connections exist.`;
                       weight: 0.8,
                     });
                     edgesCreated++;
+                    crossConnectionCount++;
                   }
                 }
               } catch { /* ignore cross-connection parse errors */ }
@@ -561,6 +563,8 @@ Return an empty array if no genuine cross-source connections exist.`;
       anchor_emphasis: anchorEmphasis,
       entity_count: nodesCreated,
       relationship_count: edgesCreated,
+      chunk_count: chunks.length,
+      cross_connection_count: crossConnectionCount,
       extraction_duration_ms: null,
     });
 

@@ -55,24 +55,46 @@ export function buildProfileContext(profile: UserProfile): string {
   return lines.join('\n')
 }
 
+export interface AnchorInput {
+  label: string
+  entity_type: string
+  description: string
+  isAuto?: boolean // auto-detected anchor
+}
+
 export function buildAnchorContext(
-  anchors: ExtractionConfig['anchors'],
+  anchors: ExtractionConfig['anchors'] | AnchorInput[],
   emphasis: ExtractionConfig['anchorEmphasis']
 ): string {
-  const anchorList = anchors
+  const manualAnchors = anchors.filter(a => !(a as AnchorInput).isAuto)
+  const autoAnchors = anchors.filter(a => (a as AnchorInput).isAuto)
+
+  const manualList = manualAnchors
     .map(a => `- ${a.label} (${a.entity_type})${a.description ? `: ${a.description}` : ''}`)
     .join('\n')
 
-  if (emphasis === 'passive') {
-    return `## Areas of Interest\nThe user has the following areas of ongoing interest. Note connections to these if they naturally exist, but do not force connections:\n${anchorList}`
+  const autoList = autoAnchors
+    .map(a => `- ${a.label} (${a.entity_type})${a.description ? `: ${a.description}` : ''}`)
+    .join('\n')
+
+  const parts: string[] = []
+
+  if (manualAnchors.length > 0) {
+    if (emphasis === 'passive') {
+      parts.push(`## Areas of Interest\nThe user has the following areas of ongoing interest. Note connections to these if they naturally exist, but do not force connections:\n${manualList}`)
+    } else if (emphasis === 'aggressive') {
+      parts.push(`## High-Priority Anchors — Active Connection Required\nThe user considers these entities critically important. For EACH anchor below, determine whether the source content has ANY connection — direct or indirect. Extract entities that serve as bridges between the content and these anchors, even if the connection requires inference:\n${manualList}`)
+    } else {
+      parts.push(`## Priority Anchors\nThe user has designated these as priority entities. Actively look for connections between the source content and these anchors. If a meaningful relationship exists, extract it with supporting evidence:\n${manualList}`)
+    }
   }
 
-  if (emphasis === 'aggressive') {
-    return `## High-Priority Anchors — Active Connection Required\nThe user considers these entities critically important. For EACH anchor below, determine whether the source content has ANY connection — direct or indirect. Extract entities that serve as bridges between the content and these anchors, even if the connection requires inference:\n${anchorList}`
+  // Auto-anchors always use passive emphasis
+  if (autoAnchors.length > 0) {
+    parts.push(`## Emerging Themes (Auto-Detected)\nThe system has detected the following emerging knowledge themes. Include connections to these naturally if they exist, but do not force them:\n${autoList}`)
   }
 
-  // standard (default)
-  return `## Priority Anchors\nThe user has designated these as priority entities. Actively look for connections between the source content and these anchors. If a meaningful relationship exists, extract it with supporting evidence:\n${anchorList}`
+  return parts.join('\n\n')
 }
 
 export function buildExtractionPrompt(config: ExtractionConfig): string {

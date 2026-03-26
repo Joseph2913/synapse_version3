@@ -194,7 +194,7 @@ export async function saveChunks(
     return row
   })
 
-  const { error } = await supabase.from('source_chunks').insert(toInsert)
+  const { error } = await supabase.from('knowledge_source_chunks').insert(toInsert)
 
   if (error) throw new PersistenceError('Failed to save chunks', error)
 }
@@ -215,6 +215,8 @@ export async function saveExtractionSession(
     extractedEdgeIds: string[]
     entityCount: number
     relationshipCount: number
+    chunkCount: number
+    crossConnectionCount: number
     durationMs: number
   }
 ): Promise<string | null> {
@@ -228,6 +230,8 @@ export async function saveExtractionSession(
       anchor_emphasis: data.anchorEmphasis,
       entity_count: data.entityCount,
       relationship_count: data.relationshipCount,
+      chunk_count: data.chunkCount,
+      cross_connection_count: data.crossConnectionCount,
       extraction_duration_ms: data.durationMs,
     }
 

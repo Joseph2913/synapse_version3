@@ -6,6 +6,7 @@ import { NeighborhoodView } from './explore/NeighborhoodView'
 import { SourceGraphView } from './explore/SourceGraphView'
 import { ExploreMetadataPanel } from './explore/ExploreMetadataPanel'
 import { EntityBrowserTab } from './explore/EntityBrowserTab'
+import { GraphTab } from '../components/explore/GraphTab'
 import { useExploreData } from '../hooks/useExploreData'
 import { useExploreFilters } from '../hooks/useExploreFilters'
 import { useEntityBrowser } from '../hooks/useEntityBrowser'
@@ -223,6 +224,10 @@ export function ExploreView() {
       ) : viewMode === 'entity-browser' ? (
         <div className="flex-1 overflow-hidden">
           <EntityBrowserTab browser={entityBrowser} />
+        </div>
+      ) : viewMode === 'graph' ? (
+        <div className="flex-1 overflow-hidden">
+          <GraphTab />
         </div>
       ) : (
 

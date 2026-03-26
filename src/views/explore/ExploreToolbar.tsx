@@ -198,8 +198,8 @@ export function ExploreToolbar({
       }}
     >
       {/* 1. Tab switcher: Anchors / Entities / Sources — pill buttons */}
-      {(['anchors', 'entity-browser', 'sources'] as const).map(mode => {
-        const labels: Record<string, string> = { anchors: 'Anchors', 'entity-browser': 'Entities', sources: 'Sources' }
+      {(['anchors', 'entity-browser', 'sources', 'graph'] as const).map(mode => {
+        const labels: Record<string, string> = { anchors: 'Anchors', 'entity-browser': 'Entities', sources: 'Sources', graph: 'Graph' }
         const isActive = viewMode === mode
         return (
           <button

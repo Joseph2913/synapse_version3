@@ -53,10 +53,10 @@ function mapSessionToItem(s: PipelineSession): PipelineHistoryItem {
     createdAt: s.created_at,
     entityCount: s.entity_count,
     relationshipCount: s.relationship_count,
-    chunkCount: 0, // Computed lazily in detail view
+    chunkCount: s.chunk_count ?? 0,
     duration: s.extraction_duration_ms ?? 0,
-    confidence: 0, // Computed lazily from nodes
-    crossConnections: 0, // Computed lazily from edges
+    confidence: 0,
+    crossConnections: s.cross_connection_count ?? 0,
     rating: s.feedback_rating,
     ratingText: s.feedback_text,
     entityBreakdown: {},

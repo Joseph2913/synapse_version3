@@ -245,6 +245,7 @@ export function useExtraction(): UseExtractionReturn {
           embeddingProgress: null,
         })
 
+        let chunkCount = 0
         try {
           const chunks = chunkSourceContent(content)
           if (chunks.length > 0) {
@@ -254,6 +255,7 @@ export function useExtraction(): UseExtractionReturn {
 
             const chunkEmbeddings = await generateEmbeddings(chunks, 5)
             await saveChunks(userId, sourceId, chunks, chunkEmbeddings)
+            chunkCount = chunks.length
           }
         } catch (chunkErr) {
           console.warn('[useExtraction] Chunking/chunk embedding failed:', chunkErr)
@@ -301,6 +303,8 @@ export function useExtraction(): UseExtractionReturn {
           extractedEdgeIds: [...savedEdgeIds, ...crossEdgeIds],
           entityCount: savedNodes.length,
           relationshipCount: savedEdgeIds.length + crossEdgeIds.length,
+          chunkCount,
+          crossConnectionCount,
           durationMs,
         })
 

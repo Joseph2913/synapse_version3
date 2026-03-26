@@ -622,7 +622,7 @@ export async function getGraphStats(userId: string): Promise<{
 }> {
   const [nodes, chunks, edges, sources] = await Promise.all([
     supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId),
-    supabase.from('source_chunks').select('id', { count: 'exact', head: true }).eq('user_id', userId).not('embedding', 'is', null),
+    supabase.from('knowledge_source_chunks').select('id', { count: 'exact', head: true }).eq('user_id', userId).not('embedding', 'is', null),
     supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('user_id', userId),
     supabase.from('knowledge_sources').select('id', { count: 'exact', head: true }).eq('user_id', userId),
   ])
@@ -692,7 +692,7 @@ export async function keywordSearchChunks(
   const orFilter = terms.map(term => `content.ilike.%${term}%`).join(',')
 
   const { data, error } = await supabase
-    .from('source_chunks')
+    .from('knowledge_source_chunks')
     .select('id, source_id, chunk_index, content')
     .eq('user_id', userId)
     .or(orFilter)
@@ -723,7 +723,7 @@ export async function fetchChunksForSources(
   const { limit = 15 } = options
 
   const { data, error } = await supabase
-    .from('source_chunks')
+    .from('knowledge_source_chunks')
     .select('id, source_id, chunk_index, content')
     .in('source_id', sourceIds)
     .order('chunk_index', { ascending: true })
@@ -1643,6 +1643,8 @@ export interface PipelineSession {
   selected_anchor_ids: string[] | null
   entity_count: number
   relationship_count: number
+  chunk_count: number
+  cross_connection_count: number
   extraction_duration_ms: number | null
   feedback_rating: number | null
   feedback_text: string | null
@@ -1650,60 +1652,6 @@ export interface PipelineSession {
   extracted_node_ids: string[] | null
   extracted_edge_ids: string[] | null
   _provider?: string | null
-}
-
-/**
- * Lazy-load chunk count + cross-connection count for a completed extraction.
- * Derives source_id from the first extracted node, then:
- *   - Counts rows in source_chunks for that source
- *   - Counts edges where one endpoint is outside the extracted node set
- */
-export async function fetchExtractionEnrichment(
-  extractedNodeIds: string[],
-  extractedEdgeIds: string[]
-): Promise<{ chunkCount: number; crossConnections: number }> {
-  if (!extractedNodeIds.length) return { chunkCount: 0, crossConnections: 0 }
-
-  try {
-    // Get source_id from the first extracted node
-    const { data: nodeData } = await supabase
-      .from('knowledge_nodes')
-      .select('source_id')
-      .in('id', extractedNodeIds.slice(0, 1))
-      .single()
-
-    let chunkCount = 0
-    if (nodeData?.source_id) {
-      const { count } = await supabase
-        .from('source_chunks')
-        .select('id', { count: 'exact', head: true })
-        .eq('source_id', nodeData.source_id)
-      chunkCount = count ?? 0
-    }
-
-    // Cross-connections: edges where one node is outside this extraction's node set
-    let crossConnections = 0
-    if (extractedEdgeIds.length > 0) {
-      const { data: edges } = await supabase
-        .from('knowledge_edges')
-        .select('source_node_id, target_node_id')
-        .in('id', extractedEdgeIds)
-
-      if (edges) {
-        const nodeIdSet = new Set(extractedNodeIds)
-        crossConnections = edges.filter(
-          e =>
-            (nodeIdSet.has(e.source_node_id) && !nodeIdSet.has(e.target_node_id)) ||
-            (!nodeIdSet.has(e.source_node_id) && nodeIdSet.has(e.target_node_id))
-        ).length
-      }
-    }
-
-    return { chunkCount, crossConnections }
-  } catch (err) {
-    console.warn('[supabase] fetchExtractionEnrichment failed:', err)
-    return { chunkCount: 0, crossConnections: 0 }
-  }
 }
 
 export async function fetchPipelineHistory(
@@ -1715,7 +1663,7 @@ export async function fetchPipelineHistory(
     const { data, error, count } = await supabase
       .from('extraction_sessions')
       .select(
-        'id, source_name, source_type, source_content_preview, extraction_mode, anchor_emphasis, user_guidance, selected_anchor_ids, entity_count, relationship_count, extraction_duration_ms, feedback_rating, feedback_text, created_at, extracted_node_ids, extracted_edge_ids',
+        'id, source_name, source_type, source_content_preview, extraction_mode, anchor_emphasis, user_guidance, selected_anchor_ids, entity_count, relationship_count, chunk_count, cross_connection_count, extraction_duration_ms, feedback_rating, feedback_text, created_at, extracted_node_ids, extracted_edge_ids',
         { count: 'exact' }
       )
       .eq('user_id', userId)
@@ -1761,6 +1709,8 @@ export async function fetchActiveQueueItems(userId: string): Promise<PipelineSes
       selected_anchor_ids: null,
       entity_count: 0,
       relationship_count: 0,
+      chunk_count: 0,
+      cross_connection_count: 0,
       extraction_duration_ms: null,
       feedback_rating: null,
       feedback_text: null,
@@ -1816,6 +1766,8 @@ export async function fetchActiveMeetingItems(userId: string): Promise<PipelineS
         selected_anchor_ids: null,
         entity_count: 0,
         relationship_count: 0,
+        chunk_count: 0,
+        cross_connection_count: 0,
         extraction_duration_ms: null,
         feedback_rating: null,
         feedback_text: null,

@@ -1,38 +1,45 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useGraphSimulation } from '../../hooks/useGraphSimulation'
-import { useGraphRenderer, type Camera } from '../../hooks/useGraphRenderer'
+import { useGraphRenderer } from '../../hooks/useGraphRenderer'
 import { useGraphInteraction } from '../../hooks/useGraphInteraction'
-import type { GraphData, GraphScope, EntityDot, SimulationNode } from '../../types/graph'
+import type { GraphLevel, SimulationNode, Camera } from '../../types/graph'
+import type { LevelData } from '../../hooks/useGraphData'
 
 const MIN_ZOOM = 0.2
 const MAX_ZOOM = 4.0
 
 interface GraphCanvasProps {
-  data: GraphData
-  scope: GraphScope
-  expandedNodeId: string | null
+  levelData: LevelData
+  level: GraphLevel
   selectedNodeId: string | null
-  expandedEntities: EntityDot[] | null
-  onClickNode: (node: SimulationNode) => void
-  onExpandNode: (nodeId: string, kind: 'source' | 'anchor') => void
+  parentAnchorColor?: string
+  onClickNode: (nodeId: string, kind: SimulationNode['kind']) => void
+  onRightClick: () => void
   onClickEmpty: () => void
+  onHoverNode: (nodeId: string | null) => void
 }
 
 export function GraphCanvas({
-  data,
-  scope,
-  expandedNodeId,
+  levelData,
+  level,
   selectedNodeId,
-  expandedEntities,
+  parentAnchorColor,
   onClickNode,
-  onExpandNode,
+  onRightClick,
   onClickEmpty,
+  onHoverNode,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [dims, setDims] = useState({ width: 0, height: 0 })
   const hoveredNodeIdRef = useRef<string | null>(null)
   const cameraRef = useRef<Camera>({ zoom: 1, panX: 0, panY: 0 })
+  const wasDraggingRef = useRef(false)
+
+  // Reset camera on level change
+  useEffect(() => {
+    cameraRef.current = { zoom: 1, panX: 0, panY: 0 }
+  }, [level])
 
   // Measure container
   useEffect(() => {
@@ -50,7 +57,7 @@ export function GraphCanvas({
     return () => obs.disconnect()
   }, [])
 
-  const { nodesRef, edgesRef, tick } = useGraphSimulation(data, scope, dims.width, dims.height)
+  const { nodesRef, edgesRef, tick } = useGraphSimulation(levelData, dims.width, dims.height)
 
   useGraphRenderer(
     canvasRef,
@@ -58,36 +65,27 @@ export function GraphCanvas({
     edgesRef,
     hoveredNodeIdRef,
     selectedNodeId,
-    expandedNodeId,
-    expandedEntities,
+    level,
     dims.width,
     dims.height,
     tick,
-    cameraRef
+    cameraRef,
+    parentAnchorColor
   )
-
-  const handleClick = useCallback((nodeId: string) => {
-    const node = nodesRef.current.find(n => n.id === nodeId)
-    if (node) onClickNode(node)
-  }, [nodesRef, onClickNode])
-
-  const handleDoubleClick = useCallback((nodeId: string) => {
-    const node = nodesRef.current.find(n => n.id === nodeId)
-    if (node) onExpandNode(nodeId, node.kind)
-  }, [nodesRef, onExpandNode])
 
   useGraphInteraction(
     canvasRef,
     nodesRef,
     hoveredNodeIdRef,
     cameraRef,
-    () => {},
-    handleClick,
-    handleDoubleClick,
+    wasDraggingRef,
+    onHoverNode,
+    onClickNode,
+    onRightClick,
     onClickEmpty
   )
 
-  // ── Wheel zoom ──────────────────────────────────────────────────────────────
+  // Wheel zoom
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -102,7 +100,6 @@ export function GraphCanvas({
       const cam = cameraRef.current
       const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cam.zoom * factor))
 
-      // Zoom around cursor: keep world-point under cursor fixed
       cameraRef.current = {
         zoom: newZoom,
         panX: mouseX - (mouseX - cam.panX) * (newZoom / cam.zoom),
@@ -112,48 +109,81 @@ export function GraphCanvas({
 
     canvas.addEventListener('wheel', handleWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', handleWheel)
-  }, [dims]) // re-attach when dims change (canvas element stays same)
+  }, [dims])
 
-  // ── Drag-to-pan ─────────────────────────────────────────────────────────────
+  // Drag: pan canvas (empty space) or drag individual nodes
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    let dragging = false
+    let mode: 'none' | 'pan' | 'node' = 'none'
     let startX = 0
     let startY = 0
     let startPanX = 0
     let startPanY = 0
-    let didDrag = false
+    let draggedNode: SimulationNode | null = null
+
+    const toWorld = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      const { zoom, panX, panY } = cameraRef.current
+      return { wx: (sx - panX) / zoom, wy: (sy - panY) / zoom }
+    }
 
     const handleMouseDown = (e: MouseEvent) => {
-      // Only pan when clicking empty space (no node hovered)
-      if (hoveredNodeIdRef.current) return
-      dragging = true
-      didDrag = false
       startX = e.clientX
       startY = e.clientY
+      wasDraggingRef.current = false
+
+      // Check if hovering a node — start node drag
+      if (hoveredNodeIdRef.current) {
+        const node = nodesRef.current.find(n => n.id === hoveredNodeIdRef.current)
+        if (node) {
+          mode = 'node'
+          draggedNode = node
+          node.vx = 0
+          node.vy = 0
+          canvas.style.cursor = 'grabbing'
+          return
+        }
+      }
+
+      // Otherwise pan the canvas
+      mode = 'pan'
       startPanX = cameraRef.current.panX
       startPanY = cameraRef.current.panY
       canvas.style.cursor = 'grab'
     }
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!dragging) return
+      if (mode === 'none') return
       const dx = e.clientX - startX
       const dy = e.clientY - startY
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true
-      cameraRef.current = {
-        ...cameraRef.current,
-        panX: startPanX + dx,
-        panY: startPanY + dy,
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        wasDraggingRef.current = true
+      }
+
+      if (mode === 'pan') {
+        cameraRef.current = {
+          ...cameraRef.current,
+          panX: startPanX + dx,
+          panY: startPanY + dy,
+        }
+      } else if (mode === 'node' && draggedNode) {
+        const { wx, wy } = toWorld(e)
+        draggedNode.x = wx
+        draggedNode.y = wy
+        draggedNode.vx = 0
+        draggedNode.vy = 0
       }
     }
 
     const handleMouseUp = () => {
-      if (dragging) {
-        dragging = false
-        canvas.style.cursor = didDrag ? 'default' : 'default'
+      if (mode !== 'none') {
+        mode = 'none'
+        draggedNode = null
+        canvas.style.cursor = hoveredNodeIdRef.current ? 'pointer' : 'default'
       }
     }
 
@@ -166,9 +196,9 @@ export function GraphCanvas({
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [dims])
+  }, [dims, nodesRef])
 
-  // ── Zoom control helpers ─────────────────────────────────────────────────────
+  // Zoom controls
   const zoomIn = useCallback(() => {
     const cam = cameraRef.current
     const cx = dims.width / 2
@@ -204,7 +234,7 @@ export function GraphCanvas({
         style={{ display: 'block', width: dims.width, height: dims.height }}
       />
 
-      {/* Zoom controls — bottom-right overlay */}
+      {/* Zoom controls */}
       <div
         style={{
           position: 'absolute',
@@ -218,8 +248,8 @@ export function GraphCanvas({
       >
         {[
           { label: '+', title: 'Zoom in', action: zoomIn },
-          { label: '−', title: 'Zoom out', action: zoomOut },
-          { label: '⊙', title: 'Reset zoom', action: resetZoom },
+          { label: '\u2212', title: 'Zoom out', action: zoomOut },
+          { label: '\u2299', title: 'Reset zoom', action: resetZoom },
         ].map(({ label, title, action }) => (
           <button
             key={label}
