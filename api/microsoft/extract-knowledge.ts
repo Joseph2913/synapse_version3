@@ -31,6 +31,46 @@ interface QueueItem {
   attendees: string | null;
 }
 
+// ─── PARTICIPANT PARSER (inlined — serverless cannot import local files) ──────
+
+function toTitleCase(name: string): string {
+  return name.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+
+function parseMeetingParticipants(content: string, attendeesJson: string | null): string[] | null {
+  // Strategy 1: Parse from content header
+  if (content) {
+    const lines = content.split('\n').slice(0, 30);
+    for (const line of lines) {
+      const match = line.match(/^\*\*(?:People|Participants|Attendees)\*\*:\s*(.+)$/i);
+      if (!match?.[1]) continue;
+      const raw = match[1].trim();
+      if (!raw) continue;
+      const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+      const result: string[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i] ?? '';
+        if (i === parts.length - 1 && /\band\b/i.test(part)) {
+          result.push(...part.split(/\band\b/i).map(s => s.trim()).filter(Boolean).map(toTitleCase));
+        } else {
+          result.push(toTitleCase(part));
+        }
+      }
+      if (result.length > 0) return [...new Set(result)];
+    }
+  }
+  // Strategy 2: Fall back to attendees from queue metadata
+  if (attendeesJson) {
+    try {
+      const attendees = JSON.parse(attendeesJson) as string[];
+      if (Array.isArray(attendees) && attendees.length > 0) {
+        return [...new Set(attendees.map(a => toTitleCase(String(a))))];
+      }
+    } catch { /* ignore parse errors */ }
+  }
+  return null;
+}
+
 interface ExtractionResult {
   entities: Array<{
     label: string;
@@ -247,23 +287,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const sourceType = item.resource_type === 'meeting_transcript' || item.resource_type === 'calendar_event'
           ? 'Meeting' : 'Research';
 
+        // Parse participants for meeting sources
+        const participants = sourceType === 'Meeting'
+          ? parseMeetingParticipants(item.content, item.attendees)
+          : null;
+
         // Save knowledge source
+        const insertRow: Record<string, unknown> = {
+          user_id: item.user_id,
+          title: item.title || 'Microsoft 365 Import',
+          content: item.content.slice(0, 50000),
+          source_type: sourceType,
+          metadata: {
+            provider: 'microsoft',
+            resource_type: item.resource_type,
+            microsoft_resource_id: item.microsoft_resource_id,
+            event_start: item.event_start,
+            event_end: item.event_end,
+            attendees: item.attendees ? JSON.parse(item.attendees) : null,
+          },
+        };
+        if (participants) {
+          insertRow.participants = participants;
+        }
+
         const { data: source } = await supabase
           .from('knowledge_sources')
-          .insert({
-            user_id: item.user_id,
-            title: item.title || 'Microsoft 365 Import',
-            content: item.content.slice(0, 50000),
-            source_type: sourceType,
-            metadata: {
-              provider: 'microsoft',
-              resource_type: item.resource_type,
-              microsoft_resource_id: item.microsoft_resource_id,
-              event_start: item.event_start,
-              event_end: item.event_end,
-              attendees: item.attendees ? JSON.parse(item.attendees) : null,
-            },
-          })
+          .insert(insertRow)
           .select('id')
           .single();
 

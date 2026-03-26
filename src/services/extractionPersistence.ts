@@ -5,6 +5,7 @@ import type {
   SourceMetadata,
   ExtractedRelationship,
 } from '../types/extraction'
+import { parseParticipants } from '../utils/parseParticipants'
 
 // --- Custom Error ---
 
@@ -49,18 +50,28 @@ export async function saveSource(
   content: string,
   metadata: SourceMetadata
 ): Promise<string> {
+  const row: Record<string, unknown> = {
+    user_id: userId,
+    title: metadata.title || deriveTitle(content),
+    content,
+    source_type: metadata.sourceType,
+    source_url: metadata.sourceUrl || null,
+    metadata: {
+      ingested_via: 'quick_capture',
+    },
+  }
+
+  // Parse participants for meeting sources
+  if (metadata.sourceType === 'Meeting') {
+    const participants = parseParticipants(content)
+    if (participants) {
+      row.participants = participants
+    }
+  }
+
   const { data, error } = await supabase
     .from('knowledge_sources')
-    .insert({
-      user_id: userId,
-      title: metadata.title || deriveTitle(content),
-      content,
-      source_type: metadata.sourceType,
-      source_url: metadata.sourceUrl || null,
-      metadata: {
-        ingested_via: 'quick_capture',
-      },
-    })
+    .insert(row)
     .select('id')
     .single()
 

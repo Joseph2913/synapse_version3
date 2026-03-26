@@ -61,6 +61,40 @@ function formatActionItems(
   );
 }
 
+// ─── PARTICIPANT PARSER (inlined — serverless cannot import local files) ──────
+
+function toTitleCase(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function parseParticipants(content: string): string[] | null {
+  if (!content) return null;
+  const lines = content.split('\n').slice(0, 30);
+  for (const line of lines) {
+    const match = line.match(/^\*\*(?:People|Participants|Attendees)\*\*:\s*(.+)$/i);
+    if (!match?.[1]) continue;
+    const raw = match[1].trim();
+    if (!raw) continue;
+    const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+    const result: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (i === parts.length - 1 && /\band\b/i.test(part)) {
+        const subParts = part.split(/\band\b/i).map(s => s.trim()).filter(Boolean);
+        result.push(...subParts.map(toTitleCase));
+      } else {
+        result.push(toTitleCase(part));
+      }
+    }
+    return result.length > 0 ? result : null;
+  }
+  return null;
+}
+
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -138,17 +172,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       received_at: new Date().toISOString(),
     };
 
+    // Parse participants from content header, falling back to payload attendees
+    const participants = parseParticipants(fullContent) ??
+      (attendeeNames.length > 0
+        ? [...new Set(attendeeNames.map(n => toTitleCase(n)))]
+        : null);
+
     // Save to knowledge_sources
+    const insertRow: Record<string, unknown> = {
+      user_id: uid,
+      title: meetingTitle,
+      source_type: 'Meeting',
+      source_url: payload.url ?? null,
+      content: fullContent.slice(0, 100_000),
+      metadata,
+    };
+    if (participants) {
+      insertRow.participants = participants;
+    }
+
     const { data: sourceData, error: sourceError } = await supabase
       .from('knowledge_sources')
-      .insert({
-        user_id: uid,
-        title: meetingTitle,
-        source_type: 'Meeting',
-        source_url: payload.url ?? null,
-        content: fullContent.slice(0, 100_000),
-        metadata,
-      })
+      .insert(insertRow)
       .select('id')
       .single();
 
