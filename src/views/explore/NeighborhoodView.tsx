@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
-import { EntityDot } from '../../components/explore/EntityDot'
 import { NodeTooltip } from '../../components/explore/NodeTooltip'
-import { useEntityLayout, type EntityPosition } from '../../hooks/useEntityLayout'
+import { EntityDetailCard } from '../../components/explore/EntityDetailCard'
+import { useEntityLayout } from '../../hooks/useEntityLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchClusterEntities, fetchEntityEdges } from '../../services/exploreQueries'
-import { getEntityColor } from '../../config/entityTypes'
+import { getEntityColor, ENTITY_TYPE_COLORS } from '../../config/entityTypes'
 import type { ClusterData, EntityNode, ExploreFilters } from '../../types/explore'
 import type { EntityEdge } from '../../services/exploreQueries'
 import type { TooltipData } from '../../components/explore/NodeTooltip'
@@ -19,17 +19,30 @@ interface NeighborhoodViewProps {
   selectedEntityId: string | null
   onSelectEntity: (entity: EntityNode | null) => void
   onBack: () => void
-  onAutoBack?: () => void
   onEntitiesLoaded?: (entities: EntityNode[]) => void
   onEdgesLoaded?: (edges: EntityEdge[]) => void
+  onNavigateToEntityBrowser?: (searchQuery: string) => void
 }
 
-const HUB_CONNECTION_THRESHOLD = 7
 const MIN_ZOOM = 0.2
 const MAX_ZOOM = 4.0
-const AUTO_BACK_ZOOM = 0.35
 
 interface Camera { zoom: number; panX: number; panY: number }
+
+// Live node positions for floating + drag — mirrors LandscapeView's LiveNode
+interface LiveNode {
+  id: string
+  x: number
+  y: number
+  vx: number
+  vy: number
+  radius: number
+  floatPhase: number
+  floatSpeedX: number
+  floatSpeedY: number
+  floatAmpX: number
+  floatAmpY: number
+}
 
 export function NeighborhoodView({
   cluster,
@@ -40,9 +53,9 @@ export function NeighborhoodView({
   selectedEntityId,
   onSelectEntity,
   onBack,
-  onAutoBack,
   onEntitiesLoaded,
   onEdgesLoaded,
+  onNavigateToEntityBrowser,
 }: NeighborhoodViewProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -60,7 +73,12 @@ export function NeighborhoodView({
   const [edges, setEdges] = useState<EntityEdge[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Synthetic co-source edges — hub-and-spoke per source document (needed before layout)
+  // PRD-23: Parent mode — show sub-anchor entities
+  const isParentMode = cluster.subAnchorIds.length > 0
+  const [activeSubAnchorId, setActiveSubAnchorId] = useState<string | null>(null)
+  useEffect(() => { setActiveSubAnchorId(null) }, [cluster.anchor.id])
+
+  // Synthetic co-source edges
   const coSourceEdgesForLayout = useMemo((): EntityEdge[] => {
     const bySource = new Map<string, EntityNode[]>()
     for (const e of entities) {
@@ -81,7 +99,7 @@ export function NeighborhoodView({
     return result
   }, [entities])
 
-  // Synthetic co-tag edges — hub-and-spoke per shared tag (skip tags shared by too many to avoid noise)
+  // Synthetic co-tag edges
   const coTagEdgesForLayout = useMemo((): EntityEdge[] => {
     const byTag = new Map<string, EntityNode[]>()
     for (const e of entities) {
@@ -107,28 +125,189 @@ export function NeighborhoodView({
     [edges, coSourceEdgesForLayout, coTagEdgesForLayout]
   )
 
-  // Draggable positions — live state so drag updates trigger re-render
-  // Uses allEdgesForLayout (real + co-source) so co-source entities attract each other
+  // Static layout (initial positions from force simulation)
   const layoutPositions = useEntityLayout(entities, allEdgesForLayout, size.width, size.height)
-  const [nodePositions, setNodePositions] = useState<Map<string, EntityPosition>>(new Map())
-  useEffect(() => { setNodePositions(layoutPositions) }, [layoutPositions])
 
-  // Ref so drag handler never has stale allEdgesForLayout
-  const allEdgesForLayoutRef = useRef(allEdgesForLayout)
-  useEffect(() => { allEdgesForLayoutRef.current = allEdgesForLayout }, [allEdgesForLayout])
+  // Hovered entity
+  const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null)
 
-  // Drag & pan refs (no state to avoid re-renders on every frame)
-  const dragNodeRef = useRef<{ id: string } | null>(null)
-  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
-  const hasDraggedRef = useRef(false)
-  const hasAutoBackedRef = useRef(false)
-
-  // Tooltip state
+  // Tooltip
   const [tooltip, setTooltip] = useState<{ data: TooltipData; x: number; y: number } | null>(null)
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Hovered entity (for edge highlighting)
-  const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null)
+  // Pan drag ref
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  const hasDraggedRef = useRef(false)
+
+  // ── Live floating positions (mirrors LandscapeView) ────────────────────────
+  const liveNodesRef = useRef<LiveNode[]>([])
+  const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
+  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
+  const rafRef = useRef<number>(0)
+
+  // Compute node radii per spec Section 3 (connection count based)
+  const nodeRadii = useMemo(() => {
+    const maxConn = Math.max(...entities.map(e => e.connectionCount), 1)
+    const minR = 6
+    const maxR = Math.min(size.width, size.height) * 0.025
+    const radii = new Map<string, number>()
+    for (const entity of entities) {
+      const isAnchor = entity.isAnchor && entity.clusters.includes(cluster.anchor.id)
+      let r = minR + Math.sqrt(entity.connectionCount / maxConn) * (maxR - minR)
+      if (isAnchor) r *= 1.5 // Anchor entity renders 1.5× larger
+      radii.set(entity.id, r)
+    }
+    return radii
+  }, [entities, size.width, size.height, cluster.anchor.id])
+
+  // Connectivity map for directional drag drift
+  const connectivityRef = useRef(new Map<string, Map<string, number>>())
+  useEffect(() => {
+    const map = new Map<string, Map<string, number>>()
+    const addLink = (a: string, b: string, weight: number) => {
+      if (!map.has(a)) map.set(a, new Map())
+      if (!map.has(b)) map.set(b, new Map())
+      const existing = map.get(a)!.get(b) ?? 0
+      if (weight > existing) {
+        map.get(a)!.set(b, weight)
+        map.get(b)!.set(a, weight)
+      }
+    }
+    const maxWeight = Math.max(...edges.map(e => e.weight ?? 1), 1)
+    for (const e of edges) {
+      addLink(e.sourceNodeId, e.targetNodeId, Math.min((e.weight ?? 1) / maxWeight, 1))
+    }
+    connectivityRef.current = map
+  }, [edges])
+
+  // Initialize live nodes when layout changes
+  useEffect(() => {
+    if (layoutPositions.size === 0) return
+    liveNodesRef.current = Array.from(layoutPositions.entries()).map(([id, pos]) => ({
+      id,
+      x: pos.x,
+      y: pos.y,
+      vx: 0,
+      vy: 0,
+      radius: nodeRadii.get(id) ?? pos.radius,
+      floatPhase: Math.random() * Math.PI * 2,
+      floatSpeedX: 0.25 + Math.random() * 0.35,
+      floatSpeedY: 0.18 + Math.random() * 0.25,
+      floatAmpX: 0.12 + Math.random() * 0.2,
+      floatAmpY: 0.1 + Math.random() * 0.16,
+    }))
+  }, [layoutPositions, nodeRadii])
+
+  // Animation loop — drag drift + boundary push (no auto-floating)
+  useEffect(() => {
+    const tick = () => {
+      const nodes = liveNodesRef.current
+      if (nodes.length === 0) { rafRef.current = requestAnimationFrame(tick); return }
+
+      const w = sizeRef.current.width
+      const h = sizeRef.current.height
+
+      const nodeMap = new Map<string, LiveNode>()
+      for (const n of nodes) nodeMap.set(n.id, n)
+
+      // Directional drag drift — subtle, matching anchor landscape view
+      if (dragRef.current && dragPrevPos.current) {
+        const dragNode = nodeMap.get(dragRef.current.id)
+        if (dragNode) {
+          const moveDx = dragNode.x - dragPrevPos.current.x
+          const moveDy = dragNode.y - dragPrevPos.current.y
+          if (Math.abs(moveDx) > 0.1 || Math.abs(moveDy) > 0.1) {
+            const connections = connectivityRef.current.get(dragRef.current.id)
+            if (connections) {
+              for (const [connId, weight] of connections) {
+                const connNode = nodeMap.get(connId)
+                if (!connNode) continue
+                const strength = 0.0005 + weight * 0.004
+                connNode.vx += moveDx * strength
+                connNode.vy += moveDy * strength
+              }
+            }
+          }
+          dragPrevPos.current = { x: dragNode.x, y: dragNode.y }
+        }
+      }
+
+      for (const n of nodes) {
+        if (dragRef.current?.id === n.id) {
+          n.vx = 0
+          n.vy = 0
+          continue
+        }
+
+        // Boundary soft push
+        const pad = 30
+        if (n.x < pad) n.vx += (pad - n.x) * 0.01
+        if (n.x > w - pad) n.vx -= (n.x - (w - pad)) * 0.01
+        if (n.y < pad) n.vy += (pad - n.y) * 0.01
+        if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
+
+        // Damping
+        n.vx *= 0.97
+        n.vy *= 0.97
+
+        n.x += n.vx
+        n.y += n.vy
+      }
+
+      const newPos = new Map<string, { x: number; y: number }>()
+      for (const n of nodes) newPos.set(n.id, { x: n.x, y: n.y })
+      setLivePositions(newPos)
+
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // ── Node dragging — spec Section 8: only the dragged node moves ────────────
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
+    e.stopPropagation()
+    hasDraggedRef.current = false
+    const cam = cameraRef.current
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    const worldX = (e.clientX - rect.left - cam.panX) / cam.zoom
+    const worldY = (e.clientY - rect.top - cam.panY) / cam.zoom
+    const node = liveNodesRef.current.find(n => n.id === nodeId)
+    if (!node) return
+
+    dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
+    dragPrevPos.current = { x: node.x, y: node.y }
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current || !svgRef.current) return
+      hasDraggedRef.current = true
+      const cam2 = cameraRef.current
+      const r2 = svgRef.current.getBoundingClientRect()
+      const wx = (ev.clientX - r2.left - cam2.panX) / cam2.zoom
+      const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
+      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
+      if (n) {
+        n.x = wx - dragRef.current.offsetX
+        n.y = wy - dragRef.current.offsetY
+      }
+    }
+
+    const onUp = () => {
+      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current?.id)
+      if (n) { n.vx = 0; n.vy = 0 }
+      dragRef.current = null
+      dragPrevPos.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
 
   // ResizeObserver
   useEffect(() => {
@@ -154,7 +333,8 @@ export function NeighborhoodView({
 
     async function load() {
       try {
-        const entityData = await fetchClusterEntities(user!.id, cluster.anchor.id, allClusters)
+        const subIds = isParentMode ? cluster.subAnchorIds : []
+        const entityData = await fetchClusterEntities(user!.id, cluster.anchor.id, allClusters, subIds)
         if (cancelled) return
         setEntities(entityData)
         onEntitiesLoaded?.(entityData)
@@ -174,22 +354,14 @@ export function NeighborhoodView({
     return () => { cancelled = true }
   }, [user, cluster.anchor.id, allClusters, onEntitiesLoaded, onEdgesLoaded])
 
-  // Anchor entity — the cluster's own anchor in the entities list
-  const anchorEntity = useMemo(
-    () => entities.find(e => e.isAnchor && e.clusters.includes(cluster.anchor.id)),
-    [entities, cluster.anchor.id]
-  )
-
-  // Peripheral entities (belong to other clusters)
-  const peripheralIds = useMemo(() => {
-    const set = new Set<string>()
-    for (const e of entities) {
-      if (e.clusters.length > 0 && !e.clusters.includes(cluster.anchor.id)) {
-        set.add(e.id)
-      }
-    }
-    return set
-  }, [entities, cluster.anchor.id])
+  // PRD-23: Filtered entities for display (sub-anchor filter in parent mode)
+  const displayEntities = useMemo(() => {
+    if (!isParentMode || !activeSubAnchorId) return entities
+    return entities.filter(e =>
+      e.originAnchorId === activeSubAnchorId ||
+      e.originAnchorId === cluster.anchor.id
+    )
+  }, [entities, isParentMode, activeSubAnchorId, cluster.anchor.id])
 
   // Edge map keyed by node id
   const edgesForNode = useMemo(() => {
@@ -203,7 +375,7 @@ export function NeighborhoodView({
     return map
   }, [edges])
 
-  // Entities connected to the selected node (for dimming non-connected)
+  // Entities connected to selected
   const connectedToSelected = useMemo(() => {
     if (!selectedEntityId) return null
     const set = new Set<string>([selectedEntityId])
@@ -222,21 +394,6 @@ export function NeighborhoodView({
     return true
   }, [filters])
 
-  // Boundary radius uses static layout (stays stable while dragging nodes)
-  const boundaryRadius = useMemo(() => {
-    if (layoutPositions.size === 0) return 0
-    let maxDist = 0
-    const cx = size.width / 2
-    const cy = size.height / 2
-    for (const [, pos] of layoutPositions) {
-      const dx = pos.x - cx
-      const dy = pos.y - cy
-      const dist = Math.sqrt(dx * dx + dy * dy) + pos.radius
-      if (dist > maxDist) maxDist = dist
-    }
-    return maxDist + 30
-  }, [layoutPositions, size])
-
   // Visible edges
   const visibleEdges = useMemo(() => {
     if (showEdges) return edges
@@ -246,7 +403,6 @@ export function NeighborhoodView({
   }, [showEdges, hoveredEntityId, selectedEntityId, edges, edgesForNode])
 
   // ── Camera helpers ────────────────────────────────────────────────────────
-
   const zoomAround = useCallback((factor: number, cx: number, cy: number) => {
     setCamera(prev => {
       const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor))
@@ -270,11 +426,20 @@ export function NeighborhoodView({
     setCamera({ zoom: 1, panX: 0, panY: 0 })
   }, [])
 
-  // Stable ref for onAutoBack — avoids stale closure in wheel effect with [] deps
-  const onAutoBackRef = useRef(onAutoBack)
-  useEffect(() => { onAutoBackRef.current = onAutoBack }, [onAutoBack])
+  const resetNodes = useCallback(() => {
+    if (layoutPositions.size === 0) return
+    for (const n of liveNodesRef.current) {
+      const orig = layoutPositions.get(n.id)
+      if (orig) {
+        n.x = orig.x
+        n.y = orig.y
+        n.vx = 0
+        n.vy = 0
+      }
+    }
+  }, [layoutPositions])
 
-  // Wheel zoom (non-passive; attached to containerRef which is always mounted)
+  // Wheel zoom
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -287,13 +452,8 @@ export function NeighborhoodView({
       const sy = e.clientY - rect.top
 
       if (e.ctrlKey) {
-        // Trackpad pinch or Ctrl+scroll → zoom around cursor
         setCamera(prev => {
           const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * (1 - e.deltaY * 0.01)))
-          if (onAutoBackRef.current && newZoom <= AUTO_BACK_ZOOM && prev.zoom > AUTO_BACK_ZOOM && !hasAutoBackedRef.current) {
-            hasAutoBackedRef.current = true
-            setTimeout(() => onAutoBackRef.current?.(), 0)
-          }
           return {
             zoom: newZoom,
             panX: sx - (sx - prev.panX) / prev.zoom * newZoom,
@@ -301,21 +461,15 @@ export function NeighborhoodView({
           }
         })
       } else if (Math.abs(e.deltaX) > 2) {
-        // Trackpad two-finger horizontal swipe → pan
         setCamera(prev => ({
           ...prev,
           panX: prev.panX - e.deltaX,
           panY: prev.panY - e.deltaY,
         }))
       } else {
-        // Mouse scroll wheel → zoom around cursor
         setCamera(prev => {
           const factor = e.deltaY < 0 ? 1.12 : 0.9
           const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor))
-          if (onAutoBackRef.current && newZoom <= AUTO_BACK_ZOOM && prev.zoom > AUTO_BACK_ZOOM && !hasAutoBackedRef.current) {
-            hasAutoBackedRef.current = true
-            setTimeout(() => onAutoBackRef.current?.(), 0)
-          }
           return {
             zoom: newZoom,
             panX: sx - (sx - prev.panX) / prev.zoom * newZoom,
@@ -328,7 +482,7 @@ export function NeighborhoodView({
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
-  // Keyboard zoom: +/= to zoom in, -/_ to zoom out, 0 to reset
+  // Keyboard zoom
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
@@ -336,85 +490,32 @@ export function NeighborhoodView({
       if (e.key === '+' || e.key === '=') { zoomIn(); e.preventDefault() }
       else if (e.key === '-' || e.key === '_') { zoomOut(); e.preventDefault() }
       else if (e.key === '0') { resetCamera(); e.preventDefault() }
+      else if (e.key === 'r' || e.key === 'R') { resetNodes(); e.preventDefault() }
+      else if (e.key === 'Escape') { onSelectEntity(null) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoomIn, zoomOut, resetCamera])
+  }, [zoomIn, zoomOut, resetCamera, resetNodes, onSelectEntity])
 
   // ── SVG interaction ───────────────────────────────────────────────────────
-
-  const toWorldPos = (clientX: number, clientY: number) => {
-    const rect = containerRef.current!.getBoundingClientRect()
-    const cam = cameraRef.current
-    return {
-      wx: (clientX - rect.left - cam.panX) / cam.zoom,
-      wy: (clientY - rect.top - cam.panY) / cam.zoom,
-    }
-  }
-
-  const hitTestEntity = (wx: number, wy: number): EntityNode | null => {
-    for (let i = entities.length - 1; i >= 0; i--) {
-      const entity = entities[i]!
-      const pos = nodePositions.get(entity.id)
-      if (!pos) continue
-      const dx = wx - pos.x
-      const dy = wy - pos.y
-      if (Math.sqrt(dx * dx + dy * dy) < pos.radius + 8) return entity
-    }
-    return null
-  }
-
   const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (e.target !== e.currentTarget) return
     hasDraggedRef.current = false
-    const { wx, wy } = toWorldPos(e.clientX, e.clientY)
-    const hit = hitTestEntity(wx, wy)
-
-    if (hit) {
-      dragNodeRef.current = { id: hit.id }
-      if (svgRef.current) svgRef.current.style.cursor = 'grabbing'
-    } else {
-      const cam = cameraRef.current
-      panStartRef.current = { x: e.clientX, y: e.clientY, panX: cam.panX, panY: cam.panY }
-      if (svgRef.current) svgRef.current.style.cursor = 'grab'
-    }
+    const cam = cameraRef.current
+    panStartRef.current = { x: e.clientX, y: e.clientY, panX: cam.panX, panY: cam.panY }
+    if (svgRef.current) svgRef.current.style.cursor = 'grab'
   }
 
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (dragNodeRef.current) {
-      const { wx, wy } = toWorldPos(e.clientX, e.clientY)
-      const id = dragNodeRef.current.id
-      setNodePositions(prev => {
-        const old = prev.get(id)
-        if (!old) return prev
-        const dx = wx - old.x
-        const dy = wy - old.y
-        const next = new Map(prev)
-        next.set(id, { ...old, x: wx, y: wy })
-        // Spring: pull connected nodes toward the dragged node
-        for (const edge of allEdgesForLayoutRef.current) {
-          if (edge.sourceNodeId !== id && edge.targetNodeId !== id) continue
-          const otherId = edge.sourceNodeId === id ? edge.targetNodeId : edge.sourceNodeId
-          const other = next.get(otherId)
-          if (!other) continue
-          const k = edge.relationType === 'co-source' ? 0.08
-                   : edge.relationType === 'co-tag'    ? 0.05
-                   : 0.15 // knowledge edge
-          next.set(otherId, { ...other, x: other.x + dx * k, y: other.y + dy * k })
-        }
-        return next
-      })
-      hasDraggedRef.current = true
-    } else if (panStartRef.current) {
-      const dx = e.clientX - panStartRef.current.x
-      const dy = e.clientY - panStartRef.current.y
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) hasDraggedRef.current = true
-      const { panX: startPanX, panY: startPanY } = panStartRef.current
-      setCamera(prev => ({ ...prev, panX: startPanX + dx, panY: startPanY + dy }))
-    }
+    const start = panStartRef.current
+    if (!start) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) hasDraggedRef.current = true
+    setCamera(prev => ({ ...prev, panX: start.panX + dx, panY: start.panY + dy }))
   }
 
   const handleSvgMouseUp = () => {
-    dragNodeRef.current = null
     panStartRef.current = null
     if (svgRef.current) svgRef.current.style.cursor = 'default'
   }
@@ -422,14 +523,13 @@ export function NeighborhoodView({
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.target === e.currentTarget && !hasDraggedRef.current) {
       onSelectEntity(null)
+      setExploringEntityId(null)
     }
-    hasDraggedRef.current = false
   }
 
   // ── Entity event handlers ─────────────────────────────────────────────────
-
   const handleEntityHover = useCallback((entity: EntityNode | null, event: React.MouseEvent) => {
-    if (dragNodeRef.current) return  // suppress during drag
+    if (dragRef.current) return
     if (tooltipTimerRef.current) {
       clearTimeout(tooltipTimerRef.current)
       tooltipTimerRef.current = null
@@ -450,8 +550,10 @@ export function NeighborhoodView({
   }, [])
 
   const handleEntityClick = useCallback((entity: EntityNode) => {
-    if (hasDraggedRef.current) return  // was a drag, not a click
-    onSelectEntity(selectedEntityId === entity.id ? null : entity)
+    if (hasDraggedRef.current) return
+    const deselecting = selectedEntityId === entity.id
+    onSelectEntity(deselecting ? null : entity)
+    setExploringEntityId(deselecting ? null : entity.id)
   }, [onSelectEntity, selectedEntityId])
 
   useEffect(() => {
@@ -459,6 +561,30 @@ export function NeighborhoodView({
       if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
     }
   }, [])
+
+  // ── Selected entity for info card ─────────────────────────────────────────
+  const selectedEntity = useMemo(
+    () => selectedEntityId ? entities.find(e => e.id === selectedEntityId) ?? null : null,
+    [selectedEntityId, entities]
+  )
+
+  // ── Detail panel state ──────────────────────────────────────────────────────
+  const [exploringEntityId, setExploringEntityId] = useState<string | null>(null)
+  const exploringEntity = useMemo(
+    () => exploringEntityId ? entities.find(e => e.id === exploringEntityId) ?? null : null,
+    [exploringEntityId, entities]
+  )
+
+  // ── Legend: entity types present in this cluster ────────────────────────────
+  const legendItems = useMemo(() => {
+    const typeCount = new Map<string, number>()
+    for (const e of entities) {
+      typeCount.set(e.entityType, (typeCount.get(e.entityType) ?? 0) + 1)
+    }
+    return Array.from(typeCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => ({ type, count, color: ENTITY_TYPE_COLORS[type] ?? '#808080' }))
+  }, [entities])
 
   if (loading) {
     return (
@@ -477,118 +603,87 @@ export function NeighborhoodView({
   }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden' }}>
+    <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)', userSelect: 'none', WebkitUserSelect: 'none' }}>
       {size.width > 0 && size.height > 0 && (
         <svg
           ref={svgRef}
           width={size.width}
           height={size.height}
-          style={{ display: 'block' }}
+          style={{ display: 'block', userSelect: 'none', WebkitUserSelect: 'none' }}
           onMouseDown={handleSvgMouseDown}
           onMouseMove={handleSvgMouseMove}
           onMouseUp={handleSvgMouseUp}
           onMouseLeave={handleSvgMouseUp}
           onClick={handleSvgClick}
         >
-          {/* Camera transform — wraps all world-space content */}
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
-            {/* 1. Cluster boundary ghost (subtle ring, kept for spatial context) */}
-            <circle
-              cx={size.width / 2}
-              cy={size.height / 2}
-              r={boundaryRadius}
-              fill="none"
-              stroke="rgba(180,83,9,0.06)"
-              strokeWidth={1.5}
-            />
-
-            {/* 2a. Co-source background edges */}
+            {/* 1. Co-source edges — dashed blue */}
             {visibleEdgeTypes.has('source') && coSourceEdgesForLayout.map(edge => {
-              const sourcePos = nodePositions.get(edge.sourceNodeId)
-              const targetPos = nodePositions.get(edge.targetNodeId)
-              if (!sourcePos || !targetPos) return null
+              const sp = livePositions.get(edge.sourceNodeId)
+              const tp = livePositions.get(edge.targetNodeId)
+              if (!sp || !tp) return null
+              const isHit = edge.sourceNodeId === selectedEntityId || edge.targetNodeId === selectedEntityId
+              const opacity = connectedToSelected === null ? 0.32 : isHit ? 0.78 : 0.05
               return (
                 <line
                   key={`cs-${edge.sourceNodeId}-${edge.targetNodeId}`}
-                  x1={sourcePos.x}
-                  y1={sourcePos.y}
-                  x2={targetPos.x}
-                  y2={targetPos.y}
-                  stroke={(() => {
-                    if (connectedToSelected === null) return 'rgba(37,99,235,0.32)'
-                    const hit = edge.sourceNodeId === selectedEntityId || edge.targetNodeId === selectedEntityId
-                    return hit ? 'rgba(37,99,235,0.78)' : 'rgba(37,99,235,0.05)'
-                  })()}
-                  strokeWidth={connectedToSelected !== null && (edge.sourceNodeId === selectedEntityId || edge.targetNodeId === selectedEntityId) ? 2.5 : 1.5}
+                  x1={sp.x} y1={sp.y} x2={tp.x} y2={tp.y}
+                  stroke={`rgba(37,99,235,${opacity})`}
+                  strokeWidth={isHit && connectedToSelected !== null ? 2.5 : 1.5}
                   strokeDasharray="7 4"
                   style={{ transition: 'stroke 0.18s ease, stroke-width 0.18s ease' }}
                 />
               )
             })}
 
-            {/* 2b. Co-tag background edges */}
+            {/* 2. Co-tag edges — dashed purple */}
             {visibleEdgeTypes.has('tag') && coTagEdgesForLayout.map(edge => {
-              const sourcePos = nodePositions.get(edge.sourceNodeId)
-              const targetPos = nodePositions.get(edge.targetNodeId)
-              if (!sourcePos || !targetPos) return null
+              const sp = livePositions.get(edge.sourceNodeId)
+              const tp = livePositions.get(edge.targetNodeId)
+              if (!sp || !tp) return null
+              const isHit = edge.sourceNodeId === selectedEntityId || edge.targetNodeId === selectedEntityId
+              const opacity = connectedToSelected === null ? 0.30 : isHit ? 0.75 : 0.04
               return (
                 <line
                   key={`ct-${edge.sourceNodeId}-${edge.targetNodeId}`}
-                  x1={sourcePos.x}
-                  y1={sourcePos.y}
-                  x2={targetPos.x}
-                  y2={targetPos.y}
-                  stroke={(() => {
-                    if (connectedToSelected === null) return 'rgba(124,58,237,0.30)'
-                    const hit = edge.sourceNodeId === selectedEntityId || edge.targetNodeId === selectedEntityId
-                    return hit ? 'rgba(124,58,237,0.75)' : 'rgba(124,58,237,0.04)'
-                  })()}
-                  strokeWidth={connectedToSelected !== null && (edge.sourceNodeId === selectedEntityId || edge.targetNodeId === selectedEntityId) ? 2.5 : 1.5}
+                  x1={sp.x} y1={sp.y} x2={tp.x} y2={tp.y}
+                  stroke={`rgba(124,58,237,${opacity})`}
+                  strokeWidth={isHit && connectedToSelected !== null ? 2.5 : 1.5}
                   strokeDasharray="2 5"
                   style={{ transition: 'stroke 0.18s ease, stroke-width 0.18s ease' }}
                 />
               )
             })}
 
-            {/* 2c. Knowledge edges */}
+            {/* 3. Knowledge edges — solid slate, spec Section 6.1 */}
             {visibleEdgeTypes.has('direct') && visibleEdges.map(edge => {
-              const sourcePos = nodePositions.get(edge.sourceNodeId)
-              const targetPos = nodePositions.get(edge.targetNodeId)
-              if (!sourcePos || !targetPos) return null
+              const sp = livePositions.get(edge.sourceNodeId)
+              const tp = livePositions.get(edge.targetNodeId)
+              if (!sp || !tp) return null
 
-              const isSelected =
-                selectedEntityId === edge.sourceNodeId || selectedEntityId === edge.targetNodeId
-              const isHovered =
-                hoveredEntityId === edge.sourceNodeId || hoveredEntityId === edge.targetNodeId
+              const weight = edge.weight ?? 1
+              const baseOpacity = Math.min(0.08 + (weight / 30) * 0.17, 0.25)
+              const strokeWidth = Math.min(0.5 + weight * 0.2, 3)
 
-              const dx = targetPos.x - sourcePos.x
-              const dy = targetPos.y - sourcePos.y
-              const mx = (sourcePos.x + targetPos.x) / 2
-              const my = (sourcePos.y + targetPos.y) / 2
-              const len = Math.sqrt(dx * dx + dy * dy) || 1
-              const offset = Math.min(len * 0.15, 30)
-              const ecx = mx - dy * offset / len
-              const ecy = my + dx * offset / len
+              const isSelected = selectedEntityId === edge.sourceNodeId || selectedEntityId === edge.targetNodeId
+              const isHovered = hoveredEntityId === edge.sourceNodeId || hoveredEntityId === edge.targetNodeId
 
               return (
-                <g key={`${edge.sourceNodeId}-${edge.targetNodeId}`}>
-                  <path
-                    d={`M ${sourcePos.x} ${sourcePos.y} Q ${ecx} ${ecy} ${targetPos.x} ${targetPos.y}`}
-                    fill="none"
+                <g key={`ke-${edge.sourceNodeId}-${edge.targetNodeId}`}>
+                  <line
+                    x1={sp.x} y1={sp.y} x2={tp.x} y2={tp.y}
                     stroke={
                       isSelected
                         ? 'var(--color-accent-500)'
-                        : isHovered
-                          ? 'rgba(0,0,0,0.2)'
-                          : 'rgba(0,0,0,0.15)'
+                        : `rgba(100,116,139,${isHovered ? Math.min(baseOpacity * 2, 0.35) : baseOpacity})`
                     }
-                    strokeWidth={isSelected ? 2 : 1}
+                    strokeWidth={isSelected ? 2 : strokeWidth}
                     style={{ transition: 'stroke 0.15s ease, stroke-width 0.15s ease' }}
                   />
                   {isSelected && edge.relationType && (
                     <text
-                      x={ecx}
-                      y={ecy - 6}
+                      x={(sp.x + tp.x) / 2}
+                      y={(sp.y + tp.y) / 2 - 6}
                       textAnchor="middle"
                       style={{
                         fontFamily: 'var(--font-body)',
@@ -606,75 +701,127 @@ export function NeighborhoodView({
               )
             })}
 
-            {/* 3. Entity nodes */}
-            {entities.map(entity => {
-              const pos = nodePositions.get(entity.id)
+            {/* 4. Entity nodes — spec-compliant solid circles with labels below */}
+            {displayEntities.map(entity => {
+              const pos = livePositions.get(entity.id)
               if (!pos) return null
 
-              const isHub = entity.connectionCount >= HUB_CONNECTION_THRESHOLD
-              const isPeripheral = peripheralIds.has(entity.id)
+              const r = nodeRadii.get(entity.id) ?? 6
+              const entityColor = getEntityColor(entity.entityType)
+              const isAnchorEntity = entity.isAnchor && entity.clusters.includes(cluster.anchor.id)
               const filterVisible = isEntityVisible(entity)
-              // Dim unconnected entities when a node is selected
               const isDimmed = !filterVisible || (connectedToSelected !== null && !connectedToSelected.has(entity.id))
+              const isSelected = selectedEntityId === entity.id
+              const isHovered = hoveredEntityId === entity.id
+
+              // PRD-23: Origin ring for entities from sub-anchors
+              const originCluster = isParentMode && entity.originAnchorId && entity.originAnchorId !== cluster.anchor.id
+                ? allClusters.find(c => c.anchor.id === entity.originAnchorId)
+                : null
+
+              const scale = isHovered && !isDimmed ? 1.08 : 1
+              const label = entity.label.length > 20 ? entity.label.slice(0, 19) + '…' : entity.label
 
               return (
-                <EntityDot
+                <g
                   key={entity.id}
-                  entity={entity}
-                  x={pos.x}
-                  y={pos.y}
-                  radius={pos.radius}
-                  selected={selectedEntityId === entity.id}
-                  dimmed={isDimmed}
-                  isPeripheral={isPeripheral}
-                  isHubLabel={isHub}
-                  showAllLabels={camera.zoom >= 1.5}
-                  onHover={handleEntityHover}
-                  onClick={handleEntityClick}
-                />
+                  onMouseDown={e => handleNodeMouseDown(e, entity.id)}
+                  onMouseEnter={e => handleEntityHover(entity, e)}
+                  onMouseLeave={e => handleEntityHover(null, e)}
+                  onClick={() => handleEntityClick(entity)}
+                  style={{
+                    cursor: dragRef.current?.id === entity.id ? 'grabbing' : 'grab',
+                    opacity: isDimmed ? 0.12 : 1,
+                    transition: 'opacity 0.18s ease',
+                  }}
+                >
+                  {/* Origin cluster ring (PRD-23) */}
+                  {originCluster && (
+                    <circle
+                      cx={pos.x} cy={pos.y}
+                      r={r + 3}
+                      fill="none"
+                      stroke={getEntityColor(originCluster.anchor.entityType)}
+                      strokeWidth={1}
+                      strokeOpacity={0.3}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+
+                  <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
+                      {/* Selection ring — spec Section 4.4 */}
+                      {isSelected && !isDimmed && (
+                        <circle
+                          r={r + 5}
+                          fill="none"
+                          stroke="var(--color-accent-500)"
+                          strokeWidth={2}
+                          opacity={0.6}
+                        />
+                      )}
+
+                      {/* Hover glow ring — spec Section 4.5 */}
+                      {isHovered && !isDimmed && !isSelected && (
+                        <circle
+                          r={r + 4}
+                          fill="none"
+                          stroke={`${entityColor}35`}
+                          strokeWidth={2}
+                        />
+                      )}
+
+                      {/* Solid filled circle — spec Section 4.1/4.2 */}
+                      <circle
+                        r={r}
+                        fill={`${entityColor}22`}
+                        stroke={entityColor}
+                        strokeWidth={isAnchorEntity ? 3 : 2}
+                      />
+
+                      {/* Connection count inside — on hover or deep zoom */}
+                      {(isHovered || camera.zoom >= 1.8) && entity.connectionCount > 0 && (
+                        <text
+                          y={1}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          style={{
+                            fontFamily: 'var(--font-body)',
+                            fontSize: Math.max(7, r * 0.5),
+                            fontWeight: 700,
+                            fill: entityColor,
+                            opacity: 0.45,
+                            pointerEvents: 'none',
+                            userSelect: 'none',
+                          }}
+                        >
+                          {entity.connectionCount}
+                        </text>
+                      )}
+                    </g>
+
+                    {/* Label below circle — always visible, spec Section 5 */}
+                    <text
+                      y={r + 12}
+                      textAnchor="middle"
+                      style={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 9,
+                        fontWeight: 600,
+                        fill: isSelected ? 'var(--color-accent-500)'
+                          : isHovered ? 'var(--color-text-primary)'
+                          : 'var(--color-text-secondary)',
+                        pointerEvents: 'none',
+                        userSelect: 'none',
+                        transition: 'fill 0.15s ease',
+                      }}
+                    >
+                      {label}
+                    </text>
+                  </g>
+                </g>
               )
             })}
-
-            {/* 4. Hub anchor node — always at center, on top of entities */}
-            <g
-              transform={`translate(${size.width / 2}, ${size.height / 2})`}
-              onClick={() => { if (anchorEntity) onSelectEntity(anchorEntity) }}
-              style={{ cursor: anchorEntity ? 'pointer' : 'default' }}
-            >
-              {/* Glow aura */}
-              <circle r={36} fill="rgba(180,83,9,0.05)" />
-              <circle r={28} fill="rgba(180,83,9,0.09)" />
-              {/* Gold border ring */}
-              <circle r={22} fill="none" stroke="rgba(180,83,9,0.75)" strokeWidth={2.5} />
-              {/* Parchment fill */}
-              <circle r={20} fill="rgb(235,222,205)" />
-              {/* ⚓ symbol */}
-              <text
-                y={2}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                style={{ fontSize: 14, fill: 'rgba(140,70,0,0.85)', pointerEvents: 'none', userSelect: 'none' }}
-              >
-                ⚓
-              </text>
-              {/* Anchor label below */}
-              <text
-                y={33}
-                textAnchor="middle"
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 9,
-                  fontWeight: 700,
-                  fill: 'rgba(140,70,0,0.85)',
-                  pointerEvents: 'none',
-                  userSelect: 'none',
-                }}
-              >
-                {cluster.anchor.label.length > 20
-                  ? cluster.anchor.label.slice(0, 19) + '…'
-                  : cluster.anchor.label}
-              </text>
-            </g>
           </g>
         </svg>
       )}
@@ -737,51 +884,107 @@ export function NeighborhoodView({
         </span>
       </div>
 
-      {/* Entity count — top-right */}
+      {/* PRD-23: Sub-anchor navigation pills (parent mode only) */}
+      {isParentMode && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 46,
+            left: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+            pointerEvents: 'all',
+            maxWidth: '60%',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setActiveSubAnchorId(null)}
+            className="font-body font-semibold"
+            style={{
+              padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+              fontSize: 11,
+              background: !activeSubAnchorId ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
+              border: !activeSubAnchorId
+                ? '1px solid rgba(214,58,0,0.2)'
+                : '1px solid var(--border-subtle)',
+              color: !activeSubAnchorId
+                ? 'var(--color-accent-500)'
+                : 'var(--color-text-secondary)',
+            }}
+          >
+            All ({entities.length})
+          </button>
+          {cluster.subAnchorIds.map(subId => {
+            const subCluster = allClusters.find(c => c.anchor.id === subId)
+            if (!subCluster) return null
+            const subEntities = entities.filter(e => e.originAnchorId === subId)
+            const isActive = activeSubAnchorId === subId
+
+            return (
+              <button
+                key={subId}
+                type="button"
+                onClick={() => setActiveSubAnchorId(isActive ? null : subId)}
+                className="font-body font-semibold"
+                style={{
+                  padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                  fontSize: 11,
+                  background: isActive ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
+                  border: isActive
+                    ? '1px solid rgba(214,58,0,0.2)'
+                    : '1px solid var(--border-subtle)',
+                  color: isActive
+                    ? 'var(--color-accent-500)'
+                    : 'var(--color-text-secondary)',
+                }}
+              >
+                {subCluster.anchor.label.length > 16
+                  ? subCluster.anchor.label.slice(0, 14) + '…'
+                  : subCluster.anchor.label}
+                {' '}({subEntities.length})
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Stats — top-right (spec Section 2) */}
       <div
         style={{
           position: 'absolute',
           top: 16,
           right: 16,
-          background: 'var(--color-bg-card)',
+          background: 'rgba(255,255,255,0.9)',
           border: '1px solid var(--border-subtle)',
           borderRadius: 10,
           padding: '8px 12px',
-          fontFamily: 'var(--font-body)',
-          fontSize: 11,
-          color: 'var(--color-text-secondary)',
-          pointerEvents: 'none',
-        }}
-      >
-        <span
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 700,
-            fontSize: 13,
-            color: 'var(--color-text-primary)',
-          }}
-        >
-          {entities.length}
-        </span>{' '}
-        entities · {edges.length} edges
-      </div>
-
-      {/* Zoom controls — bottom-right */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 16,
-          right: 16,
           display: 'flex',
           flexDirection: 'column',
-          gap: 4,
-          zIndex: 20,
+          gap: 3,
+          pointerEvents: 'none',
+          backdropFilter: 'blur(8px)',
         }}
       >
+        <div className="flex items-center justify-between gap-4">
+          <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>Entities</span>
+          <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-primary)' }}>{entities.length}</span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>Edges</span>
+          <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-primary)' }}>{edges.length}</span>
+        </div>
+      </div>
+
+      {/* Zoom controls — bottom-right (spec Section 2) */}
+      <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 20 }}>
         {[
           { label: '+', title: 'Zoom in (+ key)', action: zoomIn },
           { label: '−', title: 'Zoom out (− key)', action: zoomOut },
           { label: '⊙', title: 'Reset view (0 key)', action: resetCamera },
+          { label: '↺', title: 'Reset node positions (R key)', action: resetNodes },
         ].map(({ label, title, action }) => (
           <button
             key={label}
@@ -790,23 +993,141 @@ export function NeighborhoodView({
             title={title}
             className="flex items-center justify-center font-body font-bold cursor-pointer"
             style={{
-              width: 28,
-              height: 28,
-              borderRadius: 7,
-              background: 'rgba(255,255,255,0.95)',
+              width: 26,
+              height: 26,
+              borderRadius: 6,
+              background: 'rgba(255,255,255,0.9)',
               border: '1px solid rgba(0,0,0,0.08)',
               color: 'var(--color-text-secondary)',
-              fontSize: 16,
+              fontSize: 14,
               lineHeight: 1,
-              transition: 'background 0.15s ease',
+              backdropFilter: 'blur(8px)',
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#fff' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.95)' }}
           >
             {label}
           </button>
         ))}
       </div>
+
+      {/* Floating info card — spec Section 10 */}
+      {selectedEntity && (() => {
+        const livePos = livePositions.get(selectedEntity.id)
+        if (!livePos) return null
+        const r = nodeRadii.get(selectedEntity.id) ?? 6
+        const entityColor = getEntityColor(selectedEntity.entityType)
+
+        const screenX = livePos.x * camera.zoom + camera.panX
+        const screenY = livePos.y * camera.zoom + camera.panY
+        const cardWidth = 220
+        const left = Math.max(8, Math.min(size.width - cardWidth - 8, screenX - cardWidth / 2))
+        const top = Math.max(8, screenY - r * camera.zoom - 14)
+
+        return (
+          <div
+            style={{
+              position: 'absolute',
+              left,
+              bottom: size.height - top,
+              zIndex: 30,
+              width: cardWidth,
+              background: 'rgba(255,255,255,0.96)',
+              backdropFilter: 'blur(12px)',
+              border: `1px solid ${entityColor}40`,
+              borderRadius: 10,
+              padding: '12px 14px',
+              boxShadow: '0 6px 24px rgba(0,0,0,0.08)',
+              animation: 'fadeUp 0.15s ease',
+              pointerEvents: 'auto',
+            }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+              <span className="font-display" style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                {selectedEntity.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => onSelectEntity(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', fontSize: 14, lineHeight: 1, padding: 2 }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Badges */}
+            <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+              <span className="font-body" style={{
+                fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+                color: entityColor, background: `${entityColor}12`, border: `1px solid ${entityColor}29`,
+              }}>
+                {selectedEntity.entityType}
+              </span>
+              <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}>
+                {selectedEntity.connectionCount} connections
+              </span>
+            </div>
+
+            {/* Description */}
+            {selectedEntity.description && (
+              <p className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)', lineHeight: 1.4, margin: '0 0 8px 0' }}>
+                {selectedEntity.description.length > 100 ? selectedEntity.description.slice(0, 97) + '…' : selectedEntity.description}
+              </p>
+            )}
+
+          </div>
+        )
+      })()}
+
+      {/* Entity type legend — bottom-left */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 16,
+          left: 16,
+          background: 'rgba(255,255,255,0.92)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8,
+          padding: '8px 10px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          zIndex: 20,
+          maxHeight: 200,
+          overflowY: 'auto',
+        }}
+      >
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, color: 'var(--color-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
+          Legend
+        </span>
+        {legendItems.map(item => (
+          <div key={item.type} className="flex items-center gap-2">
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', flex: 1 }}>
+              {item.type}
+            </span>
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, fontWeight: 600, color: 'var(--color-text-placeholder)' }}>
+              {item.count}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Right-side entity detail card */}
+      {exploringEntity && (
+        <EntityDetailCard
+          entity={exploringEntity}
+          allEntities={entities}
+          edges={edges}
+          cluster={cluster}
+          allClusters={allClusters}
+          onClose={() => {
+            setExploringEntityId(null)
+            onSelectEntity(null)
+          }}
+          onNavigateToEntityBrowser={onNavigateToEntityBrowser}
+        />
+      )}
 
       {/* Tooltip */}
       {tooltip && (

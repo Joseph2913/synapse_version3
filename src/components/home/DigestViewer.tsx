@@ -1,5 +1,7 @@
-import { X, Loader2 } from 'lucide-react'
+import { X, Loader2, MessageSquare } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { EntityBadge } from '../shared/EntityBadge'
+import { buildDigestDrilldownContext } from '../../config/chatEntryContexts'
 import type { DigestHistoryEntry, DigestOutput, ModuleOutput } from '../../types/digest'
 import type { DigestProfile } from '../../types/feed'
 
@@ -80,6 +82,7 @@ export function DigestViewer({
   onClose,
   onRegenerate,
 }: DigestViewerProps) {
+  const navigate = useNavigate()
   const digest: DigestOutput | undefined = output ?? entry?.content
 
   return (
@@ -230,6 +233,39 @@ export function DigestViewer({
                   {digest.executiveSummary}
                 </p>
               </div>
+
+              {/* Dig deeper button (PRD-B §3.12) */}
+              {digest.modules.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ctx = buildDigestDrilldownContext({
+                      profileTitle: profile.title,
+                      executiveSummary: digest!.executiveSummary,
+                      moduleTitles: digest!.modules.map(m => m.templateName),
+                      frequency: profile.frequency,
+                    })
+                    navigate('/ask', { state: { chatContext: ctx } })
+                    onClose()
+                  }}
+                  className="font-body font-semibold cursor-pointer flex items-center justify-center gap-1.5 w-full"
+                  style={{
+                    padding: '10px 16px',
+                    borderRadius: 8,
+                    background: 'var(--color-accent-50)',
+                    border: '1px solid rgba(214,58,0,0.15)',
+                    color: 'var(--color-accent-500)',
+                    fontSize: 12,
+                    marginBottom: 20,
+                    transition: 'background 0.12s ease',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(214,58,0,0.1)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-accent-50)' }}
+                >
+                  <MessageSquare size={13} />
+                  Dig deeper
+                </button>
+              )}
 
               {/* Module sections */}
               <div>

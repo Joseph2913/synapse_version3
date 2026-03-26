@@ -6,8 +6,12 @@ import { useRAGQuery } from '../hooks/useRAGQuery'
 import { useChatScroll } from '../hooks/useChatScroll'
 import { useQueryComposer } from '../hooks/useQueryComposer'
 import { useGraphContext } from '../hooks/useGraphContext'
-import { getGraphStats } from '../services/supabase'
+import { getGraphStats, fetchSourceById, fetchNodeById } from '../services/supabase'
+import { fetchRecentSessions } from '../services/chatHistory'
+import type { ChatSession } from '../services/chatHistory'
 import { DEFAULT_QUERY_CONFIG } from '../types/rag'
+import type { EnrichedChunk } from '../types/rag'
+import { normalizeEntryContext } from '../types/chatRouting'
 import { StatusBar } from '../components/ask/StatusBar'
 import { ChatMessageList } from '../components/ask/ChatMessageList'
 import { ChatInput } from '../components/ask/ChatInput'
@@ -15,6 +19,7 @@ import { EmptyAskState } from '../components/ask/EmptyAskState'
 import { AskRightPanel } from '../components/ask/AskRightPanel'
 import { NodeDetail } from '../components/panels/NodeDetail'
 import { SourceDetail } from '../components/panels/SourceDetail'
+import type { KnowledgeNode, KnowledgeSource } from '../types/database'
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const DEFAULT_LEFT_PCT = 64
@@ -25,7 +30,7 @@ export function AskView() {
   const { user } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
-  const { messages, isLoading, pipelineEvents, error, sendMessage, clearChat } = useRAGQuery()
+  const { messages, isLoading, pipelineEvents, error, activeEntryContext, sendMessage, clearChat, loadSession } = useRAGQuery()
   const scroll = useChatScroll(messages.length)
   const { rightPanelContent, askContext, setRightPanelContent, clearRightPanel } = useGraphContext()
   const {
@@ -37,25 +42,30 @@ export function AskView() {
     setModelTier,
   } = useQueryComposer()
   const [graphIsEmpty, setGraphIsEmpty] = useState(false)
+  const [recentSessions, setRecentSessions] = useState<ChatSession[]>([])
+  const [highlightedCitationIndex, setHighlightedCitationIndex] = useState<number | null>(null)
 
-  const pendingAutoQuery = useRef(
-    (location.state as { autoQuery?: string } | null)?.autoQuery ?? ''
-  )
+  // Read chatContext or legacy autoQuery from navigation state via normalizeEntryContext
+  const pendingContext = useRef(normalizeEntryContext(location.state))
 
   useEffect(() => {
     if (!user) return
     getGraphStats(user.id)
       .then(s => setGraphIsEmpty(s.nodeCount === 0))
       .catch(() => {})
+    // Fetch recent sessions for empty state (PRD-D §2.8)
+    fetchRecentSessions(user.id, 5)
+      .then(setRecentSessions)
+      .catch(() => setRecentSessions([]))
   }, [user])
 
-  // Fire the auto-query once using the default config
+  // Fire the auto-query once using the appropriate context
   useEffect(() => {
-    const query = pendingAutoQuery.current
-    if (!query || !user) return
-    pendingAutoQuery.current = ''
+    const ctx = pendingContext.current
+    if (!ctx || !user) return
+    pendingContext.current = null
     navigate('/ask', { state: {}, replace: true })
-    void sendMessage(query, DEFAULT_QUERY_CONFIG)
+    void sendMessage(ctx.autoQuery, DEFAULT_QUERY_CONFIG, ctx)
   }, [user, sendMessage, navigate])
 
   // ─── Drag resize ───────────────────────────────────────────────────────
@@ -96,6 +106,58 @@ export function AskView() {
     void sendMessage(text, config)
   }
 
+  // PRD-C: Follow-up pill sends the question through the same pipeline, inheriting entry context
+  const handleFollowUp = (question: string) => {
+    void sendMessage(question, config)
+  }
+
+  // PRD-D §2.1: Citation click → right panel
+  const handleCitationClick = useCallback(async (citationIndex: number) => {
+    if (!askContext) return
+    const citation = askContext.citations.find(c => c.index === citationIndex)
+    if (!citation) return
+
+    if (citation.source_id) {
+      const source = await fetchSourceById(citation.source_id)
+      if (source) {
+        setRightPanelContent({ type: 'source', data: source })
+        return
+      }
+    }
+    if (citation.node_id) {
+      const node = await fetchNodeById(citation.node_id)
+      if (node) {
+        setRightPanelContent({ type: 'node', data: node })
+      }
+    }
+  }, [askContext, setRightPanelContent])
+
+  // PRD-D §2.2: Entity badge click → node detail
+  const handleEntityClick = useCallback((node: KnowledgeNode) => {
+    setRightPanelContent({ type: 'node', data: node })
+  }, [setRightPanelContent])
+
+  // PRD-D §2.3: Source card click → source detail
+  const handleSourceCardClick = useCallback(async (chunk: EnrichedChunk) => {
+    const source = await fetchSourceById(chunk.source_id)
+    if (source) {
+      setRightPanelContent({ type: 'source', data: source })
+    }
+  }, [setRightPanelContent])
+
+  // PRD-D §2.4: Connection chain node click → node detail
+  const handleConnectionNodeClick = useCallback((label: string) => {
+    const node = askContext?.relatedNodes.find(n => n.label === label)
+    if (node) {
+      setRightPanelContent({ type: 'node', data: node })
+    }
+  }, [askContext, setRightPanelContent])
+
+  // PRD-D §2.8: Load a previous session
+  const handleLoadSession = useCallback(async (sessionId: string) => {
+    await loadSession(sessionId)
+  }, [loadSession])
+
   const handleBackToAskContext = () => {
     if (askContext) {
       setRightPanelContent({ type: 'ask_context', data: askContext })
@@ -103,6 +165,28 @@ export function AskView() {
       clearRightPanel()
     }
   }
+
+  // PRD-D §2.5: "Ask about this" from detail panels
+  const handleAskAboutNode = useCallback((node: KnowledgeNode) => {
+    // Return to context panel, then send a scoped question
+    if (askContext) {
+      setRightPanelContent({ type: 'ask_context', data: askContext })
+    } else {
+      clearRightPanel()
+    }
+    const question = `Tell me more about "${node.label}" (${node.entity_type}).`
+    void sendMessage(question, config)
+  }, [askContext, setRightPanelContent, clearRightPanel, sendMessage, config])
+
+  const handleAskAboutSource = useCallback((source: KnowledgeSource) => {
+    if (askContext) {
+      setRightPanelContent({ type: 'ask_context', data: askContext })
+    } else {
+      clearRightPanel()
+    }
+    const question = `Tell me more about "${source.title ?? 'this source'}".`
+    void sendMessage(question, config)
+  }, [askContext, setRightPanelContent, clearRightPanel, sendMessage, config])
 
   const hasMessages = messages.length > 0
 
@@ -114,7 +198,15 @@ export function AskView() {
   // ─── Right panel content (mirrors RightPanel.tsx Ask logic) ────────────
   const renderRightPanel = () => {
     if (rightPanelContent?.type === 'ask_context') {
-      return <AskRightPanel context={rightPanelContent.data} />
+      return (
+        <AskRightPanel
+          context={rightPanelContent.data}
+          highlightedCitationIndex={highlightedCitationIndex}
+          onEntityClick={handleEntityClick}
+          onSourceCardClick={handleSourceCardClick}
+          onConnectionNodeClick={handleConnectionNodeClick}
+        />
+      )
     }
     if (rightPanelContent?.type === 'node') {
       return (
@@ -136,7 +228,7 @@ export function AskView() {
               ← Back to Context
             </button>
           )}
-          <NodeDetail node={rightPanelContent.data} onClose={handleBackToAskContext} />
+          <NodeDetail node={rightPanelContent.data} onClose={handleBackToAskContext} isAskView onAskAbout={handleAskAboutNode} />
         </div>
       )
     }
@@ -160,7 +252,7 @@ export function AskView() {
               ← Back to Context
             </button>
           )}
-          <SourceDetail source={rightPanelContent.data} onClose={handleBackToAskContext} />
+          <SourceDetail source={rightPanelContent.data} onClose={handleBackToAskContext} isAskView onAskAbout={handleAskAboutSource} />
         </div>
       )
     }
@@ -191,6 +283,7 @@ export function AskView() {
         hasError={!!error && !hasMessages}
         hasMessages={hasMessages}
         onClearChat={clearChat}
+        contextLabel={activeEntryContext?.displayLabel}
       />
 
       {/* 2:1 split */}
@@ -214,7 +307,12 @@ export function AskView() {
         >
           {!hasMessages ? (
             <div className="flex-1 overflow-y-auto">
-              <EmptyAskState onSendSuggestion={handleSuggestion} isEmpty={graphIsEmpty} />
+              <EmptyAskState
+                onSendSuggestion={handleSuggestion}
+                isEmpty={graphIsEmpty}
+                sessions={recentSessions}
+                onLoadSession={handleLoadSession}
+              />
             </div>
           ) : (
             <ChatMessageList
@@ -222,6 +320,9 @@ export function AskView() {
               isLoading={isLoading}
               pipelineEvents={pipelineEvents}
               scroll={scroll}
+              onFollowUpClick={handleFollowUp}
+              onCitationClick={handleCitationClick}
+              onCitationHoverChange={setHighlightedCitationIndex}
             />
           )}
 

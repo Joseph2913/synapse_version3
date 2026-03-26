@@ -19,7 +19,8 @@ import {
   saveChunks,
   saveExtractionSession,
 } from '../services/extractionPersistence'
-import { checkDuplicateNodes, supabase } from '../services/supabase'
+import { supabase } from '../services/supabase'
+import { checkDeduplication, savePotentialDuplicates } from '../services/deduplication'
 import { discoverCrossConnections, saveCrossConnectionEdges } from '../services/crossConnections'
 
 const INITIAL_STATE: PipelineState = {
@@ -35,6 +36,8 @@ const INITIAL_STATE: PipelineState = {
   embeddingProgress: null,
   statusText: '',
   duplicatesSkipped: 0,
+  nearDuplicates: null,
+  reusedNodeCount: 0,
 }
 
 export function useExtraction(): UseExtractionReturn {
@@ -179,28 +182,32 @@ export function useExtraction(): UseExtractionReturn {
           reviewedEntities.filter(e => e.removed).map(e => e.label.toLowerCase())
         )
 
-        // Check for duplicates
-        const existingLabels = await checkDuplicateNodes(
-          included.map(e => e.label),
-          userId
-        )
+        // Step 1: Run deduplication check (exact match by label)
+        const entitiesForDedup = included.map(e => ({
+          label:       e.label,
+          entity_type: e.entity_type,
+        }))
+        const dedupResult = await checkDeduplication(userId, entitiesForDedup)
 
+        // Step 2: Save nodes (new + reuse existing for exact matches)
         const sourceName = metadata?.title || deriveQuickTitle(content)
-        const savedNodes = await saveNodes(userId, reviewedEntities, sourceId, {
+        const saveResult = await saveNodes(userId, reviewedEntities, sourceId, {
           sourceName,
           sourceType: metadata?.sourceType || 'Note',
           sourceUrl: metadata?.sourceUrl,
-        }, existingLabels)
+        }, dedupResult.exactMatches)
 
-        const duplicatesSkipped = included.length - savedNodes.length
+        const duplicatesSkipped = dedupResult.exactMatches.size
 
+        // Step 3: Save edges — use allNodes so reused nodes get their edges
         const savedEdgeIds = await saveEdges(
           userId,
           state.relationships ?? [],
-          savedNodes,
+          saveResult.allNodes,
           removedLabels
         )
 
+        const savedNodes = saveResult.newNodes
         update({ savedNodes, savedEdgeIds, duplicatesSkipped })
 
         // Step 6: Generate embeddings
@@ -222,12 +229,13 @@ export function useExtraction(): UseExtractionReturn {
             })
           })
 
-          // Update nodes with embeddings (skip nulls)
+          // Update nodes with embeddings (skip nulls) and store on savedNodes for near-dedup
           const nodesToUpdate: Array<{ id: string; embedding: number[] }> = []
           embeddings.forEach((emb, i) => {
             const node = savedNodes[i]
             if (emb && node) {
               nodesToUpdate.push({ id: node.id, embedding: emb })
+              node.embedding = emb
             } else if (!emb && node) {
               console.warn(`[useExtraction] Embedding failed for: ${node.label}`)
             }
@@ -235,6 +243,33 @@ export function useExtraction(): UseExtractionReturn {
 
           if (nodesToUpdate.length > 0) {
             await updateNodeEmbeddings(nodesToUpdate)
+          }
+        }
+
+        // Step 6b: Near-duplicate check using embeddings (post-embedding generation)
+        if (savedNodes.length > 0) {
+          const newNodesWithEmbeddings = savedNodes
+            .map(n => ({
+              label:       n.label,
+              entity_type: n.entity_type,
+              embedding:   n.embedding,
+            }))
+            .filter((n): n is { label: string; entity_type: string; embedding: number[] } => !!n.embedding)
+
+          if (newNodesWithEmbeddings.length > 0) {
+            const nearDedupResult = await checkDeduplication(userId, newNodesWithEmbeddings)
+
+            // Save near matches to review queue (non-blocking)
+            const newNodeIdMap = new Map(
+              savedNodes.map(n => [n.label.toLowerCase(), n.id])
+            )
+            savePotentialDuplicates(userId, nearDedupResult.nearMatches, newNodeIdMap)
+              .catch(err => console.warn('[useExtraction] Failed to save potential duplicates:', err))
+
+            // Surface near matches in state for review UI
+            if (nearDedupResult.nearMatches.length > 0) {
+              update({ nearDuplicates: nearDedupResult.nearMatches })
+            }
           }
         }
 
@@ -253,13 +288,18 @@ export function useExtraction(): UseExtractionReturn {
               statusText: `Embedding ${chunks.length} source chunks...`,
             })
 
-            const chunkEmbeddings = await generateEmbeddings(chunks, 5)
+            // Attempt embeddings, but save chunks regardless
+            let chunkEmbeddings: (number[] | null)[] = chunks.map(() => null)
+            try {
+              chunkEmbeddings = await generateEmbeddings(chunks, 5)
+            } catch (embErr) {
+              console.warn('[useExtraction] Chunk embedding failed, saving chunks without vectors:', embErr)
+            }
             await saveChunks(userId, sourceId, chunks, chunkEmbeddings)
             chunkCount = chunks.length
           }
         } catch (chunkErr) {
-          console.warn('[useExtraction] Chunking/chunk embedding failed:', chunkErr)
-          // Continue — chunking failure is non-fatal
+          console.warn('[useExtraction] Chunking failed entirely:', chunkErr)
         }
 
         // Step 8: Discover cross-connections
@@ -307,6 +347,27 @@ export function useExtraction(): UseExtractionReturn {
           crossConnectionCount,
           durationMs,
         })
+
+        // Trigger anchor scoring — fire-and-forget, never blocks the UI
+        if (savedNodes.length > 0 && sourceId) {
+          const { data: { session: currentSession } } = await supabase.auth.getSession()
+          if (currentSession?.access_token) {
+            fetch('/api/anchors/score-post-extraction', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentSession.access_token}`,
+              },
+              body: JSON.stringify({
+                userId:   userId,
+                sourceId: sourceId,
+                nodeIds:  savedNodes.map(n => n.id),
+              }),
+            }).catch(err => {
+              console.warn('[useExtraction] Anchor scoring trigger failed (non-fatal):', err)
+            })
+          }
+        }
 
         update({
           step: 'complete',

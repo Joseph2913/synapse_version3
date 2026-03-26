@@ -1,0 +1,61 @@
+{
+  "pipeline": "automated",
+  "approach": "process.ts — inline Gemini prompt",
+  "prompt_format": {
+    "source": "new entity label",
+    "target": "existing entity label",
+    "relation_type": "relates_to|supports|contradicts|part_of|enables|leads_to"
+  },
+  "new_entities_source": "tmp_extraction_automated.json",
+  "existing_entities_source": "tmp_extraction_manual.json (simulates prior knowledge graph)",
+  "summary": {
+    "total_cross_connections": 7,
+    "relation_type_breakdown": {
+      "relates_to": 7
+    }
+  },
+  "cross_connections": [
+    {
+      "source": "Rehab (Action)",
+      "target": "Rehab (Action)",
+      "relation_type": "relates_to",
+      "evidence": "Both refer to the process of physical rehabilitation."
+    },
+    {
+      "source": "Achilles injury (Topic)",
+      "target": "Achilles injury (Risk)",
+      "relation_type": "relates_to",
+      "evidence": "Both refer to the Achilles injury."
+    },
+    {
+      "source": "Calf strength (Metric)",
+      "target": "Calf strength (Goal)",
+      "relation_type": "relates_to",
+      "evidence": "Both refer to the importance of calf strength in recovery."
+    },
+    {
+      "source": "Recovery (Goal)",
+      "target": "Return to the court (Goal)",
+      "relation_type": "relates_to",
+      "evidence": "Recovery and returning to basketball are related goals."
+    },
+    {
+      "source": "Electrical stimulation (Technology)",
+      "target": "Electrical stimulation (Technology)",
+      "relation_type": "relates_to",
+      "evidence": "Both refer to the use of electrical stimulation in rehab."
+    },
+    {
+      "source": "Frustration (Concept)",
+      "target": "Frustration (Topic)",
+      "relation_type": "relates_to",
+      "evidence": "Both refer to feelings of frustration during recovery."
+    },
+    {
+      "source": "Jason Han (Person)",
+      "target": "Jason Han (Person)",
+      "relation_type": "relates_to",
+      "evidence": "Both refer to the same person, Jason Han."
+    }
+  ]
+}

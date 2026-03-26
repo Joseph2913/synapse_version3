@@ -176,7 +176,7 @@ export function MiniGraph({ contextNodeIds }: MiniGraphProps) {
   return (
     <canvas
       ref={canvasRef}
-      style={{ display: 'block', borderRadius: 8 }}
+      style={{ display: 'block', borderRadius: 8, userSelect: 'none', WebkitUserSelect: 'none' }}
     />
   )
 }

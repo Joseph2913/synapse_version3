@@ -5,17 +5,51 @@ import { TopBar } from './TopBar'
 import { RightPanel } from './RightPanel'
 import { CommandPalette } from '../modals/CommandPalette'
 import { SettingsModal } from '../modals/SettingsModal'
+import { OnboardingOverlay, useOnboarding } from '../onboarding/OnboardingOverlay'
+import { DemoContent } from '../onboarding/DemoContent'
 import { useGraphContext } from '../../hooks/useGraphContext'
+import { useAuth } from '../../hooks/useAuth'
+import { fetchSuggestedCount } from '../../services/anchorCandidates'
 
 export function AppShell() {
   const location = useLocation()
   const { rightPanelContent } = useGraphContext()
+  const { user } = useAuth()
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [suggestedAnchorCount, setSuggestedAnchorCount] = useState(0)
+  const {
+    active: onboardingActive,
+    complete: completeOnboarding,
+    step: onboardingStep,
+    setStep: setOnboardingStep,
+  } = useOnboarding()
+
+  // Fetch anchor suggestion count (non-blocking — table may not exist yet)
+  useEffect(() => {
+    if (user) {
+      try {
+        fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
+      } catch { /* table may not exist */ }
+    }
+  }, [user])
+
+  // Listen for anchor suggestion changes
+  useEffect(() => {
+    const handler = () => {
+      if (user) {
+        try {
+          fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
+        } catch { /* ignore */ }
+      }
+    }
+    window.addEventListener('synapse:anchor-suggestions-changed', handler)
+    return () => window.removeEventListener('synapse:anchor-suggestions-changed', handler)
+  }, [user])
 
   const isAskView = location.pathname === '/ask'
   // Ask view has its own internal right panel, so skip the AppShell one
-  const showRightPanel = !isAskView && rightPanelContent !== null
+  const showRightPanel = !onboardingActive && !isAskView && rightPanelContent !== null
 
   // Global keyboard listener
   useEffect(() => {
@@ -39,6 +73,7 @@ export function AppShell() {
         <NavRail
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
+          anchorSuggestionCount={suggestedAnchorCount}
         />
 
         <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0">
@@ -46,8 +81,21 @@ export function AppShell() {
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           />
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden" style={{ position: 'relative' }}>
             <Outlet />
+            {onboardingActive && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 50,
+                  background: 'var(--color-bg-content)',
+                  overflow: 'hidden',
+                }}
+              >
+                <DemoContent step={onboardingStep} />
+              </div>
+            )}
           </div>
         </main>
 
@@ -63,6 +111,14 @@ export function AppShell() {
 
       {settingsOpen && (
         <SettingsModal onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {onboardingActive && (
+        <OnboardingOverlay
+          step={onboardingStep}
+          setStep={setOnboardingStep}
+          onComplete={completeOnboarding}
+        />
       )}
     </>
   )

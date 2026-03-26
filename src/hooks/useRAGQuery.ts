@@ -2,8 +2,11 @@ import { useState, useRef, useCallback } from 'react'
 import { useAuth } from './useAuth'
 import { useGraphContext } from './useGraphContext'
 import { queryGraph, buildRAGResponseContext } from '../services/rag'
+import { routedQuery } from '../services/ragRouter'
+import { createChatSession, appendMessages, fetchSession } from '../services/chatHistory'
 import type { ChatMessage, RAGPipelineStep, RAGResponseContext, RAGStepEvent, QueryConfig } from '../types/rag'
 import { DEFAULT_QUERY_CONFIG } from '../types/rag'
+import type { ChatEntryContext } from '../types/chatRouting'
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -16,8 +19,11 @@ export interface UseRAGQueryReturn {
   pipelineEvents: RAGStepEvent[]
   error: string | null
   lastResponseContext: RAGResponseContext | null
-  sendMessage: (text: string, queryConfig?: QueryConfig) => Promise<void>
+  activeEntryContext: ChatEntryContext | null
+  activeSessionId: string | null
+  sendMessage: (text: string, queryConfig?: QueryConfig, entryContext?: ChatEntryContext) => Promise<void>
   clearChat: () => void
+  loadSession: (sessionId: string) => Promise<void>
 }
 
 export function useRAGQuery(): UseRAGQueryReturn {
@@ -31,7 +37,15 @@ export function useRAGQuery(): UseRAGQueryReturn {
   const [lastResponseContext, setLastResponseContext] = useState<RAGResponseContext | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  const sendMessage = useCallback(async (text: string, queryConfig: QueryConfig = DEFAULT_QUERY_CONFIG) => {
+  // Persist active entry context for follow-up messages
+  const activeContextRef = useRef<ChatEntryContext | null>(null)
+  const [activeEntryContext, setActiveEntryContext] = useState<ChatEntryContext | null>(null)
+
+  // Session persistence (PRD-D §2.7)
+  const sessionIdRef = useRef<string | null>(null)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+
+  const sendMessage = useCallback(async (text: string, queryConfig: QueryConfig = DEFAULT_QUERY_CONFIG, entryContext?: ChatEntryContext) => {
     if (!user) return
     if (!text.trim()) return
 
@@ -71,27 +85,33 @@ export function useRAGQuery(): UseRAGQueryReturn {
         .filter(m => m.role !== 'system')
         .map(m => ({ role: m.role, content: m.content }))
 
-      const response = await queryGraph(
-        text,
-        user.id,
-        conversationHistory,
-        queryConfig,
-        (event) => {
-          if (!controller.signal.aborted) {
-            if (event.status === 'running') setCurrentStep(event.step)
-            setPipelineEvents(prev => {
-              const idx = prev.findIndex(e => e.step === event.step)
-              if (idx >= 0) {
-                const updated = [...prev]
-                updated[idx] = event
-                return updated
-              }
-              return [...prev, event]
-            })
-          }
-        },
-        controller.signal
-      )
+      // If a new entry context is provided, store it for follow-ups
+      if (entryContext) {
+        activeContextRef.current = entryContext
+        setActiveEntryContext(entryContext)
+      }
+
+      const currentContext = entryContext ?? activeContextRef.current
+
+      const stepHandler = (event: RAGStepEvent) => {
+        if (!controller.signal.aborted) {
+          if (event.status === 'running') setCurrentStep(event.step)
+          setPipelineEvents(prev => {
+            const idx = prev.findIndex(e => e.step === event.step)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = event
+              return updated
+            }
+            return [...prev, event]
+          })
+        }
+      }
+
+      // Route through entry-point-specific pipeline when context is available
+      const response = currentContext
+        ? await routedQuery(text, user.id, conversationHistory, currentContext, stepHandler, controller.signal)
+        : await queryGraph(text, user.id, conversationHistory, queryConfig, stepHandler, controller.signal)
 
       if (controller.signal.aborted) return
 
@@ -105,12 +125,31 @@ export function useRAGQuery(): UseRAGQueryReturn {
         citations: response.citations,
         timestamp: new Date(),
         pipelineDurationMs,
+        followUp: response.followUp,
       }
 
       setMessages(prev => [...prev, assistantMessage])
       setLastResponseContext(ctx)
       setAskContext(ctx)
       setRightPanelContent({ type: 'ask_context', data: ctx })
+
+      // Persist to chat_sessions (PRD-D §2.7)
+      if (user) {
+        if (!sessionIdRef.current) {
+          const sid = await createChatSession(
+            user.id,
+            [userMessage, assistantMessage],
+            currentContext ?? undefined,
+            queryConfig
+          )
+          if (sid) {
+            sessionIdRef.current = sid
+            setActiveSessionId(sid)
+          }
+        } else {
+          void appendMessages(sessionIdRef.current, [userMessage, assistantMessage])
+        }
+      }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
 
@@ -147,7 +186,33 @@ export function useRAGQuery(): UseRAGQueryReturn {
     setAskContext(null)
     setRightPanelContent(null)
     setError(null)
+    activeContextRef.current = null
+    setActiveEntryContext(null)
+    sessionIdRef.current = null
+    setActiveSessionId(null)
   }, [setRightPanelContent, setAskContext])
+
+  const loadSession = useCallback(async (sessionId: string) => {
+    const session = await fetchSession(sessionId)
+    if (!session) return
+
+    // Restore messages with Date objects for timestamps
+    const restoredMessages = session.messages.map(m => ({
+      ...m,
+      timestamp: new Date(m.timestamp),
+    }))
+    setMessages(restoredMessages)
+
+    // Restore entry context
+    if (session.entry_context) {
+      activeContextRef.current = session.entry_context
+      setActiveEntryContext(session.entry_context)
+    }
+
+    sessionIdRef.current = sessionId
+    setActiveSessionId(sessionId)
+    setError(null)
+  }, [])
 
   return {
     messages,
@@ -156,7 +221,10 @@ export function useRAGQuery(): UseRAGQueryReturn {
     pipelineEvents,
     error,
     lastResponseContext,
+    activeEntryContext,
+    activeSessionId,
     sendMessage,
     clearChat,
+    loadSession,
   }
 }

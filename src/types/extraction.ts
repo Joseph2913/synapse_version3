@@ -94,6 +94,14 @@ export interface PipelineState {
   embeddingProgress: { completed: number; total: number } | null
   statusText: string
   duplicatesSkipped: number
+  nearDuplicates: Array<{
+    incomingLabel:  string
+    incomingType:   string
+    existingNodeId: string
+    existingLabel:  string
+    similarity:     number
+  }> | null
+  reusedNodeCount: number
 }
 
 export interface UseExtractionReturn {

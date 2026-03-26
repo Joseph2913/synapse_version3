@@ -1,10 +1,10 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { Loader2, AlertCircle, Compass, RefreshCw, GripVertical } from 'lucide-react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
+import { Loader2, AlertCircle, Compass, RefreshCw } from 'lucide-react'
 import { ExploreToolbar } from './explore/ExploreToolbar'
 import { LandscapeView } from './explore/LandscapeView'
 import { NeighborhoodView } from './explore/NeighborhoodView'
 import { SourceGraphView } from './explore/SourceGraphView'
-import { ExploreMetadataPanel } from './explore/ExploreMetadataPanel'
+
 import { EntityBrowserTab } from './explore/EntityBrowserTab'
 import { GraphTab } from '../components/explore/GraphTab'
 import { useExploreData } from '../hooks/useExploreData'
@@ -12,11 +12,24 @@ import { useExploreFilters } from '../hooks/useExploreFilters'
 import { useEntityBrowser } from '../hooks/useEntityBrowser'
 import type { ClusterData, EntityNode, SourceNode, SourceEdge, SourceGraphAnchor } from '../types/explore'
 import type { EntityEdge } from '../services/exploreQueries'
+import { useAuth } from '../hooks/useAuth'
+import { fetchCandidatesWithNodes } from '../services/anchorCandidates'
+import type { AnchorCandidateWithNode } from '../types/anchors'
 
-// ─── Layout constants ────────────────────────────────────────────────────────
-const DEFAULT_LEFT_PCT = 67
-const MIN_LEFT_PCT = 30
-const MAX_LEFT_PCT = 80
+
+interface SuggestedClusterData {
+  candidateId:             string
+  nodeId:                  string
+  label:                   string
+  entityType:              string
+  compositeScore:          number
+  reasoningText:           string | null
+  mentionCount:            number
+  sourceCount:             number
+  velocityDirection:       'rising' | 'stable' | 'falling'
+  suggestedParentAnchorId: string | null
+  duplicateCount:          number
+}
 
 export function ExploreView() {
   const { data, loading, error, refetch } = useExploreData()
@@ -44,19 +57,51 @@ export function ExploreView() {
   // Entity browser — only fetches when entity-browser tab is active
   const entityBrowser = useEntityBrowser(viewMode === 'entity-browser')
 
-  // Track neighborhood entities + edges for metadata panel
-  const [neighborhoodEntities, setNeighborhoodEntities] = useState<EntityNode[]>([])
-  const [neighborhoodEdges, setNeighborhoodEdges] = useState<EntityEdge[]>([])
+  const { user } = useAuth()
 
-  // Source graph data (managed by SourceGraphView, stored here for metadata panel + toolbar)
+  // Suggested anchor candidates — for ghost cluster rendering
+  const [suggestedCandidates, setSuggestedCandidates] = useState<AnchorCandidateWithNode[]>([])
+  const [showCrossEdges, setShowCrossEdges] = useState(true)
+  const [, setSelectedSuggestedId] = useState<string | null>(null)
+  const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null)
+
+  // Fetch suggested candidates for ghost cluster rendering
+  useEffect(() => {
+    if (!user) return
+    fetchCandidatesWithNodes(user.id, ['suggested'])
+      .then(setSuggestedCandidates)
+      .catch(err => console.warn('[ExploreView] Failed to fetch suggested candidates:', err))
+  }, [user])
+
+  // Event listeners for anchor changes
+  useEffect(() => {
+    const onSuggestionsChanged = () => {
+      if (!user) return
+      fetchCandidatesWithNodes(user.id, ['suggested'])
+        .then(setSuggestedCandidates)
+        .catch(() => {})
+    }
+    const onAnchorConfirmed = () => {
+      refetch()
+      setTimeout(() => refetch(), 35000)
+    }
+    window.addEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
+    window.addEventListener('synapse:anchor-confirmed', onAnchorConfirmed)
+    return () => {
+      window.removeEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
+      window.removeEventListener('synapse:anchor-confirmed', onAnchorConfirmed)
+    }
+  }, [user, refetch])
+
+  // Source graph data (managed by SourceGraphView, stored here for toolbar)
   const [allSources, setAllSources] = useState<SourceNode[]>([])
-  const [sourceEdges, setSourceEdges] = useState<SourceEdge[]>([])
+  const [, setSourceEdges] = useState<SourceEdge[]>([])
   const [sourceGraphAnchors, setSourceGraphAnchors] = useState<SourceGraphAnchor[]>([])
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
 
   // Neighborhood edge-type visibility (lifted so toolbar can control it)
   const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Set<string>>(
-    () => new Set(['direct', 'source', 'tag'])
+    () => new Set(['direct'])
   )
   const toggleNeighborhoodEdgeType = useCallback((type: string) => {
     setVisibleEdgeTypes(prev => {
@@ -67,16 +112,9 @@ export function ExploreView() {
   }, [])
   const clearAllFilters = useCallback(() => {
     toggleSpotlight(null)
-    setVisibleEdgeTypes(new Set(['direct', 'source', 'tag']))
+    setVisibleEdgeTypes(new Set(['direct']))
   }, [toggleSpotlight])
 
-  // Resizable two-column layout
-  const [leftWidthPct, setLeftWidthPct] = useState(DEFAULT_LEFT_PCT)
-  const [isDragging, setIsDragging] = useState(false)
-  const [isHandleHovered, setIsHandleHovered] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const dragStartX = useRef(0)
-  const dragStartPct = useRef(DEFAULT_LEFT_PCT)
 
   const clusters = data?.clusters ?? []
   const stats = data?.stats ?? { nodeCount: 0, edgeCount: 0, sourceCount: 0, anchorCount: 0 }
@@ -89,6 +127,42 @@ export function ExploreView() {
   }, [activeClusterId, clusters])
 
   const isNeighborhood = zoomLevel === 'neighborhood' && activeCluster !== null
+
+  // Build deduplicated ghost cluster data
+  const suggestedClusterData = useMemo((): SuggestedClusterData[] => {
+    const candidates = suggestedCandidates.filter(c => c.node !== null)
+    if (candidates.length === 0) return []
+
+    const grouped = new Map<string, AnchorCandidateWithNode & { duplicateCount: number }>()
+    for (const c of candidates) {
+      const key = c.node!.label.toLowerCase()
+      const existing = grouped.get(key)
+      if (!existing) {
+        grouped.set(key, { ...c, duplicateCount: 0 })
+      } else if (c.compositeScore > existing.compositeScore) {
+        grouped.set(key, { ...c, duplicateCount: existing.duplicateCount + 1 })
+      } else {
+        existing.duplicateCount++
+      }
+    }
+
+    return Array.from(grouped.values())
+      .sort((a, b) => b.compositeScore - a.compositeScore)
+      .slice(0, 8)
+      .map(c => ({
+        candidateId:             c.id,
+        nodeId:                  c.nodeId ?? '',
+        label:                   c.node!.label,
+        entityType:              c.node!.entity_type,
+        compositeScore:          c.compositeScore,
+        reasoningText:           c.reasoningText,
+        mentionCount:            c.mentionCount,
+        sourceCount:             c.sourceCount,
+        velocityDirection:       c.velocityDirection,
+        suggestedParentAnchorId: null,
+        duplicateCount:          c.duplicateCount,
+      }))
+  }, [suggestedCandidates])
 
   // Unique source types present in data (for toolbar dropdown)
   const sourceTypesPresent = useMemo(() => {
@@ -108,31 +182,6 @@ export function ExploreView() {
     return () => document.removeEventListener('keydown', handler)
   }, [setSelectedEntityId])
 
-  // Drag-to-resize
-  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragStartX.current = e.clientX
-    dragStartPct.current = leftWidthPct
-    setIsDragging(true)
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!containerRef.current) return
-      const containerWidth = containerRef.current.offsetWidth
-      const delta = ev.clientX - dragStartX.current
-      const deltaPct = (delta / containerWidth) * 100
-      setLeftWidthPct(Math.max(MIN_LEFT_PCT, Math.min(MAX_LEFT_PCT, dragStartPct.current + deltaPct)))
-    }
-
-    const onMouseUp = () => {
-      setIsDragging(false)
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [leftWidthPct])
-
   // Mode switching: clear selection
   const handleViewModeChange = useCallback((mode: typeof viewMode) => {
     setSelectedEntityId(null)
@@ -140,11 +189,20 @@ export function ExploreView() {
     setViewMode(mode)
   }, [setViewMode, setSelectedEntityId])
 
+  // Single click: select cluster (show info card). Double-click: enter neighborhood.
   const handleClusterClick = useCallback((cluster: ClusterData) => {
+    setSelectedClusterId(prev => prev === cluster.anchor.id ? null : cluster.anchor.id)
+    setSelectedSuggestedId(null)
+    setSelectedEntityId(null)
+    setSelectedSourceId(null)
+  }, [setSelectedEntityId])
+
+  const handleClusterDoubleClick = useCallback((cluster: ClusterData) => {
     enterNeighborhood(cluster.anchor.id)
   }, [enterNeighborhood])
 
-  const handleZoomTransition = useCallback((clusterId: string) => {
+  // "Explore" button from the cluster info card
+  const handleExploreCluster = useCallback((clusterId: string) => {
     enterNeighborhood(clusterId)
   }, [enterNeighborhood])
 
@@ -162,17 +220,23 @@ export function ExploreView() {
     setSourceGraphAnchors(anchors)
   }, [])
 
-  const handleEntitiesLoaded = useCallback((entities: EntityNode[]) => {
-    setNeighborhoodEntities(entities)
+  const handleEntitiesLoaded = useCallback((_entities: EntityNode[]) => {
+    // Entities available for neighborhood view context
   }, [])
 
-  const handleEdgesLoaded = useCallback((edges: EntityEdge[]) => {
-    setNeighborhoodEdges(edges)
+  const handleEdgesLoaded = useCallback((_edges: EntityEdge[]) => {
+    // Edges available for neighborhood view context
   }, [])
 
   const handleToggleShowEdges = useCallback(() => {
     setShowEdges(prev => !prev)
   }, [setShowEdges])
+
+  const handleSuggestedClusterClick = useCallback((candidate: SuggestedClusterData) => {
+    setSelectedSuggestedId(candidate.candidateId)
+    setSelectedEntityId(null)
+    setSelectedSourceId(null)
+  }, [setSelectedEntityId])
 
   // Shared toolbar props
   const toolbarProps = {
@@ -200,6 +264,9 @@ export function ExploreView() {
     onClearAllFilters: clearAllFilters,
     // Entity browser state (controls rendered inline in toolbar)
     entityBrowser,
+    suggestedCount: suggestedClusterData.length,
+    showCrossEdges,
+    onToggleShowCrossEdges: () => setShowCrossEdges(prev => !prev),
   }
 
   // Determine effective clusters for toolbar (empty when loading/errored)
@@ -229,126 +296,55 @@ export function ExploreView() {
         <div className="flex-1 overflow-hidden">
           <GraphTab />
         </div>
-      ) : (
-
-      <div
-        ref={containerRef}
-        className="flex-1 flex overflow-hidden"
-        style={{
-          userSelect: isDragging ? 'none' : undefined,
-          cursor: isDragging ? 'col-resize' : undefined,
-        }}
-      >
-        {/* ── LEFT: Graph visualization ── */}
-        <div
-          className="h-full overflow-hidden"
-          style={{
-            width: `${leftWidthPct}%`,
-            flexShrink: 0,
-            transition: isDragging ? 'none' : 'width 0.2s ease',
-          }}
-        >
-          {/* Landscape (cluster bubbles) */}
-          {viewMode === 'anchors' && !isNeighborhood && (
-            <LandscapeView
-              clusters={clusters}
-              stats={stats}
-              unclustered={unclustered}
-              isClusterVisible={isClusterVisible}
-              onClusterClick={handleClusterClick}
-              onZoomTransition={handleZoomTransition}
-            />
-          )}
-
-          {/* Neighborhood (entity nodes within a cluster) */}
-          {viewMode === 'anchors' && isNeighborhood && activeCluster && (
-            <NeighborhoodView
-              cluster={activeCluster}
-              allClusters={clusters}
-              filters={filters}
-              showEdges={showEdges}
-              visibleEdgeTypes={visibleEdgeTypes}
-              selectedEntityId={selectedEntityId}
-              onSelectEntity={handleSelectEntity}
-              onBack={returnToLandscape}
-              onAutoBack={returnToLandscape}
-              onEntitiesLoaded={handleEntitiesLoaded}
-              onEdgesLoaded={handleEdgesLoaded}
-            />
-          )}
-
-          {/* Source graph */}
-          {viewMode === 'sources' && (
-            <SourceGraphView
-              filters={filters}
-              selectedSourceId={selectedSourceId}
-              onSelectSource={handleSelectSource}
-              onSourcesLoaded={handleSourcesLoaded}
-            />
-          )}
+      ) : viewMode === 'anchors' && !isNeighborhood ? (
+        /* ── LANDSCAPE: Full-screen with floating info card ── */
+        <div className="flex-1 overflow-hidden relative">
+          <LandscapeView
+            clusters={clusters}
+            stats={stats}
+            unclustered={unclustered}
+            isClusterVisible={isClusterVisible}
+            onClusterClick={handleClusterClick}
+            onClusterDoubleClick={handleClusterDoubleClick}
+            onExploreCluster={handleExploreCluster}
+            selectedClusterId={selectedClusterId}
+            onClearSelection={() => setSelectedClusterId(null)}
+            suggestedClusters={suggestedClusterData}
+            showCrossEdges={showCrossEdges}
+            onSuggestedClusterClick={handleSuggestedClusterClick}
+          />
         </div>
-
-        {/* ── Resize handle ── */}
-        <div
-          className="flex-shrink-0 flex items-center justify-center"
-          onMouseDown={handleDividerMouseDown}
-          onMouseEnter={() => setIsHandleHovered(true)}
-          onMouseLeave={() => setIsHandleHovered(false)}
-          style={{
-            width: 16,
-            cursor: 'col-resize',
-            position: 'relative',
-            flexShrink: 0,
-            zIndex: 1,
-          }}
-        >
-          <div style={{
-            position: 'absolute',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            top: 0,
-            bottom: 0,
-            width: 2,
-            background: (isDragging || isHandleHovered) ? 'var(--color-accent-500)' : 'var(--border-subtle)',
-            transition: 'background 0.15s ease',
-            borderRadius: 1,
-          }} />
-          <GripVertical
-            size={14}
-            style={{
-              position: 'relative',
-              zIndex: 1,
-              color: (isDragging || isHandleHovered) ? 'var(--color-accent-500)' : 'var(--color-text-placeholder)',
-              transition: 'color 0.15s ease',
-              background: 'var(--color-bg-content)',
-              borderRadius: 2,
+      ) : viewMode === 'anchors' && isNeighborhood && activeCluster ? (
+        /* ── NEIGHBORHOOD: Full-screen with floating info card (spec Section 1.5) ── */
+        <div className="flex-1 overflow-hidden relative">
+          <NeighborhoodView
+            cluster={activeCluster}
+            allClusters={clusters}
+            filters={filters}
+            showEdges={showEdges}
+            visibleEdgeTypes={visibleEdgeTypes}
+            selectedEntityId={selectedEntityId}
+            onSelectEntity={handleSelectEntity}
+            onBack={returnToLandscape}
+            onEntitiesLoaded={handleEntitiesLoaded}
+            onEdgesLoaded={handleEdgesLoaded}
+            onNavigateToEntityBrowser={(query) => {
+              entityBrowser.setSearchQuery(query)
+              entityBrowser.setViewMode('list')
+              handleViewModeChange('entity-browser')
             }}
           />
         </div>
+      ) : (
 
-        {/* ── RIGHT: Metadata panel ── */}
-        <div
-          className="flex-1 h-full overflow-hidden"
-          style={{ minWidth: 0 }}
-        >
-          <ExploreMetadataPanel
-            viewMode={viewMode}
-            zoomLevel={zoomLevel}
-            activeCluster={activeCluster}
-            neighborhoodEntities={neighborhoodEntities}
-            neighborhoodEdges={neighborhoodEdges}
-            allSources={allSources}
-            sourceEdges={sourceEdges}
-            sourceGraphAnchors={sourceGraphAnchors}
-            selectedEntityId={selectedEntityId}
-            selectedSourceId={selectedSourceId}
-            onSelectEntity={handleSelectEntity}
-            onSelectSource={handleSelectSource}
-            onBack={returnToLandscape}
-            filters={filters}
-            onClearSpotlight={() => toggleSpotlight(null)}
-          />
-        </div>
+      /* ── SOURCE GRAPH: Full-screen canvas (matching neighborhood style) ── */
+      <div className="flex-1 overflow-hidden relative">
+        <SourceGraphView
+          filters={filters}
+          selectedSourceId={selectedSourceId}
+          onSelectSource={handleSelectSource}
+          onSourcesLoaded={handleSourcesLoaded}
+        />
       </div>
       )}
     </div>

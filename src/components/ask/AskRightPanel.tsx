@@ -1,18 +1,30 @@
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
 import { SectionLabel } from '../ui/SectionLabel'
 import { SourceCard } from './SourceCard'
 import { EntityChain } from './EntityChain'
 import { ExploreButton } from './ExploreButton'
-import type { RAGResponseContext, InlineCitation } from '../../types/rag'
+import type { RAGResponseContext, InlineCitation, EnrichedChunk } from '../../types/rag'
+import type { KnowledgeNode } from '../../types/database'
 
 interface AskRightPanelProps {
   context: RAGResponseContext
   highlightedCitationIndex?: number | null
   lastQuery?: string
+  onEntityClick?: (node: KnowledgeNode) => void
+  onSourceCardClick?: (chunk: EnrichedChunk) => void
+  onConnectionNodeClick?: (label: string) => void
 }
 
-export function AskRightPanel({ context, highlightedCitationIndex = null, lastQuery = '' }: AskRightPanelProps) {
+export function AskRightPanel({ context, highlightedCitationIndex = null, lastQuery = '', onEntityClick, onSourceCardClick, onConnectionNodeClick }: AskRightPanelProps) {
   const cardRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+
+  // Auto-scroll to highlighted card (PRD-D §2.6)
+  useEffect(() => {
+    if (highlightedCitationIndex !== null) {
+      const el = cardRefs.current.get(highlightedCitationIndex)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [highlightedCitationIndex])
 
   // Get citation index for each chunk by matching source_id
   const getChunkCitationIndex = (chunk: { source_id: string }, allCitations: InlineCitation[]): number | undefined => {
@@ -69,6 +81,7 @@ export function AskRightPanel({ context, highlightedCitationIndex = null, lastQu
                         citationIndex={citIndex}
                         isHighlighted={isHighlighted}
                         isSameSourceAsPrevious={isSameSource}
+                        onClick={() => onSourceCardClick?.(chunk)}
                       />
                     </div>
                   )
@@ -84,9 +97,11 @@ export function AskRightPanel({ context, highlightedCitationIndex = null, lastQu
             <SectionLabel>ENTITIES</SectionLabel>
             <div className="flex flex-wrap" style={{ gap: 4, marginTop: 8 }}>
               {context.relatedNodes.slice(0, 20).map(node => (
-                <span
+                <button
                   key={node.id}
-                  className="font-body font-medium"
+                  type="button"
+                  onClick={() => onEntityClick?.(node)}
+                  className="font-body font-medium cursor-pointer"
                   style={{
                     fontSize: 11,
                     padding: '3px 8px',
@@ -94,10 +109,19 @@ export function AskRightPanel({ context, highlightedCitationIndex = null, lastQu
                     background: 'var(--color-bg-inset)',
                     border: '1px solid var(--border-subtle)',
                     color: 'var(--color-text-body)',
+                    transition: 'background 0.15s ease, border-color 0.15s ease',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'var(--color-bg-card)'
+                    e.currentTarget.style.borderColor = 'var(--border-default)'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'var(--color-bg-inset)'
+                    e.currentTarget.style.borderColor = 'var(--border-subtle)'
                   }}
                 >
                   {node.label}
-                </span>
+                </button>
               ))}
             </div>
           </div>
@@ -123,6 +147,7 @@ export function AskRightPanel({ context, highlightedCitationIndex = null, lastQu
                         to,
                         evidence: edge.evidence ?? undefined,
                       }}
+                      onNodeClick={onConnectionNodeClick}
                     />
                   )
                 }).filter(Boolean)

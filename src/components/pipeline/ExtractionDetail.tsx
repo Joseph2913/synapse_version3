@@ -1,8 +1,10 @@
 import { useState, useCallback } from 'react'
-import { X, RefreshCw, Eye, Trash2, AlertCircle } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { X, RefreshCw, Eye, Trash2, AlertCircle, MessageSquare } from 'lucide-react'
 import { StarRating } from '../shared/StarRating'
 import { getEntityColor } from '../../config/entityTypes'
 import { ProviderIcon } from '../shared/ProviderIcon'
+import { buildExtractionDetailContext } from '../../config/chatEntryContexts'
 import type { PipelineHistoryItem } from '../../types/pipeline'
 
 interface ExtractionDetailProps {
@@ -27,6 +29,7 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 export function ExtractionDetail({ item, onClose, onRate, onDelete }: ExtractionDetailProps) {
+  const navigate = useNavigate()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const isFailed = item.status === 'failed'
 
@@ -289,6 +292,38 @@ export function ExtractionDetail({ item, onClose, onRate, onDelete }: Extraction
 
       {/* Actions */}
       <div style={{ marginTop: 16 }}>
+        {item.sourceId && (
+          <button
+            type="button"
+            onClick={() => {
+              const ctx = buildExtractionDetailContext({
+                sourceId: item.sourceId!,
+                title: item.title,
+                sourceType: item.sourceType,
+                entityCount: item.entityCount,
+              })
+              navigate('/ask', { state: { chatContext: ctx } })
+            }}
+            className="font-body font-semibold flex items-center justify-center gap-1.5"
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--color-bg-card)',
+              color: 'var(--color-text-body)',
+              fontSize: 12,
+              cursor: 'pointer',
+              marginBottom: 8,
+              transition: 'background 0.12s ease',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-inset)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-bg-card)' }}
+          >
+            <MessageSquare size={13} />
+            Ask about this extraction
+          </button>
+        )}
         <button
           type="button"
           onClick={() => console.log('Re-extract:', item.sourceId)}

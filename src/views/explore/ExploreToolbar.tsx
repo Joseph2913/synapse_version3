@@ -6,10 +6,9 @@ import type { ExploreViewMode, ExploreFilters, ClusterData, SourceConnectionType
 import type { EntityBrowserState } from '../../hooks/useEntityBrowser'
 import type { EntitySortOption } from '../../hooks/useEntityBrowser'
 
-// Connection-type metadata for the dropdown
+// Connection-type metadata for the dropdown (tag removed — too noisy)
 const CONN_TYPE_META: { type: SourceConnectionType; color: string; label: string }[] = [
   { type: 'entity', color: '#6366f1', label: 'Shared entities' },
-  { type: 'tag', color: '#10b981', label: 'Common tags' },
   { type: 'anchor', color: '#b45309', label: 'Common anchors' },
 ]
 
@@ -45,6 +44,9 @@ interface ExploreToolbarProps {
   onSetSourceAnchorFilter?: (anchorId: string | null) => void
   // Entity browser state (passed from ExploreView, controls rendered inline)
   entityBrowser?: EntityBrowserState
+  suggestedCount?: number
+  showCrossEdges?: boolean
+  onToggleShowCrossEdges?: () => void
 }
 
 const RECENCY_OPTIONS: { key: ExploreFilters['recency']; label: string }[] = [
@@ -78,6 +80,9 @@ export function ExploreToolbar({
   onToggleConnType,
   onSetSourceAnchorFilter,
   entityBrowser,
+  suggestedCount,
+  showCrossEdges,
+  onToggleShowCrossEdges,
 }: ExploreToolbarProps) {
   const [spotlightOpen, setSpotlightOpen] = useState(false)
   const spotlightRef = useRef<HTMLDivElement>(null)
@@ -225,6 +230,61 @@ export function ExploreToolbar({
       })}
 
       <Divider />
+
+      {/* Suggested clusters notification */}
+      {(suggestedCount ?? 0) > 0 && viewMode === 'anchors' && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 10px', borderRadius: 20,
+          background: 'rgba(245,158,11,0.08)',
+          border: '1px solid rgba(245,158,11,0.25)',
+          flexShrink: 0,
+        }}>
+          <span style={{
+            fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: '#d97706',
+          }}>
+            ✦ {suggestedCount} new cluster{suggestedCount !== 1 ? 's' : ''} detected
+          </span>
+          <button
+            type="button"
+            onClick={() => { window.location.href = '/anchors' }}
+            style={{
+              fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: '#d97706',
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+              textDecoration: 'underline', textUnderlineOffset: 2,
+            }}
+          >
+            Review →
+          </button>
+        </div>
+      )}
+
+      {/* Cross-edges toggle */}
+      {viewMode === 'anchors' && !isNeighborhood && onToggleShowCrossEdges && (
+        <button
+          type="button"
+          onClick={onToggleShowCrossEdges}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '4px 10px', borderRadius: 20,
+            fontSize: 11, fontWeight: 600,
+            fontFamily: 'var(--font-body)',
+            border: `1px solid ${showCrossEdges ? 'rgba(100,116,139,0.3)' : 'var(--border-subtle)'}`,
+            background: showCrossEdges ? 'rgba(100,116,139,0.06)' : 'transparent',
+            color: showCrossEdges ? 'rgb(71,85,105)' : 'var(--color-text-secondary)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            flexShrink: 0,
+          }}
+        >
+          <svg width={14} height={10} viewBox="0 0 14 10" style={{ flexShrink: 0 }}>
+            <circle cx={2} cy={5} r={2} fill="currentColor" opacity={0.6} />
+            <line x1={4} y1={5} x2={10} y2={5} stroke="currentColor" strokeWidth={1.5} opacity={0.6} />
+            <circle cx={12} cy={5} r={2} fill="currentColor" opacity={0.6} />
+          </svg>
+          Connections
+        </button>
+      )}
 
       {/* 2. Anchor dropdown (entities mode only) */}
       {viewMode === 'anchors' && clusters.length > 0 && (
@@ -600,15 +660,35 @@ export function ExploreToolbar({
                         transition: 'background 0.1s ease',
                       }}
                     >
-                      <span style={{ fontSize: 12 }}>{cfg.icon}</span>
-                      <span className="flex-1">{type}</span>
                       <span style={{
                         width: 7, height: 7, borderRadius: '50%',
                         background: cfg.color, flexShrink: 0,
                       }} />
+                      <span className="flex-1">{type}</span>
                     </button>
                   )
                 })}
+                {/* Clear filters */}
+                {activeSourceTypeCount > 0 && (
+                  <>
+                    <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0' }} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        for (const st of Array.from(filters.sourceTypes)) onToggleSourceType(st)
+                      }}
+                      className="flex items-center gap-2 w-full cursor-pointer font-body"
+                      style={{
+                        padding: '7px 10px', fontSize: 11, fontWeight: 500,
+                        color: 'var(--color-text-secondary)',
+                        background: 'none', border: 'none', borderRadius: 6, textAlign: 'left',
+                      }}
+                    >
+                      <X size={10} style={{ flexShrink: 0, opacity: 0.5 }} />
+                      <span>Clear filters</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -676,6 +756,27 @@ export function ExploreToolbar({
                     </button>
                   )
                 })}
+                {/* Clear filters */}
+                {activeConnTypeCount > 0 && (
+                  <>
+                    <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 0' }} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        for (const ct of Array.from(filters.connTypes)) onToggleConnType(ct)
+                      }}
+                      className="flex items-center gap-2 w-full cursor-pointer font-body"
+                      style={{
+                        padding: '7px 10px', fontSize: 11, fontWeight: 500,
+                        color: 'var(--color-text-secondary)',
+                        background: 'none', border: 'none', borderRadius: 6, textAlign: 'left',
+                      }}
+                    >
+                      <X size={10} style={{ flexShrink: 0, opacity: 0.5 }} />
+                      <span>Clear filters</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>

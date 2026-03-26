@@ -5,6 +5,7 @@ import type { ClusterData, EntityNode } from '../../types/explore'
 export type TooltipData =
   | { kind: 'cluster'; data: ClusterData }
   | { kind: 'entity'; data: EntityNode }
+  | { kind: 'suggested'; candidateId: string; label: string; entityType: string; reasoning: string | null; score: number; velocity: 'rising' | 'stable' | 'falling' }
 
 interface NodeTooltipProps {
   tooltip: TooltipData
@@ -18,6 +19,9 @@ export function NodeTooltip({ tooltip, x, y }: NodeTooltipProps) {
   }
   if (tooltip.kind === 'entity') {
     return <EntityTooltip data={tooltip.data} x={x} y={y} />
+  }
+  if (tooltip.kind === 'suggested') {
+    return <SuggestedTooltip data={tooltip} x={x} y={y} />
   }
   return null
 }
@@ -236,6 +240,100 @@ function EntityTooltip({ data, x, y }: { data: EntityNode; x: number; y: number 
       >
         <span>{data.connectionCount} connections</span>
         {data.isBridge && <span style={{ color: '#b45309' }}>Bridge</span>}
+      </div>
+    </div>
+  )
+}
+
+// ─── Suggested Tooltip ───────────────────────────────────────────────────────
+
+function SuggestedTooltip({
+  data, x, y,
+}: {
+  data: Extract<TooltipData, { kind: 'suggested' }>
+  x: number
+  y: number
+}) {
+  const scorePct = Math.round(data.score * 100)
+  const scoreColor = data.score >= 0.60 ? '#16a34a'
+    : data.score >= 0.50 ? '#d97706'
+    : 'var(--color-text-secondary)'
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: x + 12,
+        top: y - 8,
+        zIndex: 50,
+        background: 'var(--color-bg-card)',
+        border: '1px solid rgba(245,158,11,0.25)',
+        borderRadius: 10,
+        padding: '12px 16px',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+        maxWidth: 240,
+        pointerEvents: 'none',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{
+          fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 700, color: '#d97706',
+        }}>
+          ✦ Suggested Anchor
+        </span>
+        <span style={{
+          fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 700,
+          color: scoreColor,
+          background: `${scoreColor}14`,
+          border: `1px solid ${scoreColor}30`,
+          borderRadius: 4, padding: '1px 6px',
+        }}>
+          {scorePct}%
+        </span>
+      </div>
+
+      <div style={{
+        fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 700,
+        color: 'var(--color-text-primary)', marginBottom: 4,
+      }}>
+        {data.label}
+      </div>
+
+      <span style={{
+        fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 500,
+        color: 'var(--color-text-secondary)',
+        background: 'var(--color-bg-inset)',
+        borderRadius: 4, padding: '1px 6px',
+        display: 'inline-block', marginBottom: 6,
+      }}>
+        {data.entityType}
+      </span>
+
+      {data.velocity === 'rising' && (
+        <div style={{
+          fontFamily: 'var(--font-body)', fontSize: 10, color: '#16a34a', marginBottom: 4,
+        }}>
+          ↑ Activity increasing recently
+        </div>
+      )}
+
+      {data.reasoning && (
+        <p style={{
+          fontFamily: 'var(--font-body)', fontSize: 10,
+          color: 'var(--color-text-secondary)', lineHeight: 1.5,
+          marginBottom: 6,
+        }}>
+          {data.reasoning.length > 100
+            ? data.reasoning.slice(0, 97) + '…'
+            : data.reasoning}
+        </p>
+      )}
+
+      <div style={{
+        fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600,
+        color: '#d97706',
+      }}>
+        Click to review →
       </div>
     </div>
   )

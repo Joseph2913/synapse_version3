@@ -3,6 +3,13 @@
 -- Run each numbered step independently in Supabase SQL Editor.
 -- Verify the check query after each step before proceeding.
 -- ============================================================
+--
+-- HISTORICAL NOTE (March 17, 2026):
+-- This migration references `knowledge_source_chunks` throughout.
+-- That table has since been renamed to `source_chunks` to match the
+-- application codebase. See 20260317_rename_source_chunks_fix_rpcs.sql.
+-- The SQL below is preserved as-is since it was already executed.
+-- ============================================================
 
 
 -- ────────────────────────────────────────────────────────────

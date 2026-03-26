@@ -1,0 +1,170 @@
+{
+  "pipeline": "manual",
+  "transcript_source": "user_copied_with_timestamps",
+  "summary": {
+    "total_entities": 9,
+    "total_relationships": 7,
+    "average_confidence": 0.822,
+    "entity_type_breakdown": {
+      "Risk": 2,
+      "Action": 1,
+      "Goal": 2,
+      "Technology": 1,
+      "Concept": 1,
+      "Topic": 1,
+      "Person": 1
+    },
+    "relationship_type_breakdown": {
+      "leads_to": 3,
+      "part_of": 1,
+      "enables": 1,
+      "supports": 1,
+      "relates_to": 1
+    }
+  },
+  "entities": [
+    {
+      "label": "Achilles injury",
+      "entity_type": "Risk",
+      "description": "An injury to the Achilles tendon, which can cause negative talk and doubt about recovery.",
+      "confidence": 0.9,
+      "tags": [
+        "injury",
+        "health",
+        "sports"
+      ]
+    },
+    {
+      "label": "Rehab",
+      "entity_type": "Action",
+      "description": "The process of physical rehabilitation to recover from the Achilles injury.",
+      "confidence": 0.9,
+      "tags": [
+        "recovery",
+        "physical therapy",
+        "health"
+      ]
+    },
+    {
+      "label": "Calf strength",
+      "entity_type": "Goal",
+      "description": "Regaining strength in the calf muscle is a key goal in the rehab process.",
+      "confidence": 0.9,
+      "tags": [
+        "muscle",
+        "strength",
+        "recovery"
+      ]
+    },
+    {
+      "label": "Return to the court",
+      "entity_type": "Goal",
+      "description": "The ultimate goal of the rehab process is to return to playing basketball.",
+      "confidence": 0.9,
+      "tags": [
+        "sports",
+        "basketball",
+        "recovery"
+      ]
+    },
+    {
+      "label": "Electrical stimulation",
+      "entity_type": "Technology",
+      "description": "A technique used in rehab to stimulate nerves and contract muscles, helping to re-educate nerves in the calf.",
+      "confidence": 0.8,
+      "tags": [
+        "medical device",
+        "therapy",
+        "muscle recovery"
+      ]
+    },
+    {
+      "label": "Negative talk",
+      "entity_type": "Risk",
+      "description": "Negative comments and doubts surrounding the Achilles injury and the possibility of full recovery.",
+      "confidence": 0.8,
+      "tags": [
+        "doubt",
+        "mental health",
+        "challenges"
+      ]
+    },
+    {
+      "label": "Mental fortitude",
+      "entity_type": "Concept",
+      "description": "The mental strength and determination needed to overcome the challenges of recovery.",
+      "confidence": 0.8,
+      "tags": [
+        "resilience",
+        "determination",
+        "psychology"
+      ]
+    },
+    {
+      "label": "Frustration",
+      "entity_type": "Topic",
+      "description": "Feelings of frustration experienced during the recovery process.",
+      "confidence": 0.7,
+      "tags": [
+        "emotion",
+        "mental health",
+        "recovery"
+      ]
+    },
+    {
+      "label": "Jason Han",
+      "entity_type": "Person",
+      "description": "Someone the injured person wants to be able to beat again after recovery.",
+      "confidence": 0.7,
+      "tags": [
+        "sports",
+        "basketball",
+        "competition"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "source": "Achilles injury",
+      "target": "Negative talk",
+      "relation_type": "leads_to",
+      "evidence": "There's all this negative talk around the Achilles injury and people are like, 'You'll never be back.'"
+    },
+    {
+      "source": "Rehab",
+      "target": "Calf strength",
+      "relation_type": "leads_to",
+      "evidence": "Started gaining strength back in your calf."
+    },
+    {
+      "source": "Electrical stimulation",
+      "target": "Rehab",
+      "relation_type": "part_of",
+      "evidence": "Electrical stimulation stimulates the nerves that contract the muscle. Try to help re-educate those nerves to the calf."
+    },
+    {
+      "source": "Calf strength",
+      "target": "Return to the court",
+      "relation_type": "enables",
+      "evidence": "Which will build up your calf faster."
+    },
+    {
+      "source": "Negative talk",
+      "target": "Frustration",
+      "relation_type": "leads_to",
+      "evidence": "There were times where he would be in the shower early on and I would swear he's about to come through the wall."
+    },
+    {
+      "source": "Mental fortitude",
+      "target": "Rehab",
+      "relation_type": "supports",
+      "evidence": "When he's confronted with a challenge, he wants to attack it."
+    },
+    {
+      "source": "Return to the court",
+      "target": "Jason Han",
+      "relation_type": "relates_to",
+      "evidence": "Six weeks, I'm confident you're go back and beat Jason Han the way you were before."
+    }
+  ]
+}

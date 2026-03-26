@@ -10,6 +10,15 @@ export interface QueryMindset {
 
 export const QUERY_MINDSETS: QueryMindset[] = [
   {
+    id: 'auto',
+    label: 'Auto',
+    description: 'Synapse detects the query type and adapts automatically. Best for most questions.',
+    icon: 'Sparkles',
+    color: '#6b7280',
+    promptAddition: '',  // No static prompt — handled by classifier
+    temperatureOverride: undefined,
+  },
+  {
     id: 'factual',
     label: 'Factual',
     description: 'Direct answers with precise citations. Best for "what", "when", "who" questions.',
@@ -71,7 +80,7 @@ Format: Use a flowing narrative that moves from the center of the topic outward.
   },
 ]
 
-export const DEFAULT_MINDSET_ID = 'analytical'
+export const DEFAULT_MINDSET_ID = 'auto'
 
 // ─── Model Tiers ─────────────────────────────────────────────────────────────
 
@@ -94,7 +103,7 @@ export const MODEL_TIERS: ModelTier[] = [
     description: 'Quick responses, shorter context window',
     icon: 'Rabbit',
     generationConfig: {
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       maxOutputTokens: 1024,
       temperature: 0.2,
     },
@@ -105,8 +114,8 @@ export const MODEL_TIERS: ModelTier[] = [
     description: 'Deeper analysis, larger context window',
     icon: 'Brain',
     generationConfig: {
-      model: 'gemini-2.0-flash',
-      maxOutputTokens: 4096,
+      model: 'gemini-2.5-flash',
+      maxOutputTokens: 8192,
       temperature: 0.3,
     },
   },

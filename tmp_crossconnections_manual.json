@@ -1,0 +1,61 @@
+{
+  "pipeline": "manual",
+  "approach": "crossConnections.ts — inferBatch Gemini prompt",
+  "prompt_format": {
+    "new_entity": "exact label",
+    "existing_entity": "exact label",
+    "relation_type": "leads_to|supports|enables|blocks|contradicts|part_of|relates_to|mentions|connected_to|associated_with"
+  },
+  "new_entities_source": "tmp_extraction_manual.json",
+  "existing_entities_source": "tmp_extraction_automated.json (simulates prior knowledge graph)",
+  "summary": {
+    "total_cross_connections": 7,
+    "relation_type_breakdown": {
+      "connected_to": 7
+    }
+  },
+  "cross_connections": [
+    {
+      "new_entity": "Achilles injury (Risk)",
+      "existing_entity": "Achilles injury (Topic)",
+      "relation_type": "connected_to",
+      "evidence": "Both refer to the same injury and its impact on recovery."
+    },
+    {
+      "new_entity": "Rehab (Action)",
+      "existing_entity": "Rehab (Action)",
+      "relation_type": "connected_to",
+      "evidence": "Both refer to the rehabilitation process."
+    },
+    {
+      "new_entity": "Calf strength (Goal)",
+      "existing_entity": "Calf strength (Metric)",
+      "relation_type": "connected_to",
+      "evidence": "Both refer to calf strength as a key aspect of recovery."
+    },
+    {
+      "new_entity": "Return to the court (Goal)",
+      "existing_entity": "Recovery (Goal)",
+      "relation_type": "connected_to",
+      "evidence": "Returning to the court is a specific example of recovery after an injury."
+    },
+    {
+      "new_entity": "Electrical stimulation (Technology)",
+      "existing_entity": "Electrical stimulation (Technology)",
+      "relation_type": "connected_to",
+      "evidence": "Both refer to the same technology used in rehab."
+    },
+    {
+      "new_entity": "Frustration (Topic)",
+      "existing_entity": "Frustration (Concept)",
+      "relation_type": "connected_to",
+      "evidence": "Both refer to feelings of frustration during recovery."
+    },
+    {
+      "new_entity": "Jason Han (Person)",
+      "existing_entity": "Jason Han (Person)",
+      "relation_type": "connected_to",
+      "evidence": "Both refer to the same person related to recovery goals."
+    }
+  ]
+}

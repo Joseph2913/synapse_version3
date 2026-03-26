@@ -9,6 +9,7 @@ import { useSettings } from '../hooks/useSettings'
 import { useExtraction } from '../hooks/useExtraction'
 import { extractTextFromFile } from '../utils/fileParser'
 import { ExtractionPipeline } from '../components/ingest/ExtractionPipeline'
+import { buildPostExtractionContext } from '../config/chatEntryContexts'
 import { EXTRACTION_MODES, ANCHOR_EMPHASIS_LEVELS } from '../config/extractionModes'
 import { getEntityColor } from '../config/entityTypes'
 import type { ExtractionConfig, ReviewEntity } from '../types/extraction'
@@ -589,6 +590,24 @@ export function CaptureView() {
           onCancel={isError ? handleCaptureAnother : undefined}
           onViewInBrowse={() => navigate('/explore')}
           onIngestAnother={handleCaptureAnother}
+          onChatWithCapture={state.sourceId ? () => {
+            const title = captureMode === 'text' ? textTitle
+              : captureMode === 'transcript' ? meetingTitle
+              : captureMode === 'document' ? (docFile?.name ?? '')
+              : ''
+            const sourceType = captureMode === 'text' ? 'Note'
+              : captureMode === 'url' ? 'Article'
+              : captureMode === 'document' ? 'Document'
+              : 'Meeting'
+            const ctx = buildPostExtractionContext({
+              sourceId: state.sourceId!,
+              sourceTitle: title || 'Untitled',
+              sourceType,
+              entityCount: state.savedNodes?.length ?? 0,
+              relationshipCount: state.savedEdgeIds?.length ?? 0,
+            })
+            navigate('/ask', { state: { chatContext: ctx } })
+          } : undefined}
         />
       </div>
     )

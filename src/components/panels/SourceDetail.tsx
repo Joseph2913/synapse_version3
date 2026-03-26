@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, RefreshCw, Loader2 } from 'lucide-react'
+import { X, RefreshCw, Loader2, MessageSquare } from 'lucide-react'
 import { SectionLabel } from '../ui/SectionLabel'
 import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
@@ -28,6 +28,8 @@ function formatRelativeTime(dateStr: string): string {
 interface SourceDetailProps {
   source: KnowledgeSource
   onClose?: () => void
+  isAskView?: boolean
+  onAskAbout?: (source: KnowledgeSource) => void
 }
 
 const PROVENANCE_LABELS: Record<string, string> = {
@@ -37,7 +39,7 @@ const PROVENANCE_LABELS: Record<string, string> = {
   truncated: 'Preview',
 }
 
-export function SourceDetail({ source, onClose }: SourceDetailProps) {
+export function SourceDetail({ source, onClose, isAskView, onAskAbout }: SourceDetailProps) {
   const navigate = useNavigate()
   const { setRightPanelContent } = useGraphContext()
   const [entities, setEntities] = useState<KnowledgeNode[]>([])
@@ -609,6 +611,29 @@ export function SourceDetail({ source, onClose }: SourceDetailProps) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Ask about this source — only in Ask view (PRD-D §2.5) */}
+      {isAskView && onAskAbout && (
+        <div style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            onClick={() => onAskAbout(source)}
+            className="w-full font-body font-semibold rounded-md cursor-pointer flex items-center justify-center gap-1.5"
+            style={{
+              fontSize: 12,
+              padding: '7px 0',
+              background: 'var(--color-bg-inset)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--color-text-body)',
+              transition: 'background 0.15s ease',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-card)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-bg-inset)' }}
+          >
+            <MessageSquare size={12} /> Ask about this source
+          </button>
         </div>
       )}
 

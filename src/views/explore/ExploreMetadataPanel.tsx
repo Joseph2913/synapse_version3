@@ -5,6 +5,7 @@ import { EntityBadge } from '../../components/shared/EntityBadge'
 import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { fetchNodesByIds } from '../../services/supabase'
+import { buildSourceConnectionContext } from '../../config/chatEntryContexts'
 import type {
   ExploreViewMode,
   ZoomLevel,
@@ -18,17 +19,16 @@ import type {
 } from '../../types/explore'
 import type { KnowledgeNode } from '../../types/database'
 import type { EntityEdge } from '../../services/exploreQueries'
+import type { AnchorCandidateWithNode } from '../../types/anchors'
 
 // Connection-type color map
 const CONN_COLORS: Record<SourceConnectionType, string> = {
   entity: '#6366f1',
-  tag: '#10b981',
   anchor: '#b45309',
 }
 
 const CONN_LABELS: Record<SourceConnectionType, string> = {
   entity: 'entity edges',
-  tag: 'common tags',
   anchor: 'common anchors',
 }
 
@@ -51,6 +51,10 @@ interface ExploreMetadataPanelProps {
   onBack: () => void
   filters?: ExploreFilters
   onClearSpotlight?: () => void
+  selectedSuggestedCandidate?: AnchorCandidateWithNode | null
+  onConfirmSuggested?: (candidateId: string, nodeId: string) => Promise<void>
+  onDismissSuggested?: (candidateId: string, dismissCount: number) => Promise<void>
+  onClearSuggested?: () => void
 }
 
 export function ExploreMetadataPanel({
@@ -69,7 +73,23 @@ export function ExploreMetadataPanel({
   onBack,
   filters,
   onClearSpotlight,
+  selectedSuggestedCandidate,
+  onConfirmSuggested,
+  onDismissSuggested,
+  onClearSuggested,
 }: ExploreMetadataPanelProps) {
+  // Suggested anchor selected — highest priority
+  if (selectedSuggestedCandidate && viewMode === 'anchors') {
+    return (
+      <SuggestedAnchorPanel
+        candidate={selectedSuggestedCandidate}
+        onConfirm={onConfirmSuggested ?? (async () => {})}
+        onDismiss={onDismissSuggested ?? (async () => {})}
+        onClose={onClearSuggested ?? (() => {})}
+      />
+    )
+  }
+
   // Landscape: entities + landscape — show CTA
   if (viewMode === 'anchors' && zoomLevel === 'landscape') {
     return <ExploreSelectAnchorCTA />
@@ -626,62 +646,6 @@ function ConnectionDetailPanel({
 
 // ─── Connection Prompt Builder ────────────────────────────────────────────────
 
-function buildConnectionPrompt(
-  source: SourceNode,
-  other: SourceNode,
-  edge: SourceEdge,
-  sharedEntities: KnowledgeNode[],
-): string {
-  const entityConn = edge.connections.find(c => c.type === 'entity')
-  const tagConn = edge.connections.find(c => c.type === 'tag')
-  const anchorConn = edge.connections.find(c => c.type === 'anchor')
-
-  const sameType = source.sourceType === other.sourceType
-
-  // Build entity list snippet (up to 5)
-  const entityNames = sharedEntities.slice(0, 5).map(e => e.label)
-  const entitySnippet = entityNames.length > 0
-    ? ` They share entities like ${entityNames.join(', ')}${sharedEntities.length > 5 ? ` and ${sharedEntities.length - 5} more` : ''}.`
-    : ''
-
-  // Build tag list snippet
-  const tagSnippet = tagConn && tagConn.labels.length > 0
-    ? ` They share tags: ${tagConn.labels.slice(0, 4).join(', ')}${tagConn.labels.length > 4 ? ` (+${tagConn.labels.length - 4} more)` : ''}.`
-    : ''
-
-  // Build anchor snippet
-  const anchorSnippet = anchorConn && anchorConn.labels.length > 0
-    ? ` Both connect to the anchor topic${anchorConn.labels.length > 1 ? 's' : ''} "${anchorConn.labels.slice(0, 3).join('", "')}".`
-    : ''
-
-  // Determine dominant connection type for prompt framing
-  const sorted = [...edge.connections].sort((a, b) => b.count - a.count)
-  const primary = sorted[0]?.type
-
-  // Contextual prompt based on dominant connection + source types
-  if (primary === 'entity' && entityConn && entityConn.count >= 5) {
-    // Strong entity overlap — deep comparison
-    return `"${source.title}" and "${other.title}" share ${entityConn.count} entity connections.${entitySnippet}${tagSnippet}${anchorSnippet} Analyze the relationship between these two sources: What themes connect them? How do they complement each other? Are there insights that emerge from viewing them together?`
-  }
-
-  if (primary === 'tag' && tagConn) {
-    // Tag-based connection — thematic comparison
-    return `"${source.title}" (${source.sourceType}) and "${other.title}" (${other.sourceType}) share ${tagConn.count} common tags: ${tagConn.labels.slice(0, 5).join(', ')}.${entitySnippet}${anchorSnippet} How do these sources approach these shared themes differently? What unique perspectives does each bring?`
-  }
-
-  if (primary === 'anchor' && anchorConn) {
-    // Anchor-based connection — topic exploration
-    return `"${source.title}" and "${other.title}" both connect to ${anchorConn.labels.length > 1 ? 'the anchors' : 'the anchor'} "${anchorConn.labels.slice(0, 3).join('", "')}".${entitySnippet}${tagSnippet} How do these sources contribute different perspectives to ${anchorConn.labels.length > 1 ? 'these topics' : 'this topic'}? What can we learn by considering them together?`
-  }
-
-  if (sameType) {
-    // Same source type — evolution/progression comparison
-    return `Compare "${source.title}" and "${other.title}" (both ${source.sourceType} sources). They have ${edge.totalWeight} connections.${entitySnippet}${tagSnippet}${anchorSnippet} What themes evolved between them? How do their perspectives differ or build upon each other?`
-  }
-
-  // General cross-source relationship
-  return `Analyze the relationship between "${source.title}" (${source.sourceType}) and "${other.title}" (${other.sourceType}). They share ${edge.totalWeight} connections across ${edge.connections.length} connection types.${entitySnippet}${tagSnippet}${anchorSnippet} What are the key insights from their overlap? How do they relate to each other within my knowledge graph?`
-}
 
 // ─── Source List (enhanced with drill-down) ──────────────────────────────────
 
@@ -816,11 +780,16 @@ function SourceListPanel({
     }
   }, [expandedConnId, selectedSource, sources])
 
-  const handleAskAboutConnection = useCallback((otherSource: SourceNode, edge: SourceEdge) => {
+  const handleAskAboutConnection = useCallback((otherSource: SourceNode, _edge: SourceEdge) => {
     if (!selectedSource) return
-    const prompt = buildConnectionPrompt(selectedSource, otherSource, edge, sharedEntities)
-    navigate('/ask', { state: { autoQuery: prompt } })
-  }, [selectedSource, sharedEntities, navigate])
+    const connectionPrompt = `What is the connection between "${selectedSource.title}" and "${otherSource.title}"? What shared entities, themes, or insights link these two sources?`
+    const ctx = buildSourceConnectionContext({
+      sourceA: { id: selectedSource.id, title: selectedSource.title },
+      sourceB: { id: otherSource.id, title: otherSource.title },
+      connectionPrompt,
+    })
+    navigate('/ask', { state: { chatContext: ctx } })
+  }, [selectedSource, navigate])
 
   // No source selected — show full source list
   if (!selectedSourceId || !selectedSource) {
@@ -1207,6 +1176,303 @@ function ZeroRow({ label }: { label: string }) {
     }}>
       <span>{label}</span>
       <span>0</span>
+    </div>
+  )
+}
+
+function SuggestedAnchorPanel({
+  candidate, onConfirm, onDismiss, onClose,
+}: {
+  candidate: AnchorCandidateWithNode
+  onConfirm: (candidateId: string, nodeId: string) => Promise<void>
+  onDismiss: (candidateId: string, dismissCount: number) => Promise<void>
+  onClose: () => void
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
+  const node = candidate.node
+
+  const handleConfirm = async () => {
+    if (!node) return
+    setConfirming(true)
+    await onConfirm(candidate.id, node.id)
+    setConfirming(false)
+  }
+
+  const handleDismiss = async () => {
+    setDismissing(true)
+    await onDismiss(candidate.id, candidate.dismissCount)
+    setDismissing(false)
+  }
+
+  const scorePct = Math.round(candidate.compositeScore * 100)
+  const scoreColor = candidate.compositeScore >= 0.60 ? '#16a34a'
+    : candidate.compositeScore >= 0.50 ? '#d97706'
+    : 'var(--color-text-secondary)'
+
+  return (
+    <div style={{
+      height: '100%', overflowY: 'auto', padding: '20px 18px',
+      animation: 'slideInRight 0.2s ease',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '2px 8px', borderRadius: 4,
+              background: 'rgba(245,158,11,0.08)',
+              border: '1px solid rgba(245,158,11,0.2)',
+            }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#d97706', fontFamily: 'var(--font-body)' }}>
+                ✦ Suggested
+              </span>
+            </div>
+            <span style={{
+              fontSize: 10, fontWeight: 700,
+              color: scoreColor,
+              background: `${scoreColor}12`,
+              border: `1px solid ${scoreColor}28`,
+              borderRadius: 4, padding: '2px 7px',
+              fontFamily: 'var(--font-body)',
+            }}>
+              {scorePct}%
+            </span>
+          </div>
+          <h2 style={{
+            fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700,
+            color: 'var(--color-text-primary)', margin: 0, lineHeight: 1.3,
+          }}>
+            {node?.label ?? 'Unknown'}
+          </h2>
+          {node && (
+            <div style={{ marginTop: 6 }}>
+              <EntityBadge type={node.entity_type} size="xs" />
+            </div>
+          )}
+        </div>
+        <button
+          type="button" onClick={onClose}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--color-text-secondary)', padding: 4, flexShrink: 0,
+            fontSize: 18, lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      {candidate.reasoningText && (
+        <div style={{
+          background: 'rgba(245,158,11,0.05)',
+          border: '1px solid rgba(245,158,11,0.15)',
+          borderRadius: 8, padding: '10px 12px', marginBottom: 16,
+        }}>
+          <p style={{
+            fontFamily: 'var(--font-body)', fontSize: 12,
+            color: 'var(--color-text-body)', lineHeight: 1.6, margin: 0,
+          }}>
+            {candidate.reasoningText}
+          </p>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{
+          fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 700,
+          textTransform: 'uppercase' as const, letterSpacing: '0.08em',
+          color: 'var(--color-text-secondary)', marginBottom: 8,
+        }}>
+          Signal Breakdown
+        </div>
+        {([
+          ['Centrality', candidate.centralityScore],
+          ['Diversity', candidate.diversityScore],
+          ['Velocity', candidate.velocityScore],
+          ['Richness', candidate.richnessScore],
+        ] as [string, number][]).map(([label, value]) => {
+          const fill = value >= 0.7 ? '#22c55e' : value >= 0.4 ? '#f59e0b' : '#ef4444'
+          return (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+              <span style={{
+                fontFamily: 'var(--font-display)', fontSize: 9, fontWeight: 700,
+                color: 'var(--color-text-secondary)', width: 60, flexShrink: 0,
+                textTransform: 'uppercase' as const, letterSpacing: '0.04em',
+              }}>
+                {label}
+              </span>
+              <div style={{
+                flex: 1, height: 4, background: 'var(--color-bg-inset)', borderRadius: 2, overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%', width: `${Math.round(value * 100)}%`,
+                  background: fill, borderRadius: 2, transition: 'width 0.4s ease',
+                }} />
+              </div>
+              <span style={{
+                fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600,
+                color: 'var(--color-text-body)', width: 28, textAlign: 'right' as const, flexShrink: 0,
+              }}>
+                {Math.round(value * 100)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 16 }}>
+        {([
+          ['Mentions', candidate.mentionCount],
+          ['Sources', candidate.sourceCount],
+          ['Edges', candidate.connectionCount],
+          ['Score', `${scorePct}%`],
+        ] as [string, number | string][]).map(([label, value]) => (
+          <div key={label} style={{
+            background: 'var(--color-bg-inset)', borderRadius: 8, padding: '8px 10px',
+          }}>
+            <div style={{
+              fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700,
+              color: 'var(--color-text-primary)',
+            }}>
+              {value}
+            </div>
+            <div style={{
+              fontFamily: 'var(--font-body)', fontSize: 10,
+              color: 'var(--color-text-secondary)', marginTop: 2,
+            }}>
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {candidate.velocityDirection !== 'stable' && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16,
+          padding: '7px 10px', borderRadius: 8,
+          background: candidate.velocityDirection === 'rising'
+            ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)',
+          border: `1px solid ${candidate.velocityDirection === 'rising'
+            ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
+        }}>
+          <span style={{
+            fontSize: 12,
+            color: candidate.velocityDirection === 'rising' ? '#16a34a' : '#dc2626',
+          }}>
+            {candidate.velocityDirection === 'rising' ? '↑' : '↓'}
+          </span>
+          <span style={{
+            fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 500,
+            color: candidate.velocityDirection === 'rising' ? '#16a34a' : 'var(--color-text-secondary)',
+          }}>
+            {candidate.velocityDirection === 'rising'
+              ? 'Activity increasing recently'
+              : 'Activity has slowed recently'}
+          </span>
+        </div>
+      )}
+
+      <div style={{
+        borderTop: '1px solid var(--border-subtle)',
+        paddingTop: 14, marginTop: 4,
+        display: 'flex', flexDirection: 'column', gap: 8,
+      }}>
+        {candidate.suggestedParentAnchorId ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button
+              type="button" onClick={handleConfirm}
+              disabled={confirming || !node}
+              style={{
+                width: '100%', padding: '9px 0', borderRadius: 8, border: 'none',
+                background: confirming ? 'var(--color-bg-inset)' : 'var(--color-accent-500)',
+                color: confirming ? 'var(--color-text-secondary)' : 'white',
+                fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
+                cursor: confirming ? 'default' : 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {confirming ? 'Confirming…' : '✓ Confirm as Independent Anchor'}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!node || !candidate.suggestedParentAnchorId) return
+                setConfirming(true)
+                const { promoteToSubAnchor } = await import('../../services/anchorCandidates')
+                const success = await promoteToSubAnchor(candidate.id, node.id, candidate.suggestedParentAnchorId)
+                if (success) {
+                  await onConfirm(candidate.id, node.id)
+                }
+                setConfirming(false)
+              }}
+              disabled={confirming || !node}
+              style={{
+                width: '100%', padding: '9px 0', borderRadius: 8,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--color-bg-inset)',
+                color: 'var(--color-text-body)',
+                fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600,
+                cursor: confirming ? 'default' : 'pointer',
+              }}
+            >
+              ⊃ Add as sub-anchor
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button" onClick={handleConfirm}
+            disabled={confirming || !node}
+            style={{
+              width: '100%', padding: '9px 0', borderRadius: 8, border: 'none',
+              background: confirming ? 'var(--color-bg-inset)' : 'var(--color-accent-500)',
+              color: confirming ? 'var(--color-text-secondary)' : 'white',
+              fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
+              cursor: confirming ? 'default' : 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {confirming ? 'Confirming…' : '✓ Confirm Anchor'}
+          </button>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => { window.location.href = '/anchors' }}
+            style={{
+              flex: 1, padding: '7px 0', borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--color-bg-inset)',
+              color: 'var(--color-text-body)',
+              fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Full Review →
+          </button>
+          <button
+            type="button" onClick={handleDismiss}
+            disabled={dismissing}
+            style={{
+              flex: 1, padding: '7px 0', borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: 'transparent',
+              color: 'var(--color-text-secondary)',
+              fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600,
+              cursor: dismissing ? 'default' : 'pointer',
+            }}
+          >
+            {dismissing ? 'Dismissing…' : 'Dismiss'}
+          </button>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes slideInRight {
+          from { opacity: 0; transform: translateX(12px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
     </div>
   )
 }

@@ -116,6 +116,12 @@ synapse-v2/
 - Prompt construction is modular: base instructions + extraction mode + user profile + anchor context + custom guidance
 - System prompts are composed via `utils/promptBuilder.ts`
 
+### Graph Visualisations
+- **MANDATORY: `userSelect: 'none'` on all graph containers.** Every `<svg>`, `<canvas>`, and their parent `<div>` in graph views must have `userSelect: 'none'` and `WebkitUserSelect: 'none'` to prevent text selection during drag. SVG `<text>` elements must also have `pointerEvents: 'none'` and `userSelect: 'none'`. Omitting this causes rendering slowdowns and visual artifacts.
+- **Consult `docs/GRAPH-VISUALISATION-SPEC.md`** for all graph rendering decisions — node styling, physics parameters, edge rendering, camera controls
+- **Standardised physics across all views:** No automatic floating — nodes are static until dragged. Damping `0.97`, drag drift strength `0.0005 + weight * 0.004` (1st degree only, no 2nd degree). Boundary soft-push keeps nodes within viewport.
+- **Standardised node rendering:** Translucent fill `{color}22`, solid stroke `2px`, hover scale `1.08×`, glow ring `r+4` at `{color}35`, selection ring `r+5` at `accent-500`
+
 ### Component Design
 - Follow the design system in `docs/DESIGN-SYSTEM.md` for all visual decisions
 - **Consult `docs/UI-AUDIT.md`** for layout architecture, control bar patterns, and quality checklists — this is MANDATORY for every UI change

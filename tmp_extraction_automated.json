@@ -1,0 +1,149 @@
+{
+  "pipeline": "automated",
+  "transcript_source": "apify_paragraph_formatted",
+  "summary": {
+    "total_entities": 9,
+    "total_relationships": 6,
+    "average_confidence": 0.833,
+    "entity_type_breakdown": {
+      "Action": 1,
+      "Topic": 1,
+      "Metric": 1,
+      "Goal": 1,
+      "Technology": 1,
+      "Person": 3,
+      "Concept": 1
+    },
+    "relationship_type_breakdown": {
+      "blocks": 1,
+      "leads_to": 1,
+      "enables": 1,
+      "relates_to": 1,
+      "achieved": 1,
+      "inhibits": 1
+    }
+  },
+  "entities": [
+    {
+      "label": "Rehab",
+      "entity_type": "Action",
+      "description": "Process of regaining strength and mobility after surgery.",
+      "confidence": 0.95,
+      "tags": [
+        "medical",
+        "recovery"
+      ]
+    },
+    {
+      "label": "Achilles injury",
+      "entity_type": "Topic",
+      "description": "Injury that caused negative talk and doubt about recovery.",
+      "confidence": 0.9,
+      "tags": [
+        "medical",
+        "sports"
+      ]
+    },
+    {
+      "label": "Calf strength",
+      "entity_type": "Metric",
+      "description": "Measure of strength in the calf muscle, a key indicator of recovery progress.",
+      "confidence": 0.9,
+      "tags": [
+        "medical",
+        "fitness"
+      ]
+    },
+    {
+      "label": "Recovery",
+      "entity_type": "Goal",
+      "description": "The goal of getting back to playing basketball after an injury.",
+      "confidence": 0.9,
+      "tags": [
+        "medical",
+        "sports"
+      ]
+    },
+    {
+      "label": "Electrical stimulation",
+      "entity_type": "Technology",
+      "description": "Technology used to stimulate nerves and contract muscles in the calf.",
+      "confidence": 0.85,
+      "tags": [
+        "medical",
+        "rehabilitation"
+      ]
+    },
+    {
+      "label": "Deuce",
+      "entity_type": "Person",
+      "description": "Individual who needed help after surgery.",
+      "confidence": 0.8,
+      "tags": []
+    },
+    {
+      "label": "Frustration",
+      "entity_type": "Concept",
+      "description": "Feelings of frustration during the recovery process.",
+      "confidence": 0.8,
+      "tags": [
+        "emotional",
+        "recovery"
+      ]
+    },
+    {
+      "label": "Jason Han",
+      "entity_type": "Person",
+      "description": "Individual mentioned in relation to the recovery and performance goals.",
+      "confidence": 0.7,
+      "tags": [
+        "sports"
+      ]
+    },
+    {
+      "label": "Doc",
+      "entity_type": "Person",
+      "description": "Individual who encouraged the person to come back.",
+      "confidence": 0.7,
+      "tags": []
+    }
+  ],
+  "relationships": [
+    {
+      "source": "Achilles injury",
+      "target": "Recovery",
+      "relation_type": "blocks",
+      "evidence": "all this negative talk around the Achilles injury and people are like, \"You'll never be back. You'll never be the same.\""
+    },
+    {
+      "source": "Rehab",
+      "target": "Calf strength",
+      "relation_type": "leads_to",
+      "evidence": "Started gaining strength back in your calf."
+    },
+    {
+      "source": "Electrical stimulation",
+      "target": "Calf strength",
+      "relation_type": "enables",
+      "evidence": "Electrical stimulation stimulates the nerves that contract the muscle."
+    },
+    {
+      "source": "Jason Han",
+      "target": "Recovery",
+      "relation_type": "relates_to",
+      "evidence": "confident you're go back and beat Jason Han the way you were before."
+    },
+    {
+      "source": "Deuce",
+      "target": "Recovery",
+      "relation_type": "achieved",
+      "evidence": "We going to get back, Doc."
+    },
+    {
+      "source": "Frustration",
+      "target": "Recovery",
+      "relation_type": "inhibits",
+      "evidence": "I would swear he's about to come through the wall. And I don't know if he was in there beating the wall out of frustration"
+    }
+  ]
+}

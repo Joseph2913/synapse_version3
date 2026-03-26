@@ -1,12 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Sparkles, Plus, Route, Pencil, Anchor, X, Check, ChevronRight } from 'lucide-react'
 import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
+import { buildNodeDetailExploreContext } from '../../config/chatEntryContexts'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchEntityNeighbors } from '../../services/exploreQueries'
 import { updateNode, promoteToAnchor, demoteAnchor } from '../../services/supabase'
 import type { EntityNode, ClusterData } from '../../types/explore'
 import type { EntityNeighbor } from '../../services/exploreQueries'
+import type { KnowledgeNode } from '../../types/database'
 
 interface NodeDetailPanelProps {
   entity: EntityNode
@@ -26,6 +29,7 @@ export function NodeDetailPanel({
   onEntityUpdated,
 }: NodeDetailPanelProps) {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const color = getEntityColor(entity.entityType)
 
   // Neighbors
@@ -391,8 +395,8 @@ export function NodeDetailPanel({
           label="Explore with AI"
           primary
           onClick={() => {
-            // Navigate to Ask with context — toast for now
-            window.location.href = `/ask?context=${entity.id}`
+            const node = { id: entity.id, label: entity.label, entity_type: entity.entityType, user_id: '', is_anchor: entity.entityType === 'Anchor', created_at: entity.createdAt } as KnowledgeNode
+            navigate('/ask', { state: { chatContext: buildNodeDetailExploreContext(node) } })
           }}
         />
 

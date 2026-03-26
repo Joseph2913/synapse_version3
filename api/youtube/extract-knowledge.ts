@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
+// Allow up to 120s on Vercel Pro (heavy Gemini extraction + embeddings)
+export const maxDuration = 120;
+
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -391,12 +394,40 @@ async function extractKnowledgeForItem(
     const { entities = [], relationships = [] } = extraction;
     console.log(`[extract-knowledge] Extracted ${entities.length} entities, ${relationships.length} relationships for ${item.video_id}`);
 
-    // ── STEP 4: SAVE NODES ──────────────────────────────────────────────────────
+    // ── STEP 4: DEDUPLICATION + SAVE NODES ─────────────────────────────────────
     const savedNodeMap = new Map<string, string>();
     let nodesCreated = 0;
 
+    // Check for existing nodes with same label (exact-match deduplication)
+    const entityLabels = entities.filter(e => e.label && e.entity_type).map(e => e.label);
+    const { data: existingNodes } = await supabase
+      .from('knowledge_nodes')
+      .select('id, label, entity_type')
+      .eq('user_id', item.user_id)
+      .eq('is_merged', false)
+      .in('label', entityLabels);
+
+    const exactMatchMap = new Map<string, string>();
+    for (const existing of existingNodes ?? []) {
+      const matchingEntity = entities.find(
+        e => e.label.toLowerCase() === (existing.label as string).toLowerCase()
+          && e.entity_type === existing.entity_type
+      );
+      if (matchingEntity) {
+        exactMatchMap.set(matchingEntity.label.toLowerCase(), existing.id as string);
+      }
+    }
+
+    // Pre-populate savedNodeMap with reused nodes
+    for (const [labelLower, existingId] of exactMatchMap) {
+      const entity = entities.find(e => e.label.toLowerCase() === labelLower);
+      if (entity) savedNodeMap.set(entity.label, existingId);
+    }
+
+    // Insert only new nodes (not in exactMatchMap)
     for (const entity of entities) {
       if (!entity.label || !entity.entity_type) continue;
+      if (exactMatchMap.has(entity.label.toLowerCase())) continue;
 
       const nodePayload: Record<string, unknown> = {
         user_id: item.user_id,
@@ -434,6 +465,8 @@ async function extractKnowledgeForItem(
         nodesCreated++;
       }
     }
+
+    console.log(`[extract-knowledge] Dedup: ${exactMatchMap.size} exact matches reused, ${nodesCreated} new nodes for ${item.video_id}`);
 
     // ── STEP 5: GENERATE EMBEDDINGS ─────────────────────────────────────────────
     const nodeEmbeddings = new Map<string, number[]>();
@@ -665,6 +698,30 @@ Return an empty array if no genuine cross-source connections exist.`;
       }
     } catch { /* ignore */ }
 
+    // ── TRIGGER ANCHOR SCORING (fire-and-forget) ────────────────────────────────
+    // Non-fatal: if scoring fails, extraction is still considered successful.
+    const savedNodeIds = Array.from(savedNodeMap.values());
+    if (savedNodeIds.length > 0) {
+      const appUrl = process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3000';
+
+      fetch(`${appUrl}/api/anchors/score-post-extraction`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${CRON_SECRET ?? ''}`,
+        },
+        body: JSON.stringify({
+          userId:   item.user_id,
+          sourceId: sourceId,
+          nodeIds:  savedNodeIds,
+        }),
+      }).catch(err => {
+        console.warn('[extract-knowledge] Anchor scoring trigger failed (non-fatal):', err);
+      });
+    }
+
     return { success: true, nodesCreated, edgesCreated };
 
   } catch (err) {
@@ -734,17 +791,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ── Pick items with transcripts ready for extraction ───────────────────────
     let query = supabase
       .from('youtube_ingestion_queue')
-      .select(`
-        id, user_id, channel_id, video_id, video_title, video_url,
-        thumbnail_url, published_at, duration_seconds, transcript, status,
-        retry_count, max_retries, error_message, playlist_id,
-        youtube_playlists (
-          extraction_mode,
-          anchor_emphasis,
-          linked_anchor_ids,
-          custom_instructions
-        )
-      `)
+      .select('id, user_id, channel_id, video_id, video_title, video_url, thumbnail_url, published_at, duration_seconds, transcript, status, retry_count, max_retries, error_message, playlist_id')
       .eq('status', 'transcript_ready')
       .order('priority', { ascending: true })
       .order('created_at', { ascending: true })
@@ -757,6 +804,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: pendingItems, error: fetchError } = await query;
 
     if (fetchError) {
+      console.error('[extract-knowledge] Queue query failed:', fetchError.message);
       return res.status(500).json({ error: fetchError.message });
     }
 
@@ -770,9 +818,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Flatten joined playlist settings
+    // Fetch playlist settings separately (resilient — falls back to defaults)
+    const playlistIds = [...new Set(
+      (pendingItems as Array<Record<string, unknown>>)
+        .map(r => r['playlist_id'] as string | null)
+        .filter((id): id is string => !!id)
+    )];
+    const playlistMap = new Map<string, Record<string, unknown>>();
+    if (playlistIds.length > 0) {
+      try {
+        const { data: playlists } = await supabase
+          .from('youtube_playlists')
+          .select('id, extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions')
+          .in('id', playlistIds);
+        for (const p of (playlists ?? []) as Array<Record<string, unknown>>) {
+          playlistMap.set(p['id'] as string, p);
+        }
+      } catch (err) {
+        console.warn('[extract-knowledge] Playlist settings lookup failed, using defaults:', err);
+      }
+    }
+
+    // Map queue items with playlist settings (or defaults)
     const items: QueueItem[] = (pendingItems as Array<Record<string, unknown>>).map(row => {
-      const playlist = row['youtube_playlists'] as Record<string, unknown> | null;
+      const playlist = playlistMap.get(row['playlist_id'] as string) ?? null;
       return {
         id: row['id'] as string,
         user_id: row['user_id'] as string,
@@ -788,10 +857,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         retry_count: (row['retry_count'] as number) ?? 0,
         max_retries: (row['max_retries'] as number) ?? 3,
         error_message: row['error_message'] as string | null,
-        extraction_mode: playlist?.['extraction_mode'] as string | undefined,
-        anchor_emphasis: playlist?.['anchor_emphasis'] as string | undefined,
+        extraction_mode: (playlist?.['extraction_mode'] as string) ?? undefined,
+        anchor_emphasis: (playlist?.['anchor_emphasis'] as string) ?? undefined,
         linked_anchor_ids: (playlist?.['linked_anchor_ids'] as string[]) ?? [],
-        custom_instructions: playlist?.['custom_instructions'] as string | null | undefined,
+        custom_instructions: (playlist?.['custom_instructions'] as string | null) ?? undefined,
       };
     });
 

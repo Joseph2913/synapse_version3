@@ -11,6 +11,7 @@ interface EntityReviewProps {
   onSave: () => void
   onReExtract: () => void
   saving: boolean
+  exactMatches?: Set<string>
 }
 
 export function EntityReview({
@@ -20,6 +21,7 @@ export function EntityReview({
   onSave,
   onReExtract,
   saving,
+  exactMatches,
 }: EntityReviewProps) {
   const [relationshipsOpen, setRelationshipsOpen] = useState(relationships.length <= 10)
 
@@ -90,6 +92,7 @@ export function EntityReview({
               onTypeChange={entity_type => updateEntity(i, { entity_type, edited: true })}
               onConfidenceChange={confidence => updateEntity(i, { confidence, edited: true })}
               onDescriptionChange={description => updateEntity(i, { description, edited: true })}
+              isExactMatch={exactMatches?.has(entity.label.toLowerCase())}
             />
           ))}
         </div>
@@ -226,6 +229,7 @@ interface EntityRowProps {
   onTypeChange: (type: string) => void
   onConfidenceChange: (confidence: number) => void
   onDescriptionChange: (description: string) => void
+  isExactMatch?: boolean
 }
 
 function EntityRow({
@@ -235,6 +239,7 @@ function EntityRow({
   onTypeChange,
   onConfidenceChange,
   onDescriptionChange,
+  isExactMatch,
 }: EntityRowProps) {
   const [editingLabel, setEditingLabel] = useState(false)
   const [editingConfidence, setEditingConfidence] = useState(false)
@@ -435,6 +440,20 @@ function EntityRow({
             onClick={() => { setConfidenceDraft(String(Math.round(entity.confidence * 100))); setEditingConfidence(true) }}
           >
             {Math.round(entity.confidence * 100)}%
+          </span>
+        )}
+
+        {/* Merging with existing badge */}
+        {isExactMatch && (
+          <span style={{
+            fontSize: 10, fontWeight: 600,
+            color: '#d97706',
+            background: 'rgba(245,158,11,0.08)',
+            border: '1px solid rgba(245,158,11,0.2)',
+            borderRadius: 4, padding: '1px 6px',
+            flexShrink: 0,
+          }}>
+            ↗ Merging with existing
           </span>
         )}
 

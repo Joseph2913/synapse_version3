@@ -9,6 +9,7 @@ import { SectionLabel } from '../ui/SectionLabel'
 import { NodeDetail } from '../panels/NodeDetail'
 import { SourceDetail } from '../panels/SourceDetail'
 import { AskRightPanel } from '../ask/AskRightPanel'
+import { McpAccessPanel } from '../automate/McpAccessPanel'
 import type { KnowledgeNode } from '../../types/database'
 
 const MIN_WIDTH = 240
@@ -187,6 +188,9 @@ export function RightPanel() {
   }
 
   const renderContent = () => {
+    if (rightPanelContent?.type === 'mcp-access') {
+      return <McpAccessPanel onClose={clearRightPanel} />
+    }
     if (rightPanelContent?.type === 'ask_context') {
       return <AskRightPanel context={rightPanelContent.data} />
     }
@@ -254,6 +258,7 @@ export function RightPanel() {
   }
 
   const panelTitle = () => {
+    if (rightPanelContent?.type === 'mcp-access') return 'API & MCP Access'
     if (rightPanelContent?.type === 'ask_context') return 'Context'
     if (!rightPanelContent) return isAskView ? 'Context' : 'Quick Access'
     if (rightPanelContent.type === 'node') return 'Entity Detail'

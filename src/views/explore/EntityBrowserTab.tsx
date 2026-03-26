@@ -9,8 +9,10 @@ import { getEntityColor } from '../../config/entityTypes'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { fetchEntityNeighbors } from '../../services/exploreQueries'
 import { useAuth } from '../../hooks/useAuth'
+import { buildBrowseEntityExploreContext } from '../../config/chatEntryContexts'
 import type { EntityBrowserState } from '../../hooks/useEntityBrowser'
 import type { EntityNeighbor } from '../../services/exploreQueries'
+// KnowledgeNode import removed — buildBrowseEntityExploreContext takes a lightweight param
 
 interface EntityBrowserTabProps {
   browser: EntityBrowserState
@@ -246,7 +248,11 @@ function EntityDetailPanel({
       {/* Actions */}
       <div style={{ padding: '12px 18px' }}>
         <button type="button"
-          onClick={() => navigate('/ask', { state: { autoQuery: `Tell me about ${entity.label} and its connections` } })}
+          onClick={() => {
+            navigate('/ask', { state: { chatContext: buildBrowseEntityExploreContext({
+              id: entity.id, label: entity.label, entity_type: entity.entityType, source_id: entity.sourceId,
+            }) } })
+          }}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             width: '100%', padding: '8px 12px', borderRadius: 8,

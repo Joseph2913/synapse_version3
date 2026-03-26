@@ -1,4 +1,5 @@
 import type { KnowledgeNode, KnowledgeEdge } from './database'
+import type { ChatScope } from './chatRouting'
 
 export type RAGPipelineStep =
   | 'embedding'
@@ -10,7 +11,7 @@ export type RAGPipelineStep =
 
 // ─── Query Configuration ──────────────────────────────────────────────────────
 
-export type QueryMindsetId = 'factual' | 'analytical' | 'comparative' | 'exploratory'
+export type QueryMindsetId = 'auto' | 'factual' | 'analytical' | 'comparative' | 'exploratory'
 export type ToolModeId = 'quick' | 'deep' | 'timeline'
 export type ModelTierId = 'fast' | 'thorough'
 
@@ -19,10 +20,14 @@ export interface QueryConfig {
   scopeAnchors: string[]     // Array of anchor node IDs (empty = all)
   toolMode: ToolModeId
   modelTier: ModelTierId
+  scope?: ChatScope          // Pipeline-level scope constraints (PRD-A)
+  systemDirective?: string   // Hidden instruction for Gemini system prompt (PRD-A)
+  thinkingBudget?: number    // Gemini 2.5 Flash thinking budget (PRD-C)
+  responseFormat?: string    // Response format key from responseFormats.ts (PRD-C)
 }
 
 export const DEFAULT_QUERY_CONFIG: QueryConfig = {
-  mindset: 'analytical',
+  mindset: 'auto',
   scopeAnchors: [],
   toolMode: 'deep',
   modelTier: 'thorough',
@@ -37,6 +42,10 @@ export interface ChatMessage {
   citations?: InlineCitation[]
   timestamp: Date
   pipelineDurationMs?: number
+  followUp?: {               // PRD-C: suggested follow-up question
+    question: string
+    label: string
+  }
 }
 
 // ─── Citations ────────────────────────────────────────────────────────────────
@@ -116,6 +125,10 @@ export interface RAGResponseContext {
 export interface RAGGenerationResult {
   answer: string
   citations: InlineCitation[]
+  followUp?: {               // PRD-C: suggested follow-up question
+    question: string
+    label: string
+  }
 }
 
 // ─── Search result types ──────────────────────────────────────────────────────

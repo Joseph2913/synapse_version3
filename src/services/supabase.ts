@@ -108,6 +108,7 @@ export async function searchNodes(query: string, limit: number = 20): Promise<Kn
   const { data, error } = await supabase
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, is_anchor, created_at')
+    .eq('is_merged', false)
     .ilike('label', `%${query}%`)
     .order('label')
     .limit(limit)
@@ -123,6 +124,7 @@ export async function searchNodesByLabel(query: string, limit: number = 15): Pro
   const { data, error } = await supabase
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, is_anchor, created_at')
+    .eq('is_merged', false)
     .ilike('label', `%${query}%`)
     .order('is_anchor', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
@@ -167,6 +169,7 @@ export async function fetchNodes(
   let query = supabase
     .from('knowledge_nodes')
     .select('*', { count: 'exact' })
+    .eq('is_merged', false)
     .order('created_at', { ascending: false })
 
   if (filters.search) {
@@ -587,7 +590,7 @@ export async function fetchExtractionSessions(
 
 export async function checkDuplicateNodes(
   labels: string[],
-  _userId: string
+  userId: string
 ): Promise<Set<string>> {
   if (labels.length === 0) return new Set()
 
@@ -595,6 +598,8 @@ export async function checkDuplicateNodes(
   const { data, error } = await supabase
     .from('knowledge_nodes')
     .select('label')
+    .eq('user_id', userId)
+    .eq('is_merged', false)
     .in('label', labels)
 
   if (error) {
@@ -621,8 +626,8 @@ export async function getGraphStats(userId: string): Promise<{
   sourceCount: number
 }> {
   const [nodes, chunks, edges, sources] = await Promise.all([
-    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId),
-    supabase.from('knowledge_source_chunks').select('id', { count: 'exact', head: true }).eq('user_id', userId).not('embedding', 'is', null),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('is_merged', false),
+    supabase.from('source_chunks').select('id', { count: 'exact', head: true }).eq('user_id', userId).not('embedding', 'is', null),
     supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('user_id', userId),
     supabase.from('knowledge_sources').select('id', { count: 'exact', head: true }).eq('user_id', userId),
   ])
@@ -835,6 +840,7 @@ export async function keywordSearchNodes(
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, source, source_type, source_id, confidence, is_anchor, tags, created_at')
     .eq('user_id', userId)
+    .eq('is_merged', false)
     .or(orFilter)
     .order('is_anchor', { ascending: false })
     .order('created_at', { ascending: false })
@@ -932,18 +938,25 @@ export async function traverseGraphFromNodes(
   const allNodeIds = Array.from(visitedNodeIds)
   if (allNodeIds.length === 0) return { nodes: [], edges: allEdges }
 
-  const { data: nodes, error: nodeError } = await supabase
-    .from('knowledge_nodes')
-    .select('id, user_id, label, entity_type, description, source, source_type, source_url, source_id, confidence, is_anchor, tags, user_tags, quote, created_at')
-    .in('id', allNodeIds)
+  // Batch node fetches to avoid Supabase URL length limits with large .in() arrays
+  const BATCH_SIZE = 50
+  const allNodes: KnowledgeNode[] = []
+  for (let i = 0; i < allNodeIds.length; i += BATCH_SIZE) {
+    const batch = allNodeIds.slice(i, i + BATCH_SIZE)
+    const { data: nodes, error: nodeError } = await supabase
+      .from('knowledge_nodes')
+      .select('id, user_id, label, entity_type, description, source, source_type, source_url, source_id, confidence, is_anchor, tags, user_tags, quote, created_at')
+      .in('id', batch)
 
-  if (nodeError) {
-    console.warn('[supabase] Node fetch in traversal failed:', nodeError.message)
-    return { nodes: [], edges: allEdges }
+    if (nodeError) {
+      console.warn('[supabase] Node fetch in traversal failed (batch):', nodeError.message)
+      continue
+    }
+    allNodes.push(...((nodes ?? []) as KnowledgeNode[]))
   }
 
   return {
-    nodes: (nodes ?? []) as KnowledgeNode[],
+    nodes: allNodes,
     edges: allEdges,
   }
 }
@@ -1027,6 +1040,7 @@ export async function fetchTopNodes(
     .from('knowledge_nodes')
     .select('id, label, entity_type, description, source, source_type, source_id, confidence, is_anchor, tags, created_at')
     .eq('user_id', userId)
+    .eq('is_merged', false)
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -1889,4 +1903,247 @@ export async function deleteExtractionSession(
     .eq('id', sessionId)
 
   if (error) throw new Error(`Failed to delete extraction: ${error.message}`)
+}
+
+// ─── PRD-17: Source Content Fetch (fallback when chunks are empty) ───────────
+
+/**
+ * Fetch full source records including content for generating synthetic chunks.
+ * Used when source_chunks table has no entries for a given source.
+ */
+export async function fetchSourcesWithContent(
+  sourceIds: string[]
+): Promise<Map<string, KnowledgeSource>> {
+  if (sourceIds.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('knowledge_sources')
+    .select('*')
+    .in('id', sourceIds)
+
+  if (error || !data) return new Map()
+  return new Map((data as KnowledgeSource[]).map(s => [s.id, s]))
+}
+
+// ─── PRD-17: Scoped Retrieval Functions ──────────────────────────────────────
+
+/**
+ * Fetch all chunks for a single source, ordered by chunk_index.
+ */
+export async function fetchAllChunksForSource(
+  sourceId: string,
+  _userId: string,
+  limit = 30
+): Promise<SemanticChunkResult[]> {
+  const { data, error } = await supabase
+    .from('source_chunks')
+    .select('id, source_id, chunk_index, content')
+    .eq('source_id', sourceId)
+    .order('chunk_index', { ascending: true })
+    .limit(limit)
+
+  if (error) {
+    console.warn('[supabase] fetchAllChunksForSource failed:', error.message)
+    return []
+  }
+
+  return (data ?? []).map(row => ({
+    id: row.id,
+    source_id: row.source_id,
+    chunk_index: row.chunk_index,
+    content: row.content,
+    similarity: 1.0,
+  }))
+}
+
+/**
+ * Fetch all entities extracted from a specific source.
+ */
+export async function fetchEntitiesForSource(
+  sourceId: string,
+  _userId: string
+): Promise<KnowledgeNode[]> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('*')
+    .eq('source_id', sourceId)
+    .eq('is_merged', false)
+
+  if (error) {
+    console.warn('[supabase] fetchEntitiesForSource failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeNode[]
+}
+
+/**
+ * Fetch edges where BOTH endpoints are within a given entity set.
+ */
+export async function fetchEdgesBetweenEntities(
+  entityIds: string[],
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  if (entityIds.length === 0) return []
+
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('*')
+    .in('source_node_id', entityIds)
+    .in('target_node_id', entityIds)
+
+  if (error) {
+    console.warn('[supabase] fetchEdgesBetweenEntities failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeEdge[]
+}
+
+/**
+ * Fetch edges crossing between two entity sets (A→B or B→A).
+ */
+export async function fetchCrossSourceEdges(
+  setA: string[],
+  setB: string[],
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  if (setA.length === 0 || setB.length === 0) return []
+
+  const [forwardResult, reverseResult] = await Promise.all([
+    supabase
+      .from('knowledge_edges')
+      .select('*')
+      .in('source_node_id', setA)
+      .in('target_node_id', setB),
+    supabase
+      .from('knowledge_edges')
+      .select('*')
+      .in('source_node_id', setB)
+      .in('target_node_id', setA),
+  ])
+
+  const forward = (forwardResult.data ?? []) as KnowledgeEdge[]
+  const reverse = (reverseResult.data ?? []) as KnowledgeEdge[]
+
+  // Deduplicate
+  const seen = new Set<string>()
+  const result: KnowledgeEdge[] = []
+  for (const edge of [...forward, ...reverse]) {
+    if (!seen.has(edge.id)) {
+      seen.add(edge.id)
+      result.push(edge)
+    }
+  }
+  return result
+}
+
+/**
+ * Fetch all first-degree edges for a single entity.
+ */
+export async function fetchEntityDirectEdges(
+  entityId: string,
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('*')
+    .or(`source_node_id.eq.${entityId},target_node_id.eq.${entityId}`)
+
+  if (error) {
+    console.warn('[supabase] fetchEntityDirectEdges failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeEdge[]
+}
+
+/**
+ * Fetch a node including its embedding vector.
+ */
+export async function fetchNodeWithEmbedding(
+  nodeId: string,
+  _userId: string
+): Promise<(KnowledgeNode & { embedding: number[] | null }) | null> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('*, embedding')
+    .eq('id', nodeId)
+    .maybeSingle()
+
+  if (error) {
+    console.warn('[supabase] fetchNodeWithEmbedding failed:', error.message)
+    return null
+  }
+
+  return data as (KnowledgeNode & { embedding: number[] | null }) | null
+}
+
+/**
+ * Fetch a node's stored embedding vector by ID.
+ * Used by "Find Similar" to search with the entity's own vector
+ * rather than generating a new embedding from the question text.
+ */
+export async function fetchNodeEmbedding(
+  nodeId: string
+): Promise<number[] | null> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('embedding')
+    .eq('id', nodeId)
+    .maybeSingle()
+
+  if (error) {
+    console.warn('[supabase] fetchNodeEmbedding failed:', error.message)
+    return null
+  }
+
+  return (data as { embedding: number[] | null } | null)?.embedding ?? null
+}
+
+/**
+ * Fetch all entities extracted from a specific source, returning full node records.
+ * Alias for fetchEntitiesForSource — matches PRD-A naming convention.
+ */
+export async function fetchNodesForSource(
+  sourceId: string,
+  userId: string,
+  limit: number = 50
+): Promise<KnowledgeNode[]> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('source_id', sourceId)
+    .limit(limit)
+
+  if (error) {
+    console.warn('[supabase] fetchNodesForSource failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeNode[]
+}
+
+/**
+ * Fetch all edges directly connected to a specific node.
+ * Returns edges where the node is either source or target.
+ */
+export async function fetchDirectEdges(
+  nodeId: string,
+  userId: string,
+  limit: number = 20
+): Promise<KnowledgeEdge[]> {
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('*')
+    .eq('user_id', userId)
+    .or(`source_node_id.eq.${nodeId},target_node_id.eq.${nodeId}`)
+    .limit(limit)
+
+  if (error) {
+    console.warn('[supabase] fetchDirectEdges failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as KnowledgeEdge[]
 }

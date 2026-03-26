@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   Save, FileText, Sparkles, Eye, Database, Cpu, Scissors, Zap,
-  Check, X, CheckCircle, type LucideIcon,
+  Check, X, CheckCircle, MessageSquare, type LucideIcon,
 } from 'lucide-react'
 import { EntityReview } from '../shared/EntityReview'
 import type { ExtractionStep, ReviewEntity, ExtractedRelationship } from '../../types/extraction'
@@ -34,6 +34,7 @@ interface ExtractionPipelineProps {
   // Complete actions
   onViewInBrowse: () => void
   onIngestAnother: () => void
+  onChatWithCapture?: () => void
 }
 
 // ─── Step config ──────────────────────────────────────────────────────────────
@@ -81,6 +82,7 @@ export function ExtractionPipeline({
   onCancel,
   onViewInBrowse,
   onIngestAnother,
+  onChatWithCapture,
 }: ExtractionPipelineProps) {
   const currentIdx = getStepIndex(step)
   const isError    = step === 'error'
@@ -449,42 +451,67 @@ export function ExtractionPipeline({
           </div>
 
           {/* Actions */}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              onClick={onViewInBrowse}
-              className="font-body font-semibold cursor-pointer"
-              style={{
-                flex: 1,
-                fontSize: 12,
-                padding: '9px 0',
-                borderRadius: 8,
-                background: 'var(--color-bg-inset)',
-                border: '1px solid var(--border-default)',
-                color: 'var(--color-text-body)',
-                textAlign: 'center',
-              }}
-            >
-              View in Browse
-            </button>
-            <button
-              type="button"
-              onClick={onIngestAnother}
-              className="font-body font-semibold cursor-pointer"
-              style={{
-                flex: 1,
-                fontSize: 12,
-                padding: '9px 0',
-                borderRadius: 8,
-                background: 'var(--color-accent-500)',
-                border: 'none',
-                color: 'white',
-                textAlign: 'center',
-                boxShadow: '0 2px 8px rgba(214,58,0,0.18)',
-              }}
-            >
-              Capture another
-            </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={onViewInBrowse}
+                className="font-body font-semibold cursor-pointer"
+                style={{
+                  flex: 1,
+                  fontSize: 12,
+                  padding: '9px 0',
+                  borderRadius: 8,
+                  background: 'var(--color-bg-inset)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--color-text-body)',
+                  textAlign: 'center',
+                }}
+              >
+                View in Browse
+              </button>
+              <button
+                type="button"
+                onClick={onIngestAnother}
+                className="font-body font-semibold cursor-pointer"
+                style={{
+                  flex: 1,
+                  fontSize: 12,
+                  padding: '9px 0',
+                  borderRadius: 8,
+                  background: 'var(--color-accent-500)',
+                  border: 'none',
+                  color: 'white',
+                  textAlign: 'center',
+                  boxShadow: '0 2px 8px rgba(214,58,0,0.18)',
+                }}
+              >
+                Capture another
+              </button>
+            </div>
+            {onChatWithCapture && (
+              <button
+                type="button"
+                onClick={onChatWithCapture}
+                className="font-body font-semibold cursor-pointer flex items-center justify-center gap-1.5"
+                style={{
+                  width: '100%',
+                  fontSize: 12,
+                  padding: '9px 0',
+                  borderRadius: 7,
+                  background: 'var(--color-bg-inset)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--color-text-body)',
+                  textAlign: 'center',
+                  transition: 'background 0.12s ease',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-card)' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-bg-inset)' }}
+              >
+                <MessageSquare size={12} />
+                Chat with what you captured
+              </button>
+            )}
           </div>
         </div>
       )}

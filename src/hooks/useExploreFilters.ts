@@ -8,7 +8,7 @@ const DEFAULT_FILTERS: ExploreFilters = {
   spotlightEntityType: null,
   recency: 'all',
   sourceTypes: new Set(),
-  connTypes: new Set(),
+  connTypes: new Set<SourceConnectionType>(['entity']),
   sourceAnchorFilter: null,
 }
 
@@ -45,9 +45,9 @@ export function useExploreFilters() {
     spotlightEntityType: searchParams.get('spotlight') || null,
     recency: (searchParams.get('recency') as ExploreFilters['recency']) || 'all',
     sourceTypes: new Set(searchParams.get('stypes')?.split(',').filter(Boolean) ?? []),
-    connTypes: new Set(
-      (searchParams.get('ctypes')?.split(',').filter(Boolean) ?? []) as SourceConnectionType[]
-    ),
+    connTypes: searchParams.has('ctypes')
+      ? new Set((searchParams.get('ctypes')!.split(',').filter(Boolean)) as SourceConnectionType[])
+      : DEFAULT_FILTERS.connTypes,
     sourceAnchorFilter: searchParams.get('sanchor') || null,
   })
 

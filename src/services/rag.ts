@@ -1,4 +1,7 @@
 import { generateRAGResponse, decomposeQuery, embedQuery } from './gemini'
+import { classifyQuery, mapIntentToMindset } from './queryClassifier'
+import type { QueryClassification } from './queryClassifier'
+import { getResponseFormatForClassification } from '../config/responseFormats'
 import {
   keywordSearchChunks,
   fetchChunksForSources,
@@ -230,6 +233,10 @@ export interface RAGResponse {
   sourceChunks: EnrichedChunk[]
   relatedNodes: KnowledgeNode[]
   relatedEdges: KnowledgeEdge[]
+  followUp?: {
+    question: string
+    label: string
+  }
 }
 
 /**
@@ -271,9 +278,32 @@ export async function queryGraph(
   const toolModeConfig = TOOL_MODES.find(m => m.id === toolModeId)?.pipelineOverrides
     ?? TOOL_MODES.find(m => m.id === DEFAULT_TOOL_MODE_ID)!.pipelineOverrides
 
-  // Resolve mindset
+  // Resolve mindset — auto mode runs classifier (PRD-C §2.7)
   const mindsetId = queryConfig?.mindset ?? DEFAULT_MINDSET_ID
-  const mindset = QUERY_MINDSETS.find(m => m.id === mindsetId)
+  let classification: QueryClassification | null = null
+  let effectiveMindsetId = mindsetId
+  let responseFormatInstruction: string | undefined
+  let thinkingBudget: number | undefined
+
+  if (mindsetId === 'auto') {
+    // Build conversation context from last few messages for classifier
+    const recentContext = conversationHistory.slice(-2).map(m => m.content).join(' ')
+    classification = await classifyQuery(question, recentContext || undefined)
+    console.debug('[rag] auto-classification:', classification)
+
+    // Map classifier intent to existing mindset for promptAddition
+    effectiveMindsetId = mapIntentToMindset(classification.intent)
+    responseFormatInstruction = getResponseFormatForClassification(classification.responseFormat)
+    thinkingBudget = classification.thinkingBudget
+  } else {
+    // Manual mindset — default thinking budget of 1024
+    thinkingBudget = queryConfig?.thinkingBudget ?? 1024
+    responseFormatInstruction = queryConfig?.responseFormat
+      ? getResponseFormatForClassification(queryConfig.responseFormat)
+      : undefined
+  }
+
+  const mindset = QUERY_MINDSETS.find(m => m.id === effectiveMindsetId)
 
   // Resolve model tier
   const modelTierId = queryConfig?.modelTier ?? DEFAULT_MODEL_TIER_ID
@@ -436,7 +466,10 @@ export async function queryGraph(
     sourceContextNote,
     mindset?.promptAddition,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    queryConfig?.systemDirective,
+    responseFormatInstruction,
+    thinkingBudget
   )
   checkAbort()
 
@@ -450,6 +483,7 @@ export async function queryGraph(
     sourceChunks: enrichedChunks,
     relatedNodes: graphNodes,
     relatedEdges: graphEdges,
+    followUp: generationResult.followUp,
   }
 }
 

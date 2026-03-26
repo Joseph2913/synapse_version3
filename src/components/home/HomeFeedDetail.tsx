@@ -10,6 +10,14 @@ import { stripMarkdown } from '../../utils/stripMarkdown'
 import { resolveSummary } from '../../utils/summarize'
 import type { FeedItem } from '../../types/feed'
 import type { KnowledgeNode } from '../../types/database'
+import {
+  buildEntityExploreContext,
+  buildEntityFindSimilarContext,
+  buildRelationshipChatContext,
+  buildSourceChatContext,
+  buildSourceAnchorRelateContext,
+  buildSourceCompareContext,
+} from '../../config/chatEntryContexts'
 
 const PROVENANCE_LABELS: Record<string, string> = {
   extracted: 'From source',
@@ -346,9 +354,7 @@ function EntityDetailPanel({
           className="font-body font-semibold cursor-pointer"
           style={panelBtnStyle()}
           onClick={() => navigate('/ask', {
-            state: {
-              autoQuery: `Tell me about "${node.label}" (${node.entity_type}). What is its significance in my knowledge graph, what key insights are associated with it, and how does it connect to other important concepts?`,
-            },
+            state: { chatContext: buildEntityExploreContext(node) },
           })}
           onMouseEnter={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-card)' }}
           onMouseLeave={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
@@ -360,9 +366,7 @@ function EntityDetailPanel({
           className="font-body font-semibold cursor-pointer"
           style={panelBtnStyle()}
           onClick={() => navigate('/ask', {
-            state: {
-              autoQuery: `What concepts, entities, or ideas in my knowledge graph are most similar to "${node.label}"? Find related ${node.entity_type.toLowerCase()} entries and explain what they have in common.`,
-            },
+            state: { chatContext: buildEntityFindSimilarContext(node) },
           })}
           onMouseEnter={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-card)' }}
           onMouseLeave={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
@@ -550,9 +554,7 @@ function RelationshipDetailPanel({
             transition: 'background 0.12s ease',
           }}
           onClick={() => navigate('/ask', {
-            state: {
-              autoQuery: `Explain the relationship between "${conn.fromLabel}" and "${conn.toLabel}". They are connected by "${relationLabel}" — what does this relationship mean, what insights does it reveal, and what are the broader implications for understanding both concepts together?`,
-            },
+            state: { chatContext: buildRelationshipChatContext(conn) },
           })}
           onMouseEnter={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'rgba(214,58,0,0.1)' }}
           onMouseLeave={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'rgba(214,58,0,0.06)' }}
@@ -797,9 +799,7 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
               className="font-body cursor-pointer"
               style={actionBtnStyle}
               onClick={() => navigate('/ask', {
-                state: {
-                  autoQuery: `Summarize the key insights, main concepts, and important takeaways from "${item.source.title ?? 'this source'}". What are the most significant ideas it covers and how do they connect to the rest of my knowledge graph?`,
-                },
+                state: { chatContext: buildSourceChatContext(item.source) },
               })}
               onMouseEnter={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-card)' }}
               onMouseLeave={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
@@ -1212,9 +1212,7 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
                   <button
                     type="button"
                     onClick={() => navigate('/ask', {
-                      state: {
-                        autoQuery: `How does "${item.source.title ?? 'this source'}" relate to "${a.label}"? What are the key connections, shared themes, and insights that link them together in my knowledge graph?`,
-                      },
+                      state: { chatContext: buildSourceAnchorRelateContext(item.source, a) },
                     })}
                     className="inline-flex items-center gap-1 font-body font-semibold cursor-pointer shrink-0"
                     style={{ fontSize: 11, marginLeft: 8, padding: '2px 8px', borderRadius: 6, border: 'none', background: 'none', color: 'var(--color-accent-500)', transition: 'opacity 0.12s ease' }}
@@ -1249,9 +1247,7 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
                   <button
                     type="button"
                     onClick={() => navigate('/ask', {
-                      state: {
-                        autoQuery: `Compare "${item.source.title ?? 'this source'}" with "${s.title}". What are the key similarities, differences, and complementary insights between them? How do they relate to the same topics or themes?`,
-                      },
+                      state: { chatContext: buildSourceCompareContext(item.source, { id: s.sourceId, title: s.title }) },
                     })}
                     className="inline-flex items-center gap-1 font-body font-semibold cursor-pointer shrink-0"
                     style={{ fontSize: 11, marginLeft: 8, padding: '2px 8px', borderRadius: 6, border: 'none', background: 'none', color: 'var(--color-accent-500)', transition: 'opacity 0.12s ease' }}

@@ -6,6 +6,7 @@ export type RightPanelContent =
   | { type: 'source'; data: KnowledgeSource }
   | { type: 'feed'; data: FeedItem }
   | { type: 'ask_context'; data: RAGResponseContext }
+  | { type: 'mcp-access'; data: null }
   | null
 
 export interface FeedItem {

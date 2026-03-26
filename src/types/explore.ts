@@ -5,10 +5,14 @@ export type ZoomLevel = 'landscape' | 'neighborhood' | 'detail'
 
 export interface ClusterData {
   anchor: AnchorNode
-  entityCount: number
+  entityCount: number              // total: direct + inherited
+  directEntityCount: number        // PRD-23: direct edges only
+  inheritedEntityCount: number     // PRD-23: from sub-anchors
   typeDistribution: TypeDistributionEntry[]
   position: { cx: number; cy: number; r: number }
   crossClusterEdges: CrossClusterEdge[]
+  // PRD-22: sub-anchors orbiting this cluster
+  subAnchorIds: string[]
 }
 
 export interface TypeDistributionEntry {
@@ -30,6 +34,9 @@ export interface AnchorNode {
   entityType: string
   description: string | null
   entityCount: number
+  // PRD-22: hierarchy fields
+  parentAnchorId: string | null   // null = root anchor
+  isSubAnchor:    boolean         // true when parentAnchorId is set
 }
 
 export interface EntityNode {
@@ -48,6 +55,7 @@ export interface EntityNode {
   isBridge: boolean // belongs to 2+ clusters
   isUnclustered: boolean // belongs to 0 clusters
   isAnchor: boolean // this node is itself an anchor
+  originAnchorId?: string // PRD-23: which anchor this entity primarily connects to
 }
 
 export interface SourceNode {
@@ -61,7 +69,7 @@ export interface SourceNode {
   anchorIds: string[]        // anchor IDs this source's entities connect to
 }
 
-export type SourceConnectionType = 'entity' | 'tag' | 'anchor'
+export type SourceConnectionType = 'entity' | 'anchor'
 
 export interface SourceEdge {
   fromSourceId: string

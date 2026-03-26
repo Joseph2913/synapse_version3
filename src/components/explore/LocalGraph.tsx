@@ -124,7 +124,7 @@ export function LocalGraph({ entity, neighbors, width = 262, height = 200 }: Loc
       ref={canvasRef}
       width={width}
       height={height}
-      style={{ display: 'block', width, height }}
+      style={{ display: 'block', width, height, userSelect: 'none', WebkitUserSelect: 'none' }}
     />
   )
 }

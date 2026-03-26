@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { ArrowLeft, Copy, Check } from 'lucide-react'
+import { ArrowLeft, Copy, Check, Plug2 } from 'lucide-react'
 import type { AutomationSource, SourceSettings } from '../../services/automationSources'
 import { addYouTubePlaylist, DEFAULT_SOURCE_SETTINGS } from '../../services/automationSources'
+import { connectMicrosoft } from '../../services/microsoft'
 import { useSettings } from '../../hooks/useSettings'
 import { useAuth } from '../../hooks/useAuth'
 import { EXTRACTION_MODES, ANCHOR_EMPHASIS_LEVELS } from '../../config/extractionModes'
@@ -9,11 +10,13 @@ import { getEntityColor } from '../../config/entityTypes'
 
 interface NewSourcePanelProps {
   onSourceAdded: (source: AutomationSource) => void
+  onSelectMcp?: () => void
 }
 
-type SourceTypeId = 'youtube-playlist' | 'circleback' | 'firefly'
+type SourceTypeId = 'youtube-playlist' | 'circleback' | 'firefly' | 'microsoft'
 
 const SOURCE_TYPES: { id: SourceTypeId; logo: string; label: string; description: string }[] = [
+  { id: 'microsoft', logo: '/logos/microsoft.svg', label: 'Microsoft 365', description: 'Outlook calendar, email & Teams transcripts' },
   { id: 'youtube-playlist', logo: '/logos/youtube.svg', label: 'YouTube Playlist', description: 'Sync all videos in a specific playlist' },
   { id: 'circleback', logo: '/logos/circleback.jpeg', label: 'Circleback', description: 'Auto-ingest meeting transcripts via webhook' },
   { id: 'firefly', logo: '/logos/fireflies.jpeg', label: 'Firefly', description: 'Auto-ingest Firefly.ai meeting notes' },
@@ -209,9 +212,10 @@ function ExtractionSettingsForm({ settings, onChange }: ExtractionSettingsFormPr
 
 interface StepPickProps {
   onPick: (type: SourceTypeId) => void
+  onSelectMcp?: () => void
 }
 
-function StepPick({ onPick }: StepPickProps) {
+function StepPick({ onPick, onSelectMcp }: StepPickProps) {
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}>
       <div style={{ padding: '24px 28px' }}>
@@ -228,6 +232,43 @@ function StepPick({ onPick }: StepPickProps) {
         {/* Active source types */}
         <SL>Available</SL>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
+          {/* API & MCP Access — first in the list */}
+          {onSelectMcp && (
+            <button
+              type="button"
+              onClick={onSelectMcp}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                padding: '14px 16px',
+                borderRadius: 10,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--color-bg-card)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s',
+                width: '100%',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'rgba(214,58,0,0.3)'
+                e.currentTarget.style.background = 'var(--color-accent-50)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--border-subtle)'
+                e.currentTarget.style.background = 'var(--color-bg-card)'
+              }}
+            >
+              <div style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-bg-inset)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Plug2 size={20} style={{ color: '#d63a00' }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="font-body" style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}>API &amp; MCP Access</div>
+                <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 1 }}>Connect Claude Code &amp; other AI tools</div>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-placeholder)', flexShrink: 0 }}>→</div>
+            </button>
+          )}
           {SOURCE_TYPES.map(st => (
             <button
               key={st.id}
@@ -310,6 +351,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
   const { user } = useAuth()
 
   const isMeeting = sourceType === 'circleback' || sourceType === 'firefly'
+  const isMicrosoft = sourceType === 'microsoft'
   const webhookUrl = isMeeting && user
     ? `${window.location.origin}/api/meetings/webhook?uid=${user.id}`
     : ''
@@ -325,6 +367,20 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
 
   const handleConnect = async () => {
     setError(null)
+
+    if (isMicrosoft) {
+      setLoading(true)
+      try {
+        const authUrl = await connectMicrosoft()
+        // Redirect to Microsoft OAuth consent screen
+        window.location.href = authUrl
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to connect Microsoft 365')
+        setLoading(false)
+      }
+      return
+    }
+
     if (sourceType === 'youtube-playlist') {
       const trimmed = url.trim()
       if (!trimmed) { setError('Please enter a YouTube playlist URL.'); return }
@@ -347,11 +403,13 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
     }
   }
 
-  const connectLabel = isMeeting
-    ? 'Done — Webhook Configured'
-    : loading
-      ? 'Connecting…'
-      : `Connect ${sourceInfo.label}`
+  const connectLabel = isMicrosoft
+    ? loading ? 'Redirecting to Microsoft…' : 'Connect with Microsoft'
+    : isMeeting
+      ? 'Done — Webhook Configured'
+      : loading
+        ? 'Connecting…'
+        : `Connect ${sourceInfo.label}`
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)', animation: 'slideInRight 0.2s ease' }}>
@@ -385,7 +443,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
         </div>
 
         {/* ── YouTube URL input ── */}
-        {!isMeeting && (
+        {!isMeeting && !isMicrosoft && (
           <div style={{ marginBottom: 24 }}>
             <SL>Playlist URL</SL>
             <input
@@ -444,11 +502,37 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
           </div>
         )}
 
+        {/* ── Microsoft OAuth info ── */}
+        {isMicrosoft && (
+          <div style={{ marginBottom: 24 }}>
+            <SL>How It Works</SL>
+            <div className="font-body" style={{ fontSize: 12, color: 'var(--color-text-body)', lineHeight: 1.6 }}>
+              <p style={{ margin: '0 0 10px' }}>
+                Clicking <strong>Connect with Microsoft</strong> will redirect you to Microsoft's sign-in page where you can authorize Synapse to access your:
+              </p>
+              <ul style={{ margin: '0 0 10px', paddingLeft: 18 }}>
+                <li><strong>Outlook Calendar</strong> — meetings, events, and attendees</li>
+                <li><strong>Outlook Email</strong> — inbox messages (optional)</li>
+                <li><strong>Teams Transcripts</strong> — meeting recordings with transcription enabled</li>
+              </ul>
+              <p style={{ margin: 0, fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                Teams transcript access may require admin consent from your IT department.
+                You can configure which data sources to sync after connecting.
+              </p>
+            </div>
+            {error && (
+              <p className="font-body" style={{ fontSize: 12, color: '#ef4444', marginTop: 12, padding: '8px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>{error}</p>
+            )}
+          </div>
+        )}
+
         {/* ── Extraction settings ── */}
+        {!isMicrosoft && (
         <div style={{ paddingTop: 4, borderTop: '1px solid var(--border-subtle)', marginBottom: 24 }}>
           <SL style={{ marginTop: 20 }}>Extraction Settings</SL>
           <ExtractionSettingsForm settings={settings} onChange={setSettings} />
         </div>
+        )}
 
         {/* ── Submit ── */}
         <button
@@ -477,7 +561,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-export function NewSourcePanel({ onSourceAdded }: NewSourcePanelProps) {
+export function NewSourcePanel({ onSourceAdded, onSelectMcp }: NewSourcePanelProps) {
   const [step, setStep] = useState<'pick' | 'configure'>('pick')
   const [selectedType, setSelectedType] = useState<SourceTypeId | null>(null)
 
@@ -496,5 +580,5 @@ export function NewSourcePanel({ onSourceAdded }: NewSourcePanelProps) {
     )
   }
 
-  return <StepPick onPick={handlePick} />
+  return <StepPick onPick={handlePick} onSelectMcp={onSelectMcp} />
 }

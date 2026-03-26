@@ -21,6 +21,7 @@ interface SourceDetailPanelProps {
 
 function getCategoryColor(category: AutomationSource['category']): string {
   if (category === 'youtube-playlist') return '#ef4444'
+  if (category === 'microsoft') return '#0078d4'
   return '#3b82f6'
 }
 
@@ -460,7 +461,18 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
     setScanResult(null)
     setActionError(null)
     try {
-      if (session?.access_token) {
+      if (source.category === 'microsoft' && session?.access_token) {
+        // Microsoft: trigger a delta sync instead of YouTube scan
+        const syncRes = await fetch('/api/microsoft/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        })
+        if (!syncRes.ok) throw new Error('Sync failed')
+        const data = await syncRes.json() as { results?: Array<{ eventsQueued?: number; messagesQueued?: number }> }
+        const r = data.results?.[0]
+        const total = (r?.eventsQueued ?? 0) + (r?.messagesQueued ?? 0)
+        setScanResult(`${total} item${total !== 1 ? 's' : ''} synced`)
+      } else if (session?.access_token) {
         const result = await callScanNowAPI(session.access_token)
         setScanResult(`${result.newVideosQueued} new video${result.newVideosQueued !== 1 ? 's' : ''} queued`)
       } else {
@@ -482,7 +494,9 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
     setActionError(null)
     try {
       if (!session?.access_token) throw new Error('Not authenticated')
-      const result = await callProcessNowAPI(session.access_token)
+      const sourceType = source.category === 'microsoft' ? 'microsoft' as const
+        : source.category === 'meeting' ? 'meeting' as const : 'youtube' as const
+      const result = await callProcessNowAPI(session.access_token, sourceType)
       setProcessResult(`${result.processed} item${result.processed !== 1 ? 's' : ''} processed`)
       await onRefetch()
       refetchQueue()
@@ -615,7 +629,7 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
                     style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--color-bg-card)', color: 'var(--color-text-body)', fontSize: 11, cursor: scanLoading ? 'not-allowed' : 'pointer', opacity: scanLoading ? 0.6 : 1 }}
                   >
                     <RefreshCw size={12} style={{ animation: scanLoading ? 'spin 1s linear infinite' : 'none' }} />
-                    {scanLoading ? 'Scanning…' : 'Scan Now'}
+                    {scanLoading ? 'Scanning…' : source.category === 'microsoft' ? 'Sync Now' : 'Scan Now'}
                   </button>
                 )}
                 {source.queue.pending > 0 && (

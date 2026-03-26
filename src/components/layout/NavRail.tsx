@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Home, Compass, MessageSquare, Plus, Zap, Navigation, Activity, Search, Settings, type LucideIcon } from 'lucide-react'
+import { Home, Compass, MessageSquare, Plus, Zap, Navigation, Activity, Anchor, Search, Settings, type LucideIcon } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { Kbd } from '../ui/Kbd'
 import { SynapseLogo } from '../shared/SynapseLogo'
@@ -13,19 +13,23 @@ const NAV_ITEMS: Array<{ id: string; label: string; path: string; icon: LucideIc
   { id: 'automate', label: 'Automate', path: '/automate', icon: Zap },
   { id: 'orient', label: 'Orient', path: '/orient', icon: Navigation },
   { id: 'pipeline', label: 'Pipeline', path: '/pipeline', icon: Activity },
+  { id: 'anchors', label: 'Anchors', path: '/anchors', icon: Anchor },
 ]
 
 interface NavRailProps {
   onOpenCommandPalette: () => void
   onOpenSettings: () => void
+  anchorSuggestionCount?: number
 }
 
 function NavItemButton({
   item,
   expanded,
+  badge,
 }: {
   item: (typeof NAV_ITEMS)[number]
   expanded: boolean
+  badge?: number
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -109,6 +113,26 @@ function NavItemButton({
           {item.label}
         </span>
       )}
+
+      {/* Badge */}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className="absolute flex items-center justify-center"
+          style={{
+            top: expanded ? 10 : 4,
+            right: expanded ? 8 : 4,
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            background: '#d97706',
+            color: 'white',
+            fontSize: 9,
+            fontWeight: 700,
+          }}
+        >
+          {badge > 9 ? '9+' : badge}
+        </span>
+      )}
     </button>
   )
 }
@@ -162,7 +186,7 @@ function UtilButton({
   )
 }
 
-export function NavRail({ onOpenCommandPalette, onOpenSettings }: NavRailProps) {
+export function NavRail({ onOpenCommandPalette, onOpenSettings, anchorSuggestionCount = 0 }: NavRailProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -220,7 +244,12 @@ export function NavRail({ onOpenCommandPalette, onOpenSettings }: NavRailProps) 
           }}
         >
           {NAV_ITEMS.map((item) => (
-            <NavItemButton key={item.id} item={item} expanded={expanded} />
+            <NavItemButton
+              key={item.id}
+              item={item}
+              expanded={expanded}
+              badge={item.id === 'anchors' ? anchorSuggestionCount : undefined}
+            />
           ))}
         </div>
 
