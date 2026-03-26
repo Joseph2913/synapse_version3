@@ -2,7 +2,7 @@
  * api/mcp.ts
  *
  * Synapse MCP Server — Vercel serverless function implementing MCP Streamable HTTP transport.
- * Exposes 10 tools for querying the user's personal knowledge graph.
+ * Exposes 12 tools for querying the user's personal knowledge graph.
  *
  * CRITICAL: Fully self-contained. No local imports. All helpers defined inline.
  * PRD-24: MCP Server & API Key Management
@@ -422,6 +422,49 @@ const TOOLS: ToolDescriptor[] = [
           type: 'number',
           default: 10,
           description: 'Max related sources to return.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_meeting_notes',
+    description:
+      "Get the structured meeting notes (overview, key topics, decisions, action items) WITHOUT the raw transcript. Use for fast orientation: pre-meeting briefs, status updates, 'what did I miss?' queries, action item follow-up. For the raw transcript, use get_meeting_transcript instead.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Meeting title or search term. Fuzzy matched against meeting source titles.',
+        },
+        source_id: {
+          type: 'string',
+          description: 'Direct lookup by source UUID. If provided, query is ignored.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_meeting_transcript',
+    description:
+      "Get the raw verbatim transcript of a meeting with speaker labels. Use for deep mining: content creation (slides, proposals), capturing exact language and framing, understanding reasoning chains, finding the 'why' behind decisions. For structured notes/summaries, use get_meeting_notes instead.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Meeting title or search term. Fuzzy matched against meeting source titles.',
+        },
+        source_id: {
+          type: 'string',
+          description: 'Direct lookup by source UUID. If provided, query is ignored.',
+        },
+        max_length: {
+          type: 'number',
+          default: 50000,
+          description: 'Truncate transcript at this character count.',
         },
       },
       required: ['query'],
@@ -1304,6 +1347,61 @@ async function findRelatedSources(
   return results
 }
 
+/** Parse meeting content into notes and transcript sections. Handles both formats:
+ *  - V1 markdown: `## Meeting Notes` ... `## Transcript` ...
+ *  - V2 delimited: notes ... `--- TRANSCRIPT ---` ... `--- ACTION ITEMS ---` ...
+ *  - Manual paste: no delimiters, full content treated as transcript
+ */
+function parseMeetingContent(content: string): {
+  notes: string | null
+  transcript: string | null
+  actionItems: string | null
+  format: 'v1_markdown' | 'v2_delimited' | 'manual'
+} {
+  // V1 markdown format: ## Meeting Notes ... ## Transcript
+  const v1TranscriptIdx = content.indexOf('## Transcript')
+  if (v1TranscriptIdx !== -1) {
+    const notesSection = content.slice(0, v1TranscriptIdx).trim()
+    const transcriptSection = content.slice(v1TranscriptIdx + '## Transcript'.length).trim()
+    return {
+      notes: notesSection || null,
+      transcript: transcriptSection || null,
+      actionItems: null, // V1 format embeds actions in the notes section
+      format: 'v1_markdown',
+    }
+  }
+
+  // V2 delimited format: --- TRANSCRIPT --- ... --- ACTION ITEMS ---
+  const v2TranscriptIdx = content.indexOf('--- TRANSCRIPT ---')
+  if (v2TranscriptIdx !== -1) {
+    const notesSection = content.slice(0, v2TranscriptIdx).trim()
+    const afterTranscript = content.slice(v2TranscriptIdx + '--- TRANSCRIPT ---'.length)
+    const actionIdx = afterTranscript.indexOf('--- ACTION ITEMS ---')
+    let transcriptSection: string
+    let actionItems: string | null = null
+    if (actionIdx !== -1) {
+      transcriptSection = afterTranscript.slice(0, actionIdx).trim()
+      actionItems = afterTranscript.slice(actionIdx + '--- ACTION ITEMS ---'.length).trim() || null
+    } else {
+      transcriptSection = afterTranscript.trim()
+    }
+    return {
+      notes: notesSection || null,
+      transcript: transcriptSection || null,
+      actionItems,
+      format: 'v2_delimited',
+    }
+  }
+
+  // Manual paste: no delimiters found, entire content is the transcript
+  return {
+    notes: null,
+    transcript: content || null,
+    actionItems: null,
+    format: 'manual',
+  }
+}
+
 // ─── New tool handlers ──────────────────────────────────────────────────────
 
 async function handleGetSourceContent(
@@ -1654,6 +1752,154 @@ async function handleGetRelatedSources(
   }
 }
 
+async function handleGetMeetingNotes(
+  params: { query: string; source_id?: string },
+  userId: string,
+  sb: SupabaseClient
+): Promise<ToolContent> {
+  const source = await findSource(sb, userId, {
+    source_id: params.source_id,
+    query: params.query,
+    source_type: 'Meeting',
+  })
+
+  if (!source) {
+    return {
+      content: [{
+        type: 'text',
+        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "Meeting" to find the correct title.`,
+      }],
+    }
+  }
+
+  const sourceId = source.id as string
+  const rawContent = (source.content as string) ?? ''
+  const parsed = parseMeetingContent(rawContent)
+
+  // Fetch extracted entities grouped by function
+  const { data: entities } = await sb
+    .from('knowledge_nodes')
+    .select('label, entity_type, description, confidence, quote')
+    .eq('source_id', sourceId)
+    .eq('user_id', userId)
+
+  const allEntities = (entities ?? []) as Array<{
+    label: string; entity_type: string; description: string | null
+    confidence: number | null; quote: string | null
+  }>
+
+  const decisions = allEntities.filter(e => e.entity_type === 'Decision')
+  const actionItems = allEntities.filter(e => e.entity_type === 'Action')
+  const keyInsights = allEntities.filter(e => ['Insight', 'Concept', 'Lesson', 'Takeaway'].includes(e.entity_type))
+  const topics = allEntities.filter(e => e.entity_type === 'Topic')
+  const people = allEntities.filter(e => e.entity_type === 'Person')
+
+  const metadata = (source.metadata as Record<string, unknown>) ?? {}
+
+  const result = {
+    meeting: {
+      source_id: sourceId,
+      title: source.title as string,
+      created_at: source.created_at as string,
+      participants: (source.participants as string[] | null) ?? null,
+      source_url: (source.source_url as string | null) ?? null,
+      duration: (metadata.duration_seconds as number | null) ?? null,
+    },
+    format: parsed.format,
+    notes: parsed.notes,
+    action_items_raw: parsed.actionItems,
+    extracted_entities: {
+      decisions: decisions.map(e => ({ label: e.label, description: e.description, quote: e.quote })),
+      action_items: actionItems.map(e => ({ label: e.label, description: e.description, quote: e.quote })),
+      key_insights: keyInsights.map(e => ({ label: e.label, type: e.entity_type, description: e.description })),
+      topics: topics.map(e => ({ label: e.label, description: e.description })),
+      people: people.map(e => ({ label: e.label, description: e.description })),
+    },
+    total_entities: allEntities.length,
+  }
+
+  if (!parsed.notes) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2) +
+          '\n\nNote: This meeting was manually pasted without structured notes. The extracted entities above contain the key intelligence. Use `get_meeting_transcript` for the full text.',
+      }],
+    }
+  }
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify(result, null, 2),
+    }],
+  }
+}
+
+async function handleGetMeetingTranscript(
+  params: { query: string; source_id?: string; max_length?: number },
+  userId: string,
+  sb: SupabaseClient
+): Promise<ToolContent> {
+  const maxLen = params.max_length ?? 50000
+
+  const source = await findSource(sb, userId, {
+    source_id: params.source_id,
+    query: params.query,
+    source_type: 'Meeting',
+  })
+
+  if (!source) {
+    return {
+      content: [{
+        type: 'text',
+        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "Meeting" to find the correct title.`,
+      }],
+    }
+  }
+
+  const rawContent = (source.content as string) ?? ''
+  const parsed = parseMeetingContent(rawContent)
+
+  const transcript = parsed.transcript ?? ''
+  const transcriptLength = transcript.length
+  const truncated = transcriptLength > maxLen
+
+  const metadata = (source.metadata as Record<string, unknown>) ?? {}
+
+  const result = {
+    meeting: {
+      source_id: source.id as string,
+      title: source.title as string,
+      created_at: source.created_at as string,
+      participants: (source.participants as string[] | null) ?? null,
+      source_url: (source.source_url as string | null) ?? null,
+      duration: (metadata.duration_seconds as number | null) ?? null,
+    },
+    format: parsed.format,
+    transcript: truncated ? transcript.slice(0, maxLen) : transcript,
+    transcript_length: transcriptLength,
+    transcript_truncated: truncated,
+  }
+
+  if (!parsed.transcript) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2) +
+          '\n\nNote: No transcript section found in this meeting content.',
+      }],
+    }
+  }
+
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify(result, null, 2),
+    }],
+  }
+}
+
 // ─── MCP Router ──────────────────────────────────────────────────────────────
 
 function jsonRpcError(id: string | number | null, code: number, message: string): JsonRpcResponse {
@@ -1814,6 +2060,33 @@ async function handleMcpRequest(
                   source_id: toolArgs.source_id as string | undefined,
                   source_type: toolArgs.source_type as string | undefined,
                   limit: toolArgs.limit as number | undefined,
+                },
+                userId,
+                sb
+              )
+            )
+
+          case 'get_meeting_notes':
+            return jsonRpcResult(
+              reqId,
+              await handleGetMeetingNotes(
+                {
+                  query: toolArgs.query as string,
+                  source_id: toolArgs.source_id as string | undefined,
+                },
+                userId,
+                sb
+              )
+            )
+
+          case 'get_meeting_transcript':
+            return jsonRpcResult(
+              reqId,
+              await handleGetMeetingTranscript(
+                {
+                  query: toolArgs.query as string,
+                  source_id: toolArgs.source_id as string | undefined,
+                  max_length: toolArgs.max_length as number | undefined,
                 },
                 userId,
                 sb
