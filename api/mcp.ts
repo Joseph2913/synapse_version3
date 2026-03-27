@@ -192,7 +192,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'ask_synapse',
     description:
-      "Query the user's personal Synapse knowledge graph. Use this when the question involves the user's own knowledge, decisions, projects, relationships, or domain context — things learned from their meetings, documents, YouTube videos, or notes. This performs full graph-traversal RAG and returns a synthesised answer with source citations. Do NOT use for general world knowledge.",
+      "Query the user's personal Synapse knowledge graph using semantic RAG with source citations. Best for CROSS-SOURCE SYNTHESIS — scanning across multiple meetings, documents, and notes to answer a question. For single-meeting deep dives, prefer get_source_content or get_meeting_transcript (full verbatim text) or get_meeting_notes/get_meeting_brief (structured summaries). Note: recently ingested sources may not yet be available via semantic search — check get_recent_sources for indexing_status if results seem incomplete. When source_ids is provided, the similarity threshold is lowered to ensure results are returned from the specified sources.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -221,7 +221,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'search_entities',
     description:
-      "Search for specific entities (people, concepts, projects, decisions, etc.) in the user's knowledge graph. Returns matching nodes with their type, description, and connection count. Use when you need to look up a specific person, project, concept, or topic the user has encountered.",
+      "Search for specific entities (people, concepts, projects, decisions, etc.) in the user's knowledge graph. Returns matching nodes with their type, description, and connection count. Use when you need to look up a specific person, project, concept, or topic the user has encountered. Note: this returns entities, not the sources they came from. To find which sources a person appeared in, use search_sources with the participant filter instead.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -287,7 +287,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_recent_sources',
     description:
-      "List the most recently ingested content sources in the user's knowledge graph — meetings, YouTube videos, documents, and notes. Use to understand what the user has been learning about recently. Supports date range filtering.",
+      "List the most recently ingested content sources in the user's knowledge graph — meetings, YouTube videos, documents, and notes. Each result includes an indexing_status field (complete/partial/pending) indicating whether semantic search (ask_synapse) can find content from that source yet. For finding a specific meeting with a known participant, prefer search_sources which supports compound filters.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -308,13 +308,17 @@ const TOOLS: ToolDescriptor[] = [
           type: 'string',
           description: 'ISO date string. Only return sources created on or before this date.',
         },
+        participant: {
+          type: 'string',
+          description: 'Optional filter: name of a person who participated. Searches the participants array on the source.',
+        },
       },
     },
   },
   {
     name: 'get_source_content',
     description:
-      "Retrieve the full raw content of a source (transcript, article, notes) plus its metadata. Use this to access the actual transcript or text of a meeting, video, document, or note. Supports lookup by title search or direct source ID.",
+      "PRIMARY tool for analysing a specific source in depth. Returns the full raw content (transcript, article, notes) plus metadata. Contains the full verbatim record including tone, reasoning, and details that structured notes may omit. Use this over ask_synapse for single-source analysis. For a quick structured overview, use get_meeting_brief or get_meeting_notes instead. Supports lookup by title search or direct source ID.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -480,6 +484,9 @@ async function handleAskSynapse(
   sb: SupabaseClient
 ): Promise<ToolContent> {
   const maxResults = Math.min(params.max_results ?? 8, 20)
+  // Lower threshold when source_ids is provided — explicit source scoping is a strong intent signal
+  const isSourceScoped = (params.source_ids && params.source_ids.length > 0) || !!params.source_type
+  const matchThreshold = isSourceScoped ? 0.1 : 0.3
 
   // 1. Embed query
   let embedding: number[]
@@ -494,8 +501,8 @@ async function handleAskSynapse(
   // 2. Semantic search on source chunks
   const { data: semanticChunks } = await sb.rpc('match_source_chunks', {
     query_embedding: JSON.stringify(embedding),
-    match_threshold: 0.3,
-    match_count: params.source_ids || params.source_type ? maxResults * 3 : maxResults, // fetch more if we'll filter
+    match_threshold: matchThreshold,
+    match_count: isSourceScoped ? maxResults * 3 : maxResults, // fetch more if we'll filter
     p_user_id: userId,
   })
 
@@ -505,6 +512,20 @@ async function handleAskSynapse(
   if (params.source_ids && params.source_ids.length > 0) {
     const scopeSet = new Set(params.source_ids)
     chunks = chunks.filter(c => scopeSet.has(c.source_id))
+
+    // Fall back to raw chunk retrieval if semantic search returned nothing for these sources
+    if (chunks.length === 0) {
+      const { data: fallbackChunks } = await sb
+        .from('source_chunks')
+        .select('id, source_id, chunk_index, content')
+        .in('source_id', params.source_ids)
+        .eq('user_id', userId)
+        .order('chunk_index', { ascending: true })
+        .limit(maxResults)
+
+      chunks = ((fallbackChunks ?? []) as Array<{ id: string; source_id: string; chunk_index: number; content: string }>)
+        .map(c => ({ ...c, similarity: 0 }))
+    }
   }
   if (params.source_type) {
     // Need to look up source types for the chunks
@@ -657,17 +678,18 @@ async function handleAskSynapse(
     }
   }
 
-  // 8. Format response
+  // 8. Format response — include source_ids for follow-up tool calls
   const sources = topChunks
     .map(c => {
       const src = sourceMap.get(c.source_id)
       return src
-        ? { title: src.title, source_type: src.source_type, relevance: Math.round(c.score * 100) / 100 }
+        ? { source_id: c.source_id, title: src.title, source_type: src.source_type, relevance: Math.round(c.score * 100) / 100 }
         : null
     })
     .filter(Boolean)
-    // Deduplicate by title
-    .filter((s, i, arr) => arr.findIndex(x => x!.title === s!.title) === i) as Array<{
+    // Deduplicate by source_id
+    .filter((s, i, arr) => arr.findIndex(x => x!.source_id === s!.source_id) === i) as Array<{
+      source_id: string
       title: string
       source_type: string
       relevance: number
@@ -676,7 +698,7 @@ async function handleAskSynapse(
   const entityLabels = [...new Set(anchorConnections.map(a => a.label))]
 
   const sourcesText = sources
-    .map(s => `- ${s.title} (relevance: ${Math.round(s.relevance * 100)}%)`)
+    .map(s => `- ${s.title} (${s.source_type}, relevance: ${Math.round(s.relevance * 100)}%, id: ${s.source_id})`)
     .join('\n')
 
   const entitiesText = entityLabels.length > 0 ? entityLabels.join(', ') : 'None identified'
@@ -1107,7 +1129,7 @@ async function handleListAnchors(
 }
 
 async function handleGetRecentSources(
-  params: { limit?: number; source_type?: string; date_from?: string; date_to?: string },
+  params: { limit?: number; source_type?: string; date_from?: string; date_to?: string; participant?: string },
   userId: string,
   sb: SupabaseClient
 ): Promise<ToolContent> {
@@ -1118,7 +1140,7 @@ async function handleGetRecentSources(
     .select('id, title, source_type, source_url, created_at, participants')
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
-    .limit(limit)
+    .limit(params.participant ? 50 : limit) // fetch more when filtering by participant
 
   if (params.source_type) {
     query = query.eq('source_type', params.source_type)
@@ -1138,19 +1160,36 @@ async function handleGetRecentSources(
     return { content: [{ type: 'text', text: 'No sources found in the knowledge graph.' }] }
   }
 
-  const sources = data as Array<{
+  let sources = data as Array<{
     id: string; title: string; source_type: string; source_url: string | null
     created_at: string; participants: string[] | null
   }>
 
-  // Fetch node counts and build consistent response
+  // Filter by participant if provided — match against the participants array
+  if (params.participant) {
+    const participantLower = params.participant.toLowerCase()
+    sources = sources.filter(s =>
+      s.participants?.some(p => p.toLowerCase().includes(participantLower))
+    )
+    sources = sources.slice(0, limit)
+  }
+
+  if (sources.length === 0) {
+    return { content: [{ type: 'text', text: params.participant ? `No sources found with participant "${params.participant}".` : 'No sources found in the knowledge graph.' }] }
+  }
+
+  // Fetch node counts, chunk counts, and embedding status for indexing_status
   const results: Array<Record<string, unknown>> = []
   for (const s of sources) {
-    const { count } = await sb
-      .from('knowledge_nodes')
-      .select('id', { count: 'exact', head: true })
-      .eq('source_id', s.id)
-      .eq('user_id', userId)
+    const [{ count: nodeCount }, { count: chunkCount }, { count: embeddedCount }] = await Promise.all([
+      sb.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('source_id', s.id).eq('user_id', userId),
+      sb.from('source_chunks').select('id', { count: 'exact', head: true }).eq('source_id', s.id).eq('user_id', userId),
+      sb.from('source_chunks').select('id', { count: 'exact', head: true }).eq('source_id', s.id).eq('user_id', userId).not('embedding', 'is', null),
+    ])
+
+    const totalChunks = chunkCount ?? 0
+    const totalEmbedded = embeddedCount ?? 0
+    const indexingStatus = totalChunks === 0 ? 'pending' : totalEmbedded < totalChunks ? 'partial' : 'complete'
 
     results.push({
       source_id: s.id,
@@ -1158,7 +1197,8 @@ async function handleGetRecentSources(
       source_type: s.source_type,
       created_at: s.created_at,
       participants: s.participants ?? null,
-      entity_count: count ?? 0,
+      entity_count: nodeCount ?? 0,
+      indexing_status: indexingStatus,
       source_url: s.source_url ?? null,
     })
   }
@@ -1999,6 +2039,7 @@ async function handleMcpRequest(
                   source_type: toolArgs.source_type as string | undefined,
                   date_from: toolArgs.date_from as string | undefined,
                   date_to: toolArgs.date_to as string | undefined,
+                  participant: toolArgs.participant as string | undefined,
                 },
                 userId,
                 sb
