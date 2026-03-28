@@ -192,7 +192,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'ask_synapse',
     description:
-      "Query the user's personal Synapse knowledge graph using semantic RAG with source citations. Best for CROSS-SOURCE SYNTHESIS — scanning across multiple meetings, documents, and notes to answer a question. For single-meeting deep dives, prefer get_source_content or get_meeting_transcript (full verbatim text) or get_meeting_notes/get_meeting_brief (structured summaries). Note: recently ingested sources may not yet be available via semantic search — check get_recent_sources for indexing_status if results seem incomplete. When source_ids is provided, the similarity threshold is lowered to ensure results are returned from the specified sources.",
+      "Query the user's knowledge graph using semantic RAG — searches source content chunks by embedding similarity and returns relevant passages with source citations. Best for CROSS-SOURCE SYNTHESIS when you need to find specific information scattered across multiple sources.\n\n⚠️ IMPORTANT ROUTING GUIDANCE: This tool should typically NOT be your first call. It searches over indexed source chunks using embedding similarity, which means:\n- It CANNOT find content from recently ingested sources that are not yet indexed (check get_recent_sources for indexing_status)\n- It performs POORLY on abstract/thematic queries (\"What is the philosophy of X?\") because it matches on linguistic similarity, not conceptual themes\n- It returns fragmented snippets, not coherent narratives — for depth on a specific source, use get_source_content instead\n- It cannot tell you what content EXISTS in the graph — only what matches your query linguistically\n\nRECOMMENDED SEQUENCE for most queries:\n1. search_entities (orient — what entities exist in this space?)\n2. get_recent_sources (orient — what sources exist and are they indexed?)\n3. list_anchors (if the query spans multiple domains)\n4. get_connections (map — how are relevant entities related?)\n5. get_source_content (extract — read full transcripts of the most relevant sources)\n6. ask_synapse (synthesise — targeted cross-source questions to fill gaps)\n\nUSE THIS TOOL DIRECTLY (skip orientation) only when:\n- You have a specific factual question and know the content exists (\"What did source X say about Y?\")\n- You are doing targeted gap-filling after already reading full source transcripts\n- The user has constrained the query to specific source_ids or source_type\n\nWhen using this tool, prefer specific concrete queries with entity names and domain-specific terms over abstract conceptual queries. \"Narayana Murthy Infosys partnership strategy\" will outperform \"Indian business philosophy.\"",
     inputSchema: {
       type: 'object',
       properties: {
@@ -221,7 +221,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'search_entities',
     description:
-      "Search for specific entities (people, concepts, projects, decisions, etc.) in the user's knowledge graph. Returns matching nodes with their type, description, and connection count. Use when you need to look up a specific person, project, concept, or topic the user has encountered. Note: this returns entities, not the sources they came from. To find which sources a person appeared in, use search_sources with the participant filter instead.",
+      "RECOMMENDED FIRST TOOL for most queries. Search for entities (people, concepts, projects, decisions, topics, organisations, etc.) in the user's knowledge graph by name or description. Returns matching nodes with their type, description, and connection count.\n\nQUERY ROUTING — Start here for:\n- Broad thematic exploration (\"What do I know about X?\") → use a thematic query with limit 20 to survey the entity landscape before going deeper\n- Specific entity lookup (\"Who is X?\" / \"What is Y?\") → use the entity name directly\n- Relationship mapping (\"How is X connected to Y?\") → find both entities, then use get_connections\n- Meeting/person preparation (\"Brief me on X\") → find the person entity, then trace their connections\n\nThis tool searches over extracted entity labels and descriptions — a DIFFERENT index than source content chunks. It finds things that ask_synapse may miss, especially recently ingested content where entities have been extracted but chunks are not yet indexed.\n\nAfter getting results, typical next steps are:\n1. get_connections (hops=2) on the most connected entities to map the relationship network\n2. get_source_content on relevant sources to read full transcripts\n3. ask_synapse ONLY for targeted cross-source synthesis questions\n\nNote: this returns entities, not the sources they came from. To find which sources a person appeared in, use search_sources with the participant filter, or get_recent_sources with the participant parameter.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -261,7 +261,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_connections',
     description:
-      "Traverse the relationship network around a specific entity up to N hops. Shows how concepts, people, and projects are linked in the user's knowledge graph. Use to understand context and relationships around a topic.",
+      "Traverse the relationship network around a specific entity up to N hops. Shows how concepts, people, and projects are linked in the user's knowledge graph. Returns a tree of connected entities with relationship types.\n\nQUERY ROUTING — Use this tool:\n- After search_entities has identified relevant entities — traverse from the most connected ones (highest connection count) to map the surrounding knowledge structure\n- For relationship mapping queries (\"How is X connected to Y?\") — run get_connections on both entities and look for shared nodes\n- For broad exploration — run with hops=2 on thematic entities or anchors to discover the full scope of content in a domain\n- For meeting preparation — traverse from a person entity to see all topics, projects, and decisions connected to them\n\nUse hops=1 for focused neighbourhood view, hops=2 for broader context (recommended default), hops=3 only when specifically looking for distant/bridging connections.\n\nIMPORTANT: Verify entity labels carefully before calling this tool. If the knowledge graph contains multiple entities with similar labels (e.g., an acronym that matches both a sports league and an unrelated concept), the wrong entity may be traversed. Cross-reference with search_entities results to confirm you have the correct node.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -278,7 +278,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'list_anchors',
     description:
-      "Return the user's anchor entities — the high-signal, recurring concepts and people that the user has designated as important. Anchors represent the core of the user's knowledge graph. Use to understand what the user considers most significant in their domain.",
+      "Return the user's anchor entities — the high-signal, recurring concepts and people that the user has designated as most important. Anchors are the structural hubs of the knowledge graph with the highest connectivity.\n\nQUERY ROUTING — Use this tool:\n- During the orientation phase of broad exploratory queries, to check if any anchors relate to the topic being explored. Anchors are the most connected nodes and serve as bridges between different knowledge domains.\n- When looking for cross-domain connections — anchors connect clusters of related entities that might otherwise appear disconnected.\n- When the user asks about their \"main topics\" or \"key themes\" — anchors represent exactly this.\n\nTypical sequence: search_entities → list_anchors (check for relevant anchors) → get_connections on relevant anchors → deeper exploration.",
     inputSchema: {
       type: 'object',
       properties: {},
@@ -287,7 +287,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_recent_sources',
     description:
-      "List the most recently ingested content sources in the user's knowledge graph — meetings, YouTube videos, documents, and notes. Each result includes an indexing_status field (complete/partial/pending) indicating whether semantic search (ask_synapse) can find content from that source yet. For finding a specific meeting with a known participant, prefer search_sources which supports compound filters.",
+      "List recently ingested content sources (meetings, YouTube videos, documents, notes) with their indexing status. Each result includes an indexing_status field (complete/partial/pending) indicating whether semantic search via ask_synapse can find content from that source yet.\n\nQUERY ROUTING — Use this tool:\n- ALWAYS as part of the orientation phase for broad exploratory queries, to check what content exists and whether it is searchable yet. Sources with pending/partial indexing status will NOT appear in ask_synapse results but CAN be accessed via get_source_content.\n- For any time-based query (\"What did I ingest this week?\" / \"What meetings did I have recently?\")\n- When ask_synapse returns surprisingly few results — check whether relevant sources exist but are not yet indexed\n- For meeting/person preparation — filter by participant to find all sources involving a specific person\n\nCombine with search_entities for comprehensive orientation: search_entities maps the entity landscape, get_recent_sources maps the source landscape and indexing status.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -318,7 +318,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_source_content',
     description:
-      "PRIMARY tool for analysing a specific source in depth. Returns the full raw content (transcript, article, notes) plus metadata. Contains the full verbatim record including tone, reasoning, and details that structured notes may omit. Use this over ask_synapse for single-source analysis. For a quick structured overview, use get_meeting_brief or get_meeting_notes instead. Supports lookup by title search or direct source ID.",
+      "PRIMARY tool for deep analysis of a specific source. Returns the full raw content (transcript, article, notes) plus metadata including entity count and chunk count. Contains the complete verbatim record including tone, reasoning, and details that structured notes or RAG snippets omit.\n\nQUERY ROUTING — Use this tool:\n- For any single-source deep dive (\"Summarise that video about X\" / \"What were the key points from Y?\")\n- AFTER the orientation phase (search_entities + get_recent_sources) has identified the 3-5 most relevant sources for a broad query — reading full transcripts produces far richer synthesis than multiple ask_synapse calls returning fragmented snippets\n- When ask_synapse returns low-relevance results (sub-40% scores) — the content may exist but not match the query linguistically. Reading the full source lets you find thematic connections that semantic search misses.\n- When a source has chunk_count: 0 or indexing_status: pending/partial — this tool bypasses the chunk index entirely and reads the raw source content directly.\n\nFor broad synthesis tasks, prefer reading 3-5 full source transcripts over running 10+ ask_synapse queries. Full transcripts give coherent narratives; RAG snippets give fragments.\n\nFor quick structured summaries of meetings specifically, prefer get_meeting_notes or get_meeting_brief instead.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -347,7 +347,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'search_sources',
     description:
-      "Search for content sources using keyword matching with filters for type, date range, and participants. Use to find meetings, documents, videos by keyword, date, or participant name (e.g. 'meetings with Antonio last week').",
+      "Search for content sources using keyword matching with filters for type, date range, and participants. Use when you need to find specific sources by title keyword, filter by source type (Meeting, YouTube, Research, Note, Document), or find all sources involving a specific participant.\n\nQUERY ROUTING — Use this over get_recent_sources when you need keyword-based title search or compound filters (e.g., \"meetings with Claudio in the last month\"). Use get_recent_sources for simple chronological browsing or indexing status checks.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -387,7 +387,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_meeting_brief',
     description:
-      "Assemble a structured meeting intelligence brief from existing extracted data. Returns decisions, action items, key insights, topics, people mentioned, risks/blockers, and related sources — all in a single call. No AI generation needed, pure database assembly.",
+      "Assemble a structured meeting intelligence brief from existing extracted data. Provides a concise briefing format optimised for quick consumption before or after meetings.\n\nQUERY ROUTING — Use for fast pre-meeting preparation or post-meeting catchup. For deeper analysis, follow up with get_meeting_transcript (full verbatim text) or get_source_content (full source content).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -406,7 +406,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_related_sources',
     description:
-      "Given a source, find other sources that share entity connections with it. Surfaces cross-meeting threading and how topics/people recur across different content. Use to discover the narrative arc around a meeting or document.",
+      "Given a source, find other sources that share entity connections with it. Surfaces content that is thematically related through shared people, concepts, or topics — even if the sources are from different time periods or formats.\n\nQUERY ROUTING — Use after identifying a relevant source to discover related content the user may not have thought to connect. Useful for broad exploration and serendipitous discovery.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -434,7 +434,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_meeting_notes',
     description:
-      "Get the structured meeting notes (overview, key topics, decisions, action items) WITHOUT the raw transcript. Use for fast orientation: pre-meeting briefs, status updates, 'what did I miss?' queries, action item follow-up. For the raw transcript, use get_meeting_transcript instead.",
+      "Get structured meeting notes — overview, key topics, decisions, action items — WITHOUT the raw transcript. Use for fast orientation: pre-meeting briefs, status updates, \"what did I miss?\" queries, action item follow-up.\n\nQUERY ROUTING — Use this instead of get_source_content when you need a quick structured summary of a meeting rather than the full verbatim transcript. For the raw transcript (needed for content creation, exact language, reasoning chains, or finding the \"why\" behind decisions), use get_meeting_transcript instead.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -453,7 +453,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     name: 'get_meeting_transcript',
     description:
-      "Get the raw verbatim transcript of a meeting with speaker labels. Use for deep mining: content creation (slides, proposals), capturing exact language and framing, understanding reasoning chains, finding the 'why' behind decisions. For structured notes/summaries, use get_meeting_notes instead.",
+      "Get the raw verbatim transcript of a meeting with speaker labels. Use for deep mining: content creation (slides, proposals), capturing exact language and framing, understanding reasoning chains, finding the \"why\" behind decisions.\n\nQUERY ROUTING — Use this when you need the full word-for-word record of a meeting. For quick structured summaries (topics, decisions, action items), use get_meeting_notes instead. For non-meeting sources (YouTube, documents, notes), use get_source_content.",
     inputSchema: {
       type: 'object',
       properties: {
