@@ -2,7 +2,7 @@
  * api/mcp.ts
  *
  * Synapse MCP Server — Vercel serverless function implementing MCP Streamable HTTP transport.
- * Exposes 12 tools for querying the user's personal knowledge graph.
+ * Exposes 15 tools: 12 knowledge graph tools + 3 skill library tools (PRD-Skills-C).
  *
  * CRITICAL: Fully self-contained. No local imports. All helpers defined inline.
  * PRD-24: MCP Server & API Key Management
@@ -469,6 +469,65 @@ const TOOLS: ToolDescriptor[] = [
           type: 'number',
           default: 50000,
           description: 'Truncate transcript at this character count.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+
+  // ============================================
+  // SKILL LIBRARY TOOLS (PRD-Skills-C)
+  // ============================================
+
+  {
+    name: 'get_skills',
+    description:
+      "Return a lightweight index of all active skills in the user's Synapse skill library. Each entry includes the skill name, title, description, domain, tags, confidence score, and source count — but NOT the full content. Use this to discover which skills are relevant to the current task, then call get_skill_content to load the full methodology for the ones you need.\n\nSkills are auto-generated from the user's Synapse knowledge sources (YouTube videos, meeting transcripts, documents) and represent reusable methodologies, frameworks, and techniques. Always check for relevant skills before starting substantive work — the user's knowledge graph may contain methodology directly applicable to the task.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: "Optional filter: only return skills in this domain (e.g., 'ai-tooling', 'consulting-methodology', 'change-management'). Omit to return all active skills.",
+        },
+        include_drafts: {
+          type: 'boolean',
+          description: "If true, also return skills with status 'draft' (not yet reviewed by the user). Default false — only active skills are returned.",
+          default: false,
+        },
+      },
+    },
+  },
+  {
+    name: 'get_skill_content',
+    description:
+      "Load the full content of a specific skill from the user's Synapse skill library. Returns the complete methodology, examples, and source attribution. Call this after using get_skills to identify a relevant skill by name.\n\nThe skill content includes a Methodology section (the core process to follow), Examples (showing the methodology applied), and Source Attribution (which Synapse sources contributed to this skill, with instructions for retrieving the original content via other Synapse MCP tools like get_source_content or get_meeting_transcript).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: "The kebab-case name of the skill to retrieve (e.g., 'local-claude-code-setup'). Use the exact name from the get_skills index.",
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'search_skills',
+    description:
+      "Search for skills in the user's Synapse skill library by semantic similarity. Finds skills whose descriptions match the intent of your query, even if the exact keywords don't appear. Use this when you need to find skills related to a specific task or topic, especially when the skill library is large.\n\nFor example, searching \"how to prevent AI from making things up\" would find a skill about AI honesty prompting even though the exact words don't match. Returns the top matches with their descriptions so you can decide which to load with get_skill_content.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Natural language description of the task or topic you\'re looking for skills about.',
+        },
+        max_results: {
+          type: 'number',
+          description: 'Maximum number of skills to return. Default 5, max 10.',
+          default: 5,
         },
       },
       required: ['query'],
@@ -1940,6 +1999,229 @@ async function handleGetMeetingTranscript(
   }
 }
 
+// ─── Skill library handlers (PRD-Skills-C) ──────────────────────────────────
+
+async function handleGetSkills(
+  params: { domain?: string; include_drafts?: boolean },
+  userId: string,
+  sb: SupabaseClient
+): Promise<ToolContent> {
+  const includeDrafts = params.include_drafts === true
+  const statuses = includeDrafts ? ['active', 'draft'] : ['active']
+
+  let query = sb
+    .from('knowledge_skills')
+    .select('name, title, description, domain, tags, confidence, source_count, status, updated_at')
+    .eq('user_id', userId)
+    .in('status', statuses)
+    .order('confidence', { ascending: false })
+    .order('updated_at', { ascending: false })
+    .limit(100)
+
+  if (params.domain) {
+    query = query.eq('domain', params.domain)
+  }
+
+  const { data, error } = await query
+
+  if (error) {
+    return { content: [{ type: 'text', text: `Error fetching skills: ${error.message}` }] }
+  }
+
+  const skills = (data ?? []) as Array<{
+    name: string; title: string; description: string; domain: string | null
+    tags: string[]; confidence: number; source_count: number; status: string
+    updated_at: string
+  }>
+
+  if (skills.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: 'No skills in library yet. Skills are auto-generated from Synapse knowledge sources.',
+      }],
+    }
+  }
+
+  // Group by domain
+  const grouped = new Map<string, typeof skills>()
+  for (const skill of skills) {
+    const domain = skill.domain ?? 'uncategorized'
+    const existing = grouped.get(domain) ?? []
+    existing.push(skill)
+    grouped.set(domain, existing)
+  }
+
+  const statusLabel = includeDrafts ? 'active + draft' : 'active'
+  const lines: string[] = [`Skills library (${skills.length} ${statusLabel}):\n`]
+  let idx = 1
+
+  for (const [domain, domainSkills] of grouped) {
+    lines.push(`**${domain}**`)
+    for (const s of domainSkills) {
+      const date = s.updated_at.split('T')[0]
+      const statusTag = s.status === 'draft' ? ' [DRAFT]' : ''
+      lines.push(
+        `  ${idx}. ${s.name}${statusTag} — ${s.description} ` +
+        `(confidence: ${s.confidence.toFixed(2)}, sources: ${s.source_count}, updated: ${date})`
+      )
+      idx++
+    }
+    lines.push('')
+  }
+
+  if (skills.length >= 100) {
+    lines.push('Showing top 100 by confidence. Use search_skills for targeted discovery.')
+  }
+
+  return { content: [{ type: 'text', text: lines.join('\n') }] }
+}
+
+async function handleGetSkillContent(
+  params: { name: string },
+  userId: string,
+  sb: SupabaseClient
+): Promise<ToolContent> {
+  const { data, error } = await sb
+    .from('knowledge_skills')
+    .select('name, title, description, domain, tags, content, confidence, instructional_ratio, generalizability, structural_density, source_ids, source_count, status, created_at, updated_at')
+    .eq('user_id', userId)
+    .eq('name', params.name)
+    .maybeSingle()
+
+  if (error) {
+    return { content: [{ type: 'text', text: `Error fetching skill: ${error.message}` }] }
+  }
+
+  if (!data) {
+    return {
+      content: [{
+        type: 'text',
+        text: `Skill '${params.name}' not found. Use get_skills to see available skills.`,
+      }],
+    }
+  }
+
+  const skill = data as {
+    name: string; title: string; description: string; domain: string | null
+    tags: string[]; content: string; confidence: number
+    instructional_ratio: number | null; generalizability: number | null
+    structural_density: number | null; source_ids: string[]; source_count: number
+    status: string; created_at: string; updated_at: string
+  }
+
+  const signals = [
+    skill.instructional_ratio != null ? `instructional_ratio: ${skill.instructional_ratio.toFixed(2)}` : null,
+    skill.generalizability != null ? `generalizability: ${skill.generalizability.toFixed(2)}` : null,
+    skill.structural_density != null ? `structural_density: ${skill.structural_density.toFixed(2)}` : null,
+  ].filter(Boolean).join(', ')
+
+  const tagsStr = skill.tags.length > 0 ? skill.tags.join(', ') : 'none'
+
+  const header = [
+    `# ${skill.title}`,
+    '',
+    `**Domain**: ${skill.domain ?? 'uncategorized'} | **Confidence**: ${skill.confidence.toFixed(2)} | **Sources**: ${skill.source_count} | **Status**: ${skill.status}`,
+    `**Last updated**: ${skill.updated_at.split('T')[0]}`,
+    `**Tags**: ${tagsStr}`,
+    signals ? `**Quality signals**: ${signals}` : null,
+    '',
+    '---',
+    '',
+    `**Triggering description**: ${skill.description}`,
+    '',
+    '---',
+    '',
+    skill.content,
+  ].filter((line): line is string => line !== null).join('\n')
+
+  return { content: [{ type: 'text', text: header }] }
+}
+
+async function handleSearchSkills(
+  params: { query: string; max_results?: number },
+  userId: string,
+  sb: SupabaseClient
+): Promise<ToolContent> {
+  const maxResults = Math.min(Math.max(params.max_results ?? 5, 1), 10)
+
+  // Try semantic search via direct query (not RPC — match_skills uses auth.uid()
+  // which returns null with the service-role client used by MCP)
+  let usedSemantic = false
+  let results: Array<{
+    name: string; title: string; description: string; domain: string | null
+    tags: string[]; confidence: number; source_count: number; status: string
+    similarity: number
+  }> = []
+
+  try {
+    const embedding = await embedText(params.query)
+
+    // Use raw SQL via rpc to do cosine similarity with the user_id filter
+    const { data, error } = await sb.rpc('match_skills_for_user', {
+      query_embedding: JSON.stringify(embedding),
+      match_count: maxResults,
+      match_threshold: 0.3,
+      p_user_id: userId,
+    })
+
+    if (!error && data && (data as unknown[]).length > 0) {
+      results = data as typeof results
+      usedSemantic = true
+    }
+  } catch {
+    // Embedding generation failed — fall through to text search
+  }
+
+  // Text search fallback if semantic search didn't produce results
+  if (!usedSemantic) {
+    const pattern = `%${params.query}%`
+    const { data: textData } = await sb
+      .from('knowledge_skills')
+      .select('name, title, description, domain, tags, confidence, source_count, status')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .or(`title.ilike.${pattern},description.ilike.${pattern}`)
+      .order('confidence', { ascending: false })
+      .limit(maxResults)
+
+    if (textData && textData.length > 0) {
+      results = (textData as Array<{
+        name: string; title: string; description: string; domain: string | null
+        tags: string[]; confidence: number; source_count: number; status: string
+      }>).map(r => ({ ...r, similarity: 0 }))
+    }
+  }
+
+  if (results.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: 'No matching skills found. Use get_skills to browse the full library.',
+      }],
+    }
+  }
+
+  const lines: string[] = [`Found ${results.length} matching skill${results.length === 1 ? '' : 's'}:\n`]
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i]!
+    const simStr = r.similarity > 0 ? ` (similarity: ${r.similarity.toFixed(2)})` : ' (text match)'
+    lines.push(`${i + 1}. **${r.name}**${simStr}`)
+    lines.push(`   Domain: ${r.domain ?? 'uncategorized'} | Confidence: ${r.confidence.toFixed(2)} | Sources: ${r.source_count}`)
+    lines.push(`   ${r.description}`)
+    lines.push('')
+  }
+
+  if (!usedSemantic) {
+    lines.push('Note: Used text search fallback (skill embeddings not yet available). Results may be less precise than semantic search.')
+  }
+
+  lines.push('Use get_skill_content with the skill name to load the full methodology.')
+
+  return { content: [{ type: 'text', text: lines.join('\n') }] }
+}
+
 // ─── MCP Router ──────────────────────────────────────────────────────────────
 
 function jsonRpcError(id: string | number | null, code: number, message: string): JsonRpcResponse {
@@ -2128,6 +2410,44 @@ async function handleMcpRequest(
                   query: toolArgs.query as string,
                   source_id: toolArgs.source_id as string | undefined,
                   max_length: toolArgs.max_length as number | undefined,
+                },
+                userId,
+                sb
+              )
+            )
+
+          // ── Skill library tools ──
+
+          case 'get_skills':
+            return jsonRpcResult(
+              reqId,
+              await handleGetSkills(
+                {
+                  domain: toolArgs.domain as string | undefined,
+                  include_drafts: toolArgs.include_drafts as boolean | undefined,
+                },
+                userId,
+                sb
+              )
+            )
+
+          case 'get_skill_content':
+            return jsonRpcResult(
+              reqId,
+              await handleGetSkillContent(
+                { name: toolArgs.name as string },
+                userId,
+                sb
+              )
+            )
+
+          case 'search_skills':
+            return jsonRpcResult(
+              reqId,
+              await handleSearchSkills(
+                {
+                  query: toolArgs.query as string,
+                  max_results: toolArgs.max_results as number | undefined,
                 },
                 userId,
                 sb

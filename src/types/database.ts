@@ -41,6 +41,8 @@ export interface PotentialDuplicateRow {
   node_a_id:   string
   node_b_id:   string
   similarity:  number
+  match_type:  'exact' | 'fuzzy' | 'semantic' | null
+  metadata:    Record<string, unknown> | null
   detected_at: string
   status:      'pending' | 'merged' | 'kept_separate' | 'auto_resolved'
   resolved_at: string | null
@@ -87,6 +89,33 @@ export interface ExtractionSettings {
   default_mode: 'comprehensive' | 'strategic' | 'actionable' | 'relational'
   default_anchor_emphasis: 'passive' | 'standard' | 'aggressive'
   settings: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+// ─── anchor_candidates (PRD-17) ───────────────────────────────────────────────
+
+// ─── knowledge_skills (PRD-Skills-A) ─────────────────────────────────────────
+
+export type SkillStatus = 'draft' | 'active' | 'archived'
+
+export interface KnowledgeSkill {
+  id: string
+  user_id: string
+  name: string
+  title: string
+  description: string
+  domain: string | null
+  tags: string[]
+  content: string
+  source_ids: string[]
+  source_count: number
+  confidence: number
+  instructional_ratio: number | null
+  generalizability: number | null
+  structural_density: number | null
+  status: SkillStatus
+  embedding: number[] | null
   created_at: string
   updated_at: string
 }
