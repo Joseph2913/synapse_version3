@@ -398,7 +398,7 @@ async function extractKnowledgeForItem(
     const savedNodeMap = new Map<string, string>();
     let nodesCreated = 0;
 
-    // Check for existing nodes with same label (exact-match deduplication)
+    // 4A: Exact-match deduplication (case-insensitive, same entity_type)
     const entityLabels = entities.filter(e => e.label && e.entity_type).map(e => e.label);
     const { data: existingNodes } = await supabase
       .from('knowledge_nodes')
@@ -418,16 +418,105 @@ async function extractKnowledgeForItem(
       }
     }
 
-    // Pre-populate savedNodeMap with reused nodes
     for (const [labelLower, existingId] of exactMatchMap) {
       const entity = entities.find(e => e.label.toLowerCase() === labelLower);
       if (entity) savedNodeMap.set(entity.label, existingId);
     }
 
-    // Insert only new nodes (not in exactMatchMap)
+    // 4B: Fuzzy/semantic dedup for entities not exactly matched
+    const fuzzyMergeMap = new Map<string, string>();
+    const nearMatchQueue: Array<{
+      entityLabel: string;
+      existingNodeId: string;
+      similarity: number;
+      matchType: string;
+    }> = [];
+    const prefetchedEmbeddings = new Map<string, number[]>();
+    const mergedEntitiesLog: Array<{
+      original_label: string;
+      merged_into_id: string;
+      similarity: number;
+      match_type: string;
+    }> = [];
+
+    const entitiesToDedupCheck = entities.filter(
+      e => e.label && e.entity_type && !exactMatchMap.has(e.label.toLowerCase())
+    );
+
+    const DEDUP_CONCURRENCY = 3;
+    for (let i = 0; i < entitiesToDedupCheck.length; i += DEDUP_CONCURRENCY) {
+      const batch = entitiesToDedupCheck.slice(i, i + DEDUP_CONCURRENCY);
+      await Promise.allSettled(
+        batch.map(async (entity) => {
+          const embeddingText = `${entity.entity_type}: ${entity.label} — ${entity.description ?? ''}`;
+          try {
+            const embedding = await generateEmbedding(embeddingText);
+            if (embedding.length > 0) {
+              prefetchedEmbeddings.set(entity.label, embedding);
+
+              const { data: matches } = await supabase.rpc('check_node_duplicate', {
+                p_user_id: item.user_id,
+                p_label: entity.label,
+                p_entity_type: entity.entity_type,
+                p_embedding: embedding,
+                p_exact_threshold: 0.92,
+                p_semantic_threshold: 0.88,
+              });
+
+              const best = (matches as Array<{
+                match_id: string; match_label: string; match_type: string; similarity: number;
+              }> | null)?.[0];
+
+              if (!best) return;
+
+              if (best.match_type === 'exact' ||
+                  (best.match_type === 'fuzzy' && best.similarity >= 0.95)) {
+                fuzzyMergeMap.set(entity.label.toLowerCase(), best.match_id);
+                mergedEntitiesLog.push({
+                  original_label: entity.label,
+                  merged_into_id: best.match_id,
+                  similarity: best.similarity,
+                  match_type: best.match_type,
+                });
+              } else if (best.match_type === 'fuzzy' || best.match_type === 'semantic') {
+                nearMatchQueue.push({
+                  entityLabel: entity.label,
+                  existingNodeId: best.match_id,
+                  similarity: best.similarity,
+                  matchType: best.match_type,
+                });
+              }
+            }
+          } catch (err) {
+            console.warn(`[extract-knowledge] Dedup check failed for "${entity.label}":`, err);
+          }
+        })
+      );
+    }
+
+    // Pre-populate savedNodeMap with fuzzy-merged nodes
+    for (const [labelLower, existingId] of fuzzyMergeMap) {
+      const entity = entities.find(e => e.label.toLowerCase() === labelLower);
+      if (entity) {
+        savedNodeMap.set(entity.label, existingId);
+        if (entity.description) {
+          const { data: existNode } = await supabase
+            .from('knowledge_nodes')
+            .select('description')
+            .eq('id', existingId)
+            .maybeSingle();
+          if (!existNode?.description || entity.description.length > (existNode.description as string).length) {
+            await supabase.from('knowledge_nodes').update({ description: entity.description }).eq('id', existingId);
+          }
+        }
+      }
+    }
+
+    // 4C: Insert only new nodes (not in exactMatchMap or fuzzyMergeMap)
     for (const entity of entities) {
       if (!entity.label || !entity.entity_type) continue;
       if (exactMatchMap.has(entity.label.toLowerCase())) continue;
+      if (fuzzyMergeMap.has(entity.label.toLowerCase())) continue;
 
       const nodePayload: Record<string, unknown> = {
         user_id: item.user_id,
@@ -466,14 +555,36 @@ async function extractKnowledgeForItem(
       }
     }
 
-    console.log(`[extract-knowledge] Dedup: ${exactMatchMap.size} exact matches reused, ${nodesCreated} new nodes for ${item.video_id}`);
+    // 4D: Queue near-matches for review
+    for (const nm of nearMatchQueue) {
+      const newNodeId = savedNodeMap.get(nm.entityLabel);
+      if (!newNodeId) continue;
+      try {
+        await supabase.from('potential_duplicates').insert({
+          user_id: item.user_id,
+          node_a_id: nm.existingNodeId,
+          node_b_id: newNodeId,
+          similarity: nm.similarity,
+          match_type: nm.matchType,
+          status: 'pending',
+          metadata: {
+            new_label: nm.entityLabel,
+            detected_at: new Date().toISOString(),
+            detection_source: 'extraction_pipeline',
+          },
+        });
+      } catch { /* ignore duplicate constraint violations */ }
+    }
 
-    // ── STEP 5: GENERATE EMBEDDINGS ─────────────────────────────────────────────
+    console.log(`[extract-knowledge] Dedup: ${exactMatchMap.size} exact + ${fuzzyMergeMap.size} fuzzy matches reused, ${nodesCreated} new nodes, ${nearMatchQueue.length} near-matches queued for ${item.video_id}`);
+
+    // ── STEP 5: GENERATE EMBEDDINGS (use prefetched where available) ───────────
     const nodeEmbeddings = new Map<string, number[]>();
     const embeddingTasks = [...savedNodeMap.entries()]
       .map(([label, nodeId]) => {
         const entity = entities.find(e => e.label === label);
-        return entity ? { label, nodeId, entity } : null;
+        const isReused = exactMatchMap.has(label.toLowerCase()) || fuzzyMergeMap.has(label.toLowerCase());
+        return entity && !isReused ? { label, nodeId, entity } : null;
       })
       .filter((t): t is { label: string; nodeId: string; entity: (typeof entities)[0] } => t !== null);
 
@@ -481,9 +592,11 @@ async function extractKnowledgeForItem(
       const batch = embeddingTasks.slice(i, i + EMBEDDING_CONCURRENCY);
       await Promise.allSettled(
         batch.map(async ({ label, nodeId, entity }) => {
-          const embeddingText = `${entity.entity_type}: ${entity.label} — ${entity.description ?? ''}`;
+          const prefetched = prefetchedEmbeddings.get(label);
+          const embedding = prefetched && prefetched.length > 0
+            ? prefetched
+            : await generateEmbedding(`${entity.entity_type}: ${entity.label} — ${entity.description ?? ''}`);
           try {
-            const embedding = await generateEmbedding(embeddingText);
             if (embedding.length > 0) {
               nodeEmbeddings.set(nodeId, embedding);
               await supabase

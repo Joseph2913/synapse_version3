@@ -129,6 +129,92 @@ function computeMomentum(
   return results
 }
 
+// ─── Levenshtein distance (inline — serverless constraint) ────────────────────
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length, n = b.length
+  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  )
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i]![j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1]![j - 1]!
+        : 1 + Math.min(dp[i - 1]![j]!, dp[i]![j - 1]!, dp[i - 1]![j - 1]!)
+    }
+  }
+  return dp[m]![n]!
+}
+
+// ─── Check if anchor candidate duplicates an existing confirmed anchor ────────
+async function checkAnchorCandidateDedup(
+  userId: string,
+  candidateNodeId: string,
+  sb: ReturnType<typeof getSupabase>
+): Promise<{
+  isDuplicate: boolean
+  duplicateOfAnchorId?: string
+  duplicateOfAnchorLabel?: string
+  similarity?: number
+}> {
+  const { data: candidate } = await sb
+    .from('knowledge_nodes')
+    .select('label, entity_type, embedding')
+    .eq('id', candidateNodeId)
+    .maybeSingle()
+
+  if (!candidate?.embedding) return { isDuplicate: false }
+
+  // Check via semantic similarity RPC
+  const { data: similarNodes } = await sb.rpc('find_similar_nodes', {
+    p_user_id:   userId,
+    p_embedding: candidate.embedding,
+    p_threshold: 0.85,
+    p_limit:     5,
+  })
+
+  const anchorMatch = (similarNodes as Array<{ id: string; label: string; is_anchor: boolean; similarity: number }> ?? []).find(
+    n => n.is_anchor === true && n.id !== candidateNodeId
+  )
+
+  if (anchorMatch) {
+    return {
+      isDuplicate: true,
+      duplicateOfAnchorId:    anchorMatch.id,
+      duplicateOfAnchorLabel: anchorMatch.label,
+      similarity:             anchorMatch.similarity,
+    }
+  }
+
+  // Also check Levenshtein against confirmed anchors
+  const { data: anchors } = await sb
+    .from('knowledge_nodes')
+    .select('id, label, entity_type')
+    .eq('user_id', userId)
+    .eq('is_anchor', true)
+    .neq('id', candidateNodeId)
+
+  const normalizedCandidate = (candidate.label as string).toLowerCase().trim()
+
+  for (const anchor of anchors ?? []) {
+    const normalizedAnchor = (anchor.label as string).toLowerCase().trim()
+    const editDist = levenshteinDistance(normalizedCandidate, normalizedAnchor)
+    const maxLen = Math.max(normalizedCandidate.length, normalizedAnchor.length)
+    if (maxLen === 0) continue
+    const similarity = 1 - (editDist / maxLen)
+
+    if (similarity >= 0.90) {
+      return {
+        isDuplicate: true,
+        duplicateOfAnchorId:    anchor.id as string,
+        duplicateOfAnchorLabel: anchor.label as string,
+        similarity,
+      }
+    }
+  }
+
+  return { isDuplicate: false }
+}
+
 // ─── HANDLER ───────────────────────────────────────────────────────────────────
 // Post-extraction scoring: given newly created nodeIds, check if any of them
 // (combined with their recent edge history) now have enough momentum to surface.
@@ -336,6 +422,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (srcTypeSet.size >= 2) parts.push(`spanning ${srcTypeSet.size} content types`)
         if (relTypes.size >= 4) parts.push(`with ${relTypes.size} relationship types`)
         if (anchorNb >= 2) parts.push(`connects to ${anchorNb} existing anchors`)
+
+        // Check if this candidate duplicates an existing confirmed anchor
+        let isDupCandidate = false
+        try {
+          const dupCheck = await checkAnchorCandidateDedup(userId, m.nodeId, sb)
+          if (dupCheck.isDuplicate && dupCheck.duplicateOfAnchorId) {
+            isDupCandidate = true
+            // Boost the existing anchor's score
+            await sb.from('anchor_candidates')
+              .update({
+                composite_score: Math.min(composite * 1.15, 1.0),
+                last_scored_at: nowStr,
+                reasoning_text: (parts.join(', ') + `. Validated by duplicate candidate.`).trim(),
+              })
+              .eq('node_id', dupCheck.duplicateOfAnchorId)
+              .eq('user_id', userId)
+            // Queue a merge suggestion
+            try {
+              await sb.from('potential_duplicates').insert({
+                user_id: userId,
+                node_a_id: dupCheck.duplicateOfAnchorId,
+                node_b_id: m.nodeId,
+                similarity: dupCheck.similarity ?? 0.9,
+                match_type: 'semantic',
+                status: 'pending',
+                metadata: {
+                  detected_at: nowStr,
+                  detection_source: 'anchor_scoring',
+                  anchor_label: dupCheck.duplicateOfAnchorLabel,
+                },
+              })
+            } catch { /* ignore duplicate constraint violations */ }
+            console.log(`[score-post-extraction] Skipped candidate ${m.nodeId} — duplicates anchor ${dupCheck.duplicateOfAnchorLabel}`)
+          }
+        } catch (err) {
+          console.warn(`[score-post-extraction] Anchor dedup check failed for ${m.nodeId} (non-fatal):`, err)
+        }
+
+        if (isDupCandidate) { scored++; continue }
 
         const shouldSurface = composite >= (config.suggestionThreshold as number)
         const existing = existingMap.get(m.nodeId)

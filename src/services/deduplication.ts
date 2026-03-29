@@ -6,15 +6,11 @@ export interface ExistingNodeMatch {
   existingNodeId: string
   existingLabel:  string
   matchType:      'exact' | 'near'
-  similarity:     number  // 1.0 for exact, 0.80–0.92 for near
+  similarity:     number
 }
 
 export interface DeduplicationResult {
-  // Map from incoming entity label (lowercase) → existing node ID
-  // For exact matches: use this ID instead of creating a new node
   exactMatches: Map<string, string>
-
-  // Near matches (0.80–0.92 similarity) — surface for review, don't auto-merge
   nearMatches: Array<{
     incomingLabel:  string
     incomingType:   string
@@ -24,9 +20,29 @@ export interface DeduplicationResult {
   }>
 }
 
+export interface PotentialDuplicatePair {
+  id:         string
+  similarity: number
+  matchType:  'exact' | 'fuzzy' | 'semantic'
+  detectedAt: string
+  recommendation: 'merge_into_a' | 'merge_into_b' | null
+  nodeA: {
+    id: string
+    label: string
+    entityType: string
+    isAnchor: boolean
+    connectionCount: number
+  }
+  nodeB: {
+    id: string
+    label: string
+    entityType: string
+    isAnchor: boolean
+    connectionCount: number
+  }
+}
+
 // ─── Core deduplication check ─────────────────────────────────────────────────
-// Called before saveNodes. Returns exact matches (reuse these IDs) and
-// near matches (surface for review). Does NOT modify the database.
 
 export async function checkDeduplication(
   userId: string,
@@ -39,7 +55,6 @@ export async function checkDeduplication(
 
   if (entities.length === 0) return result
 
-  // ── Step 1: Exact label match (case-insensitive, same entity_type) ──────────
   const labels = entities.map(e => e.label)
 
   const { data: exactRows } = await supabase
@@ -59,9 +74,6 @@ export async function checkDeduplication(
     }
   }
 
-  // ── Step 2: Embedding-based near match for entities with embeddings ─────────
-  // Only run for entities that didn't get an exact match and have embeddings.
-  // Uses pgvector cosine similarity via a direct RPC call.
   const entitiesNeedingNearCheck = entities.filter(
     e => !result.exactMatches.has(e.label.toLowerCase()) && e.embedding
   )
@@ -69,27 +81,22 @@ export async function checkDeduplication(
   for (const entity of entitiesNeedingNearCheck) {
     if (!entity.embedding) continue
 
-    // Find top candidates by embedding similarity, same entity_type, not merged
     const { data: nearRows } = await supabase.rpc('find_similar_nodes', {
-      p_user_id:      userId,
-      p_embedding:    entity.embedding,
-      p_entity_type:  entity.entity_type,
-      p_limit:        5,
-      p_min_similarity: 0.80,
+      p_user_id:   userId,
+      p_embedding: entity.embedding,
+      p_threshold: 0.80,
+      p_limit:     5,
     })
 
     for (const row of nearRows ?? []) {
       const similarity = row.similarity as number
       const existingLabel = row.label as string
 
-      // Skip if it's an exact label match already handled above
       if (existingLabel.toLowerCase() === entity.label.toLowerCase()) continue
 
       if (similarity >= 0.92) {
-        // High confidence: treat as exact match (auto-deduplicate)
         result.exactMatches.set(entity.label.toLowerCase(), row.id as string)
       } else if (similarity >= 0.80) {
-        // Medium confidence: surface for human review
         result.nearMatches.push({
           incomingLabel:  entity.label,
           incomingType:   entity.entity_type,
@@ -105,12 +112,11 @@ export async function checkDeduplication(
 }
 
 // ─── Save potential duplicates to review queue ────────────────────────────────
-// Called after extraction to persist near matches for Pipeline review.
 
 export async function savePotentialDuplicates(
   userId: string,
   nearMatches: DeduplicationResult['nearMatches'],
-  newNodeIds: Map<string, string>  // label.toLowerCase() → new node ID
+  newNodeIds: Map<string, string>
 ): Promise<void> {
   if (nearMatches.length === 0) return
 
@@ -119,7 +125,6 @@ export async function savePotentialDuplicates(
       const newNodeId = newNodeIds.get(match.incomingLabel.toLowerCase())
       if (!newNodeId) return null
 
-      // Enforce node_a_id < node_b_id convention for the unique constraint
       const [nodeAId, nodeBId] = newNodeId < match.existingNodeId
         ? [newNodeId, match.existingNodeId]
         : [match.existingNodeId, newNodeId]
@@ -129,32 +134,88 @@ export async function savePotentialDuplicates(
         node_a_id:  nodeAId,
         node_b_id:  nodeBId,
         similarity: match.similarity,
+        match_type: 'semantic',
       }
     })
     .filter(Boolean)
 
   if (toInsert.length === 0) return
 
-  // Insert, ignoring conflicts (same pair already in queue from previous extraction)
   await supabase
     .from('potential_duplicates')
     .upsert(toInsert, { onConflict: 'user_id,node_a_id,node_b_id', ignoreDuplicates: true })
 }
 
+// ─── Edge deduplication after merge ──────────────────────────────────────────
+// After repointing all edges to targetNodeId, remove duplicate edges (same
+// other_node + relation_type pair), keeping the higher-weight one.
+// Also removes self-edges (targetNodeId → targetNodeId).
+
+async function deduplicateEdgesAfterMerge(
+  targetNodeId: string,
+  userId: string
+): Promise<number> {
+  const { data: edges } = await supabase
+    .from('knowledge_edges')
+    .select('id, source_node_id, target_node_id, relation_type, weight')
+    .or(`source_node_id.eq.${targetNodeId},target_node_id.eq.${targetNodeId}`)
+    .eq('user_id', userId)
+    .order('weight', { ascending: false })
+
+  const seen = new Map<string, string>()
+  const toDelete: string[] = []
+
+  for (const edge of edges ?? []) {
+    const edgeId = edge.id as string
+    const src = edge.source_node_id as string
+    const tgt = edge.target_node_id as string
+
+    // Delete self-edges
+    if (src === targetNodeId && tgt === targetNodeId) {
+      toDelete.push(edgeId)
+      continue
+    }
+
+    const otherNodeId = src === targetNodeId ? tgt : src
+    const key = `${otherNodeId}:${edge.relation_type as string}`
+
+    if (seen.has(key)) {
+      toDelete.push(edgeId)
+    } else {
+      seen.set(key, edgeId)
+    }
+  }
+
+  if (toDelete.length > 0) {
+    await supabase.from('knowledge_edges').delete().in('id', toDelete)
+  }
+
+  return toDelete.length
+}
+
 // ─── Merge two nodes ──────────────────────────────────────────────────────────
 // Merges nodeToMerge into canonicalNode:
 //   1. Repoints all edges from nodeToMerge to canonicalNode
-//   2. Merges tags arrays
-//   3. Updates description if canonicalNode has none
-//   4. Marks nodeToMerge as merged (soft delete)
-//   5. Updates potential_duplicates status
+//   2. Deduplicates edges (removes duplicate other_node+relation_type pairs)
+//   3. Merges tags arrays
+//   4. Updates description if canonicalNode has none or shorter one
+//   5. Promotes canonicalNode to anchor if nodeToMerge was an anchor
+//   6. Marks nodeToMerge as merged (soft delete)
+//   7. Updates potential_duplicates status
 
 export async function mergeNodes(
   userId: string,
   canonicalNodeId: string,
   nodeToMergeId:   string
-): Promise<{ edgesRepointed: number }> {
+): Promise<{ edgesRepointed: number; edgesDeduped: number }> {
   let edgesRepointed = 0
+
+  // 0. Fetch source node metadata before we touch anything (need is_anchor)
+  const { data: sourceNode } = await supabase
+    .from('knowledge_nodes')
+    .select('is_anchor, description, tags, user_tags')
+    .eq('id', nodeToMergeId)
+    .maybeSingle()
 
   // 1. Repoint outgoing edges from nodeToMerge → canonicalNode
   const { data: outEdges } = await supabase
@@ -164,7 +225,6 @@ export async function mergeNodes(
     .eq('source_node_id', nodeToMergeId)
 
   for (const edge of outEdges ?? []) {
-    // Skip self-loops that would be created
     if ((edge.target_node_id as string) === canonicalNodeId) {
       await supabase.from('knowledge_edges').delete().eq('id', edge.id as string)
     } else {
@@ -195,39 +255,57 @@ export async function mergeNodes(
     }
   }
 
-  // 3. Fetch both nodes to merge metadata
-  const { data: nodes } = await supabase
+  // 3. Deduplicate edges after repointing
+  const edgesDeduped = await deduplicateEdgesAfterMerge(canonicalNodeId, userId)
+
+  // 4. Fetch canonical node to merge metadata
+  const { data: canonicalNode } = await supabase
     .from('knowledge_nodes')
-    .select('id, description, tags, user_tags')
-    .in('id', [canonicalNodeId, nodeToMergeId])
+    .select('description, tags, user_tags, is_anchor')
+    .eq('id', canonicalNodeId)
+    .maybeSingle()
 
-  const canonical = nodes?.find(n => n.id === canonicalNodeId)
-  const toMerge   = nodes?.find(n => n.id === nodeToMergeId)
-
-  if (canonical && toMerge) {
+  if (canonicalNode && sourceNode) {
     const mergedTags = Array.from(new Set([
-      ...((canonical.tags as string[]) ?? []),
-      ...((toMerge.tags    as string[]) ?? []),
+      ...((canonicalNode.tags as string[]) ?? []),
+      ...((sourceNode.tags   as string[]) ?? []),
     ]))
     const mergedUserTags = Array.from(new Set([
-      ...((canonical.user_tags as string[]) ?? []),
-      ...((toMerge.user_tags   as string[]) ?? []),
+      ...((canonicalNode.user_tags as string[]) ?? []),
+      ...((sourceNode.user_tags   as string[]) ?? []),
     ]))
-    const description = canonical.description || toMerge.description || null
+    // Use longer/richer description
+    const srcDesc = sourceNode.description as string | null
+    const canDesc = canonicalNode.description as string | null
+    const description = (srcDesc && (!canDesc || srcDesc.length > canDesc.length))
+      ? srcDesc
+      : (canDesc ?? null)
+
+    // Promote to anchor if source was an anchor and canonical is not
+    const promoteToAnchor = (sourceNode.is_anchor as boolean) && !(canonicalNode.is_anchor as boolean)
+
+    const updatePayload: Record<string, unknown> = {
+      tags: mergedTags,
+      user_tags: mergedUserTags,
+      description,
+    }
+    if (promoteToAnchor) {
+      updatePayload.is_anchor = true
+    }
 
     await supabase
       .from('knowledge_nodes')
-      .update({ tags: mergedTags, user_tags: mergedUserTags, description })
+      .update(updatePayload)
       .eq('id', canonicalNodeId)
   }
 
-  // 4. Soft-delete the merged node
+  // 5. Soft-delete the merged node
   await supabase
     .from('knowledge_nodes')
     .update({ is_merged: true, merged_into_node_id: canonicalNodeId })
     .eq('id', nodeToMergeId)
 
-  // 5. Resolve any potential_duplicates entries involving these two nodes
+  // 6. Resolve any potential_duplicates entries involving these two nodes
   await supabase
     .from('potential_duplicates')
     .update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'user' })
@@ -237,19 +315,10 @@ export async function mergeNodes(
       `and(node_a_id.eq.${nodeToMergeId},node_b_id.eq.${canonicalNodeId})`
     )
 
-  return { edgesRepointed }
+  return { edgesRepointed, edgesDeduped }
 }
 
 // ─── Fetch pending potential duplicates ───────────────────────────────────────
-// Used by the Pipeline page right panel.
-
-export interface PotentialDuplicatePair {
-  id:         string
-  similarity: number
-  detectedAt: string
-  nodeA: { id: string; label: string; entityType: string; connectionCount: number }
-  nodeB: { id: string; label: string; entityType: string; connectionCount: number }
-}
 
 export async function fetchPendingDuplicates(
   userId: string
@@ -257,37 +326,77 @@ export async function fetchPendingDuplicates(
   const { data, error } = await supabase
     .from('potential_duplicates')
     .select(`
-      id, similarity, detected_at,
-      node_a:knowledge_nodes!node_a_id (id, label, entity_type),
-      node_b:knowledge_nodes!node_b_id (id, label, entity_type)
+      id, similarity, detected_at, match_type, metadata,
+      node_a:knowledge_nodes!node_a_id (id, label, entity_type, is_anchor),
+      node_b:knowledge_nodes!node_b_id (id, label, entity_type, is_anchor)
     `)
     .eq('user_id', userId)
     .eq('status', 'pending')
     .order('similarity', { ascending: false })
-    .limit(20)
+    .limit(50)
 
   if (error || !data) return []
 
-  interface JoinedNode { id: string; label: string; entity_type: string }
+  // Fetch connection counts for all nodes in a single query
+  interface JoinedNode { id: string; label: string; entity_type: string; is_anchor: boolean }
+
+  const nodeIds = data.flatMap(row => {
+    const a = row.node_a as unknown as JoinedNode | null
+    const b = row.node_b as unknown as JoinedNode | null
+    return [a?.id, b?.id].filter(Boolean) as string[]
+  })
+
+  const connCountMap = new Map<string, number>()
+  if (nodeIds.length > 0) {
+    const { data: edges } = await supabase
+      .from('knowledge_edges')
+      .select('source_node_id, target_node_id')
+      .or(`source_node_id.in.(${nodeIds.join(',')}),target_node_id.in.(${nodeIds.join(',')})`)
+      .eq('user_id', userId)
+
+    for (const edge of edges ?? []) {
+      const src = edge.source_node_id as string
+      const tgt = edge.target_node_id as string
+      connCountMap.set(src, (connCountMap.get(src) ?? 0) + 1)
+      connCountMap.set(tgt, (connCountMap.get(tgt) ?? 0) + 1)
+    }
+  }
 
   return data.map(row => {
     const nodeA = row.node_a as unknown as JoinedNode
     const nodeB = row.node_b as unknown as JoinedNode
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>
+    const rawMatchType = (row.match_type as string | null) ?? 'semantic'
+    const matchType = (rawMatchType === 'exact' || rawMatchType === 'fuzzy' || rawMatchType === 'semantic')
+      ? rawMatchType as 'exact' | 'fuzzy' | 'semantic'
+      : 'semantic' as const
+
+    const aConns = connCountMap.get(nodeA.id) ?? 0
+    const bConns = connCountMap.get(nodeB.id) ?? 0
+    const aScore = (nodeA.is_anchor ? 100 : 0) + aConns
+    const bScore = (nodeB.is_anchor ? 100 : 0) + bConns
+    const recommendation = (metadata.recommendation as string | undefined) ??
+      (aScore >= bScore ? 'merge_into_a' : 'merge_into_b')
+
     return {
       id:         row.id as string,
       similarity: row.similarity as number,
+      matchType,
       detectedAt: row.detected_at as string,
+      recommendation: recommendation as 'merge_into_a' | 'merge_into_b',
       nodeA: {
         id:              nodeA.id,
         label:           nodeA.label,
         entityType:      nodeA.entity_type,
-        connectionCount: 0,
+        isAnchor:        nodeA.is_anchor,
+        connectionCount: aConns,
       },
       nodeB: {
         id:              nodeB.id,
         label:           nodeB.label,
         entityType:      nodeB.entity_type,
-        connectionCount: 0,
+        isAnchor:        nodeB.is_anchor,
+        connectionCount: bConns,
       },
     }
   })

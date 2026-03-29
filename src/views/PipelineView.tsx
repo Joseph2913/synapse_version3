@@ -211,6 +211,18 @@ export function PipelineView() {
     }
   }, [user?.id, refreshDuplicates])
 
+  const handleBatchMerge = useCallback(async (pairs: Array<{ canonicalId: string; mergeId: string; pairId: string }>) => {
+    if (!user?.id) return
+    for (const pair of pairs) {
+      try {
+        await mergeNodes(user.id, pair.canonicalId, pair.mergeId)
+      } catch (err) {
+        console.warn(`[PipelineView] Batch merge failed for pair ${pair.pairId}:`, err)
+      }
+    }
+    refreshDuplicates()
+  }, [user?.id, refreshDuplicates])
+
   const selectedItem = useMemo(
     () => selectedItemId ? items.find(i => i.id === selectedItemId) ?? null : null,
     [selectedItemId, items]
@@ -382,6 +394,7 @@ export function PipelineView() {
           pendingDuplicates={pendingDuplicates}
           onMerge={handleMergeDuplicates}
           onKeepSeparate={handleKeepSeparate}
+          onBatchMerge={handleBatchMerge}
         />
         <ExtractionSettings />
       </div>
