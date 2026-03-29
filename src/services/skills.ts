@@ -6,7 +6,8 @@ import type { KnowledgeSkill, SkillStatus } from '../types/database'
 const LIST_COLUMNS = [
   'id', 'user_id', 'name', 'title', 'description', 'domain', 'tags',
   'source_ids', 'source_count', 'confidence', 'instructional_ratio',
-  'generalizability', 'structural_density', 'status', 'created_at', 'updated_at',
+  'generalizability', 'structural_density', 'status',
+  'usage_count', 'last_used_at', 'created_at', 'updated_at',
 ].join(',')
 
 const INDEX_COLUMNS = [

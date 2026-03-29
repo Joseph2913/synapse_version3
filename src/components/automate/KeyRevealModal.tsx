@@ -33,16 +33,16 @@ export function KeyRevealModal({ rawKey, label, onConfirm }: KeyRevealModalProps
   }
 
   return (
-    // Backdrop — does NOT close on click
+    // Backdrop — does NOT close on click, fixed to viewport
     <div
       style={{
-        position: 'absolute',
+        position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.3)',
+        background: 'rgba(0,0,0,0.4)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 50,
+        zIndex: 9999,
         padding: 16,
       }}
     >

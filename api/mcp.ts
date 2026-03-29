@@ -2084,7 +2084,7 @@ async function handleGetSkillContent(
 ): Promise<ToolContent> {
   const { data, error } = await sb
     .from('knowledge_skills')
-    .select('name, title, description, domain, tags, content, confidence, instructional_ratio, generalizability, structural_density, source_ids, source_count, status, created_at, updated_at')
+    .select('name, title, description, domain, tags, content, confidence, instructional_ratio, generalizability, structural_density, source_ids, source_count, status, created_at, updated_at, usage_count, last_used_at')
     .eq('user_id', userId)
     .eq('name', params.name)
     .maybeSingle()
@@ -2134,6 +2134,17 @@ async function handleGetSkillContent(
     '',
     skill.content,
   ].filter((line): line is string => line !== null).join('\n')
+
+  // Track usage: increment usage_count and update last_used_at (fire-and-forget)
+  const currentCount = ((data as Record<string, unknown>).usage_count as number) ?? 0
+  sb.from('knowledge_skills')
+    .update({
+      usage_count: currentCount + 1,
+      last_used_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId)
+    .eq('name', params.name)
+    .then(() => { /* fire-and-forget */ })
 
   return { content: [{ type: 'text', text: header }] }
 }
