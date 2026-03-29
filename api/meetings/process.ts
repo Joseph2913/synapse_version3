@@ -462,7 +462,7 @@ async function processMeeting(
       if (!chunk) continue;
       try {
         const embedding = await generateEmbedding(chunk);
-        await supabase.from('knowledge_source_chunks').insert({
+        await supabase.from('source_chunks').insert({
           user_id: meeting.user_id,
           source_id: meeting.id,
           chunk_index: i,

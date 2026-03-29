@@ -697,7 +697,7 @@ export async function keywordSearchChunks(
   const orFilter = terms.map(term => `content.ilike.%${term}%`).join(',')
 
   const { data, error } = await supabase
-    .from('knowledge_source_chunks')
+    .from('source_chunks')
     .select('id, source_id, chunk_index, content')
     .eq('user_id', userId)
     .or(orFilter)
@@ -728,7 +728,7 @@ export async function fetchChunksForSources(
   const { limit = 15 } = options
 
   const { data, error } = await supabase
-    .from('knowledge_source_chunks')
+    .from('source_chunks')
     .select('id, source_id, chunk_index, content')
     .in('source_id', sourceIds)
     .order('chunk_index', { ascending: true })

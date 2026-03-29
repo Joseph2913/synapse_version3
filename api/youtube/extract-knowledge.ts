@@ -530,7 +530,7 @@ async function extractKnowledgeForItem(
       if (!chunk) continue;
       try {
         const embedding = await generateEmbedding(chunk);
-        await supabase.from('knowledge_source_chunks').insert({
+        await supabase.from('source_chunks').insert({
           user_id: item.user_id,
           source_id: sourceId,
           chunk_index: i,
