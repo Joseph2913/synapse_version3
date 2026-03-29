@@ -16,7 +16,11 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 const MAX_CONTENT_CHARS = 30_000;
 const MIN_CONTENT_LENGTH = 500;
-const SKILL_READINESS_THRESHOLD = 0.55;
+
+// Tiered threshold: low-relevance sources need a higher bar to create a skill
+function getSkillReadinessThreshold(anchorRelevance: number): number {
+  return anchorRelevance < 0.5 ? 0.65 : 0.55;
+}
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +88,7 @@ interface DeduplicationResult {
   rationale: string;
   topicOverlap: number;
   noveltyScore: number;
+  proposedNameGeneralization: string | null;
 }
 
 interface GenerationResult {
@@ -191,6 +196,11 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // ─── ASSESSMENT PIPELINE ──────────────────────────────────────────────────────
 
 function computeSkillReadiness(assessment: AssessmentResult): number {
+  // Hard floor: narrative content or structurally weak sources can't create skills
+  // regardless of how relevant they are to the user's anchors
+  if (assessment.instructionalRatio < 0.5 || assessment.structuralDensity < 0.5) {
+    return 0;
+  }
   return (
     assessment.instructionalRatio * 0.25 +
     assessment.generalizability * 0.25 +
@@ -233,7 +243,15 @@ Evaluate this source on four dimensions:
    - 0.5–0.8 = Methodology is present but implicit, could be structured
    - Below 0.5 = Narrative or conversational, no clear structure to extract
 
-3. INSTRUCTIONAL RATIO (0.0–1.0): What proportion of the content is teaching methodology vs. narrative, status updates, or off-topic conversation?${existingIR ? ` (The source metadata includes a pre-computed instructionalRatio of ${existingIR} — use it as a reference but compute your own from the content.)` : ''}
+3. INSTRUCTIONAL RATIO (0.0–1.0): What proportion of the content is actively teaching methodology vs. narrative, storytelling, status updates, or off-topic conversation?${existingIR ? ` (The source metadata includes a pre-computed instructionalRatio of ${existingIR} — use it as a reference but compute your own from the content.)` : ''}
+   Content type calibration — apply these IR ranges carefully:
+   - Pure tutorials, how-to guides, or step-by-step walkthroughs: 0.7–1.0
+   - Structured frameworks or decision trees with explanation: 0.6–0.8
+   - Interviews or talks where methodology is extracted but not the primary format: 0.4–0.6
+   - Case studies, success stories, or business retrospectives: ALWAYS 0.1–0.4 (even if instructive in tone, narrative structure dominates)
+   - Curated lists, "top 10" overviews, or roundups: ALWAYS 0.2–0.45 (breadth without depth)
+   - Meeting transcripts, project updates, or status discussions: 0.1–0.3
+   A source that tells a story about HOW something was done is NOT the same as a source that teaches how to DO it.
 
 4. ANCHOR RELEVANCE (0.0–1.0): How relevant is this source's methodology to the user's declared interests and expertise (their "anchors")? This is the most important personalization signal.
    - 0.9+ = Directly addresses one or more of the user's core anchors (e.g., source about AI prompting techniques when user has "AI Prompting" and "Claude" anchors)
@@ -246,8 +264,11 @@ ${anchorSummary || '(no anchors defined — score anchorRelevance based on gener
 
 Also provide:
 - anchorMatches: An array of the specific anchor labels that this source is relevant to (empty array if none)
-- proposedSkillTitle: A kebab-case name for the skill (e.g., "ai-honesty-prompting")
-- proposedSkillTitleHuman: A human-readable title (e.g., "AI Honesty Prompting")
+- proposedSkillTitle: A kebab-case name for the skill — MUST be concept-based, not tool-specific or source-specific.
+  GOOD: "ai-agent-orchestration", "context-window-management", "stakeholder-alignment-framework"
+  BAD: "claude-code-workflow", "notion-database-setup", "rapido-growth-strategy" (tool/brand names belong in tags, not the skill name)
+  The name should describe the transferable methodology, not the tool used or the company studied.
+- proposedSkillTitleHuman: A human-readable title (e.g., "AI Agent Orchestration")
 - proposedDomain: One of: ai-tooling, ai-prompting, consulting-methodology, change-management, financial-analysis, risk-management, sales-methodology, project-management, product-design, general
 - extractableMethodology: A 1-2 sentence summary of what methodology could be extracted
 - transferableMethods: An array of the specific techniques/steps that are portable
@@ -265,12 +286,14 @@ async function checkDeduplication(
   existingSkills: ExistingSkill[]
 ): Promise<DeduplicationResult> {
   if (existingSkills.length === 0) {
-    return { action: 'CREATE', targetSkillName: null, rationale: 'No existing skills to compare against.', topicOverlap: 0, noveltyScore: 1 };
+    return { action: 'CREATE', targetSkillName: null, rationale: 'No existing skills to compare against.', topicOverlap: 0, noveltyScore: 1, proposedNameGeneralization: null };
   }
 
   const existingList = existingSkills
     .map(s => `- ${s.name}: "${s.title}" (domain: ${s.domain ?? 'general'}) — ${s.description}`)
     .join('\n');
+
+  const existingSourceCounts = Object.fromEntries(existingSkills.map(s => [s.name, s.source_count]));
 
   const systemPrompt = `You are comparing a new skill candidate against existing skills in a knowledge library.
 
@@ -279,7 +302,13 @@ Determine the best action:
 2. UPDATE — An existing skill covers the same domain/topic but this source adds >30% novel techniques or content. Return the name of the skill to update.
 3. SKIP — An existing skill already covers this methodology adequately. The new source adds little value. Return the name of the skill that covers it.
 
-Return a JSON object with: action ("CREATE" | "UPDATE" | "SKIP"), targetSkillName (null for CREATE, skill name for UPDATE/SKIP), rationale (one sentence), topicOverlap (0.0–1.0), noveltyScore (0.0–1.0).`;
+ADDITIONAL RULE for UPDATE actions: If the skill being updated already has 2 or more sources (source_count ≥ 2), also evaluate whether its current name is still representative. A skill that started as "python-data-pipelines" but now has 3 sources covering data pipelines broadly may benefit from renaming to "data-pipeline-design". If the name should be generalized, return a proposedNameGeneralization field with the new kebab-case name; otherwise return null.
+
+Return a JSON object with: action ("CREATE" | "UPDATE" | "SKIP"), targetSkillName (null for CREATE, skill name for UPDATE/SKIP), rationale (one sentence), topicOverlap (0.0–1.0), noveltyScore (0.0–1.0), proposedNameGeneralization (string | null — only relevant when action=UPDATE).
+
+EXISTING SKILL SOURCE COUNTS:
+${Object.entries(existingSourceCounts).map(([name, count]) => `- ${name}: ${count} sources`).join('\n')}`;
+
 
   const userContent = `NEW CANDIDATE:
 - Title: ${assessment.proposedSkillTitle}
@@ -435,6 +464,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const body = req.method === 'POST' ? (req.body ?? {}) : {};
   const query = req.query ?? {};
   const batchSize = Math.min(Math.max(parseInt(body.batchSize || query.batch_size as string) || 10, 1), 20);
+  const page = Math.max(parseInt(body.page || query.page as string) || 0, 0);
   const sourceTypeFilter: string | undefined = body.sourceType || (query.source_type as string) || undefined;
   const dryRun: boolean = body.dryRun === true || query.dry_run === 'true';
 
@@ -456,7 +486,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .is('metadata->skill_backfill_status', null)
     .not('content', 'is', null)
     .order('created_at', { ascending: false })
-    .limit(batchSize * 3);
+    .range(page * batchSize * 3, (page + 1) * batchSize * 3 - 1);
 
   if (userId) {
     sourceQuery = sourceQuery.eq('user_id', userId);
@@ -634,7 +664,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const assessment = await assessSource(source.content, entityList, source.metadata, userAnchors);
       const skillReadiness = computeSkillReadiness(assessment);
 
-      if (skillReadiness < SKILL_READINESS_THRESHOLD) {
+      if (skillReadiness < getSkillReadinessThreshold(assessment.anchorRelevance)) {
         details.push({
           sourceId: source.id,
           sourceTitle: source.title,
