@@ -18,7 +18,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = ''
+SET search_path = public, extensions
 AS $$
 BEGIN
   RETURN QUERY
@@ -54,7 +54,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = ''
+SET search_path = public, extensions
 AS $$
 BEGIN
   RETURN QUERY
@@ -109,58 +109,60 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = ''
+SET search_path = public, extensions
 AS $$
 BEGIN
   RETURN QUERY
+  SELECT * FROM (
 
-  SELECT
-    a.id, a.label, a.entity_type, a.is_anchor,
-    (SELECT COUNT(*) FROM public.knowledge_edges e
-     WHERE e.source_node_id = a.id OR e.target_node_id = a.id) AS a_conns,
-    b.id, b.label, b.entity_type, b.is_anchor,
-    (SELECT COUNT(*) FROM public.knowledge_edges e
-     WHERE e.source_node_id = b.id OR e.target_node_id = b.id) AS b_conns,
-    'exact'::TEXT,
-    1.0::FLOAT
-  FROM public.knowledge_nodes a
-  INNER JOIN public.knowledge_nodes b
-    ON a.user_id = b.user_id
-    AND a.id < b.id
-    AND LOWER(TRIM(a.label)) = LOWER(TRIM(b.label))
-    AND a.entity_type = b.entity_type
-    AND b.is_merged IS NOT TRUE
-  WHERE a.user_id = p_user_id
-    AND a.is_merged IS NOT TRUE
-    AND (p_entity_type IS NULL OR a.entity_type = p_entity_type)
-    AND (p_anchors_only IS FALSE OR (a.is_anchor = true OR b.is_anchor = true))
+    SELECT
+      a.id, a.label, a.entity_type, a.is_anchor,
+      (SELECT COUNT(*) FROM public.knowledge_edges e
+       WHERE e.source_node_id = a.id OR e.target_node_id = a.id) AS a_conns,
+      b.id, b.label, b.entity_type, b.is_anchor,
+      (SELECT COUNT(*) FROM public.knowledge_edges e
+       WHERE e.source_node_id = b.id OR e.target_node_id = b.id) AS b_conns,
+      'exact'::TEXT AS mt,
+      1.0::FLOAT AS sim
+    FROM public.knowledge_nodes a
+    INNER JOIN public.knowledge_nodes b
+      ON a.user_id = b.user_id
+      AND a.id < b.id
+      AND LOWER(TRIM(a.label)) = LOWER(TRIM(b.label))
+      AND a.entity_type = b.entity_type
+      AND b.is_merged IS NOT TRUE
+    WHERE a.user_id = p_user_id
+      AND a.is_merged IS NOT TRUE
+      AND (p_entity_type IS NULL OR a.entity_type = p_entity_type)
+      AND (p_anchors_only IS FALSE OR (a.is_anchor = true OR b.is_anchor = true))
 
-  UNION ALL
+    UNION ALL
 
-  SELECT
-    a.id, a.label, a.entity_type, a.is_anchor,
-    (SELECT COUNT(*) FROM public.knowledge_edges e
-     WHERE e.source_node_id = a.id OR e.target_node_id = a.id) AS a_conns,
-    b.id, b.label, b.entity_type, b.is_anchor,
-    (SELECT COUNT(*) FROM public.knowledge_edges e
-     WHERE e.source_node_id = b.id OR e.target_node_id = b.id) AS b_conns,
-    'semantic'::TEXT,
-    1 - (a.embedding <=> b.embedding)
-  FROM public.knowledge_nodes a
-  INNER JOIN public.knowledge_nodes b
-    ON a.user_id = b.user_id
-    AND a.id < b.id
-    AND LOWER(TRIM(a.label)) != LOWER(TRIM(b.label))
-    AND b.embedding IS NOT NULL
-    AND b.is_merged IS NOT TRUE
-  WHERE a.user_id = p_user_id
-    AND a.is_merged IS NOT TRUE
-    AND a.embedding IS NOT NULL
-    AND (p_entity_type IS NULL OR a.entity_type = p_entity_type)
-    AND (p_anchors_only IS FALSE OR (a.is_anchor = true OR b.is_anchor = true))
-    AND 1 - (a.embedding <=> b.embedding) > p_semantic_threshold
+    SELECT
+      a.id, a.label, a.entity_type, a.is_anchor,
+      (SELECT COUNT(*) FROM public.knowledge_edges e
+       WHERE e.source_node_id = a.id OR e.target_node_id = a.id) AS a_conns,
+      b.id, b.label, b.entity_type, b.is_anchor,
+      (SELECT COUNT(*) FROM public.knowledge_edges e
+       WHERE e.source_node_id = b.id OR e.target_node_id = b.id) AS b_conns,
+      'semantic'::TEXT AS mt,
+      (1 - (a.embedding <=> b.embedding))::FLOAT AS sim
+    FROM public.knowledge_nodes a
+    INNER JOIN public.knowledge_nodes b
+      ON a.user_id = b.user_id
+      AND a.id < b.id
+      AND LOWER(TRIM(a.label)) != LOWER(TRIM(b.label))
+      AND b.embedding IS NOT NULL
+      AND b.is_merged IS NOT TRUE
+    WHERE a.user_id = p_user_id
+      AND a.is_merged IS NOT TRUE
+      AND a.embedding IS NOT NULL
+      AND (p_entity_type IS NULL OR a.entity_type = p_entity_type)
+      AND (p_anchors_only IS FALSE OR (a.is_anchor = true OR b.is_anchor = true))
+      AND 1 - (a.embedding <=> b.embedding) > p_semantic_threshold
 
-  ORDER BY similarity DESC
+  ) AS combined
+  ORDER BY combined.sim DESC
   LIMIT p_limit;
 END;
 $$;
@@ -188,7 +190,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = ''
+SET search_path = public, extensions
 AS $$
 BEGIN
   RETURN QUERY
