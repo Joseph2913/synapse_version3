@@ -290,24 +290,29 @@ async function checkDeduplication(
   }
 
   const existingList = existingSkills
-    .map(s => `- ${s.name}: "${s.title}" (domain: ${s.domain ?? 'general'}) — ${s.description}`)
-    .join('\n');
-
-  const existingSourceCounts = Object.fromEntries(existingSkills.map(s => [s.name, s.source_count]));
+    .map(s => {
+      // Extract Methodology section for richer dedup signal beyond just the description
+      const methodologyMatch = s.content.match(/##\s*Methodology\s*([\s\S]*?)(?=##|$)/i);
+      const methodologySnippet = methodologyMatch
+        ? methodologyMatch[1].trim().slice(0, 400)
+        : s.content.slice(0, 400);
+      return `- ${s.name}: "${s.title}" (domain: ${s.domain ?? 'general'}, sources: ${s.source_count})\n  Description: ${s.description}\n  Methodology (excerpt): ${methodologySnippet}`;
+    })
+    .join('\n\n');
 
   const systemPrompt = `You are comparing a new skill candidate against existing skills in a knowledge library.
 
 Determine the best action:
 1. CREATE — No existing skill covers this methodology. This is genuinely new ground.
-2. UPDATE — An existing skill covers the same domain/topic but this source adds >30% novel techniques or content. Return the name of the skill to update.
-3. SKIP — An existing skill already covers this methodology adequately. The new source adds little value. Return the name of the skill that covers it.
+2. UPDATE — An existing skill covers the same domain/topic and this source adds novel techniques or content. The novelty threshold scales by how mature the skill is:
+   - skill has 1 source: 10% new content is enough to UPDATE
+   - skill has 2–3 sources: 20% new content required
+   - skill has 4+ sources: 30% new content required
+3. SKIP — An existing skill already covers this methodology adequately and the new source adds nothing meaningful. Return the name of the skill that covers it. NOTE: even on SKIP the source will still be linked to that skill for attribution — SKIP means "no content update needed", not "discard".
 
-ADDITIONAL RULE for UPDATE actions: If the skill being updated already has 2 or more sources (source_count ≥ 2), also evaluate whether its current name is still representative. A skill that started as "python-data-pipelines" but now has 3 sources covering data pipelines broadly may benefit from renaming to "data-pipeline-design". If the name should be generalized, return a proposedNameGeneralization field with the new kebab-case name; otherwise return null.
+ADDITIONAL RULE for UPDATE actions: If the skill being updated already has 2 or more sources (source_count ≥ 2), also evaluate whether its current name is still representative. If the name should be generalized to better reflect accumulated scope, return a proposedNameGeneralization field with the new kebab-case name; otherwise return null.
 
-Return a JSON object with: action ("CREATE" | "UPDATE" | "SKIP"), targetSkillName (null for CREATE, skill name for UPDATE/SKIP), rationale (one sentence), topicOverlap (0.0–1.0), noveltyScore (0.0–1.0), proposedNameGeneralization (string | null — only relevant when action=UPDATE).
-
-EXISTING SKILL SOURCE COUNTS:
-${Object.entries(existingSourceCounts).map(([name, count]) => `- ${name}: ${count} sources`).join('\n')}`;
+Return a JSON object with: action ("CREATE" | "UPDATE" | "SKIP"), targetSkillName (null for CREATE, skill name for UPDATE/SKIP), rationale (one sentence), topicOverlap (0.0–1.0), noveltyScore (0.0–1.0), proposedNameGeneralization (string | null — only relevant when action=UPDATE).`;
 
 
   const userContent = `NEW CANDIDATE:
@@ -682,6 +687,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const dedup = await checkDeduplication(assessment, existingSkills);
 
       if (dedup.action === 'SKIP') {
+        // Even on SKIP, link this source to the skill for attribution (no content update)
+        if (!dryRun && dedup.targetSkillName) {
+          const targetSkill = existingSkills.find(s => s.name === dedup.targetSkillName);
+          if (targetSkill && !targetSkill.source_ids.includes(source.id)) {
+            await supabase
+              .from('knowledge_skills')
+              .update({
+                source_ids: [...targetSkill.source_ids, source.id],
+                source_count: targetSkill.source_count + 1,
+              })
+              .eq('name', dedup.targetSkillName)
+              .eq('user_id', source.user_id);
+            // Update local cache so subsequent dedup sees the updated count
+            targetSkill.source_ids = [...targetSkill.source_ids, source.id];
+            targetSkill.source_count = targetSkill.source_count + 1;
+          }
+        }
         details.push({
           sourceId: source.id,
           sourceTitle: source.title,
