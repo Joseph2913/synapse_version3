@@ -102,6 +102,7 @@ synapse-v2/
 - **Defensive INSERTs** — only include nullable fields when they have truthy values. Omit empty arrays for UUID[] columns
 - **Auth context** — wrap app in `AuthProvider` that exposes `user`, `session`, `signIn`, `signOut`
 - **Environment variables** use `VITE_` prefix for client-side access
+- **CRITICAL — Migration safety:** After ANY database table or column rename, `grep -r "old_name" --include="*.ts"` the entire codebase before deploying. Supabase PostgREST silently returns empty results (no error) when querying a non-existent table with RLS enabled — inserts vanish without a trace. The highest-risk files are `api/` serverless functions (independently bundled, no shared imports, stale references won't cause build errors) and `src/services/supabase.ts` (centralises most table references). Always verify the affected pipeline produces expected output after deploy — absence of errors does not mean success.
 
 ### Vercel Serverless Functions
 - **CRITICAL: No shared local imports in `api/` files.** Each serverless function is bundled independently. All helpers must be defined inline within each file
