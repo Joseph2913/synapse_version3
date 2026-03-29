@@ -338,8 +338,8 @@ export function SkillsView() {
       result = result.filter(s => domainFilter.includes(s.domain ?? 'general'))
     }
 
-    // Sort (status grouping: draft → active → archived, then by chosen field)
-    const statusOrder = (s: string) => s === 'draft' ? 0 : s === 'active' ? 1 : 2
+    // Sort (status grouping: active → archived → draft at bottom)
+    const statusOrder = (s: string) => s === 'active' ? 0 : s === 'archived' ? 1 : 2
 
     result.sort((a, b) => {
       const statusDiff = statusOrder(a.status) - statusOrder(b.status)

@@ -21,6 +21,7 @@ interface NavRailProps {
   onOpenCommandPalette: () => void
   onOpenSettings: () => void
   anchorSuggestionCount?: number
+  skillDraftCount?: number
 }
 
 function NavItemButton({
@@ -187,7 +188,7 @@ function UtilButton({
   )
 }
 
-export function NavRail({ onOpenCommandPalette, onOpenSettings, anchorSuggestionCount = 0 }: NavRailProps) {
+export function NavRail({ onOpenCommandPalette, onOpenSettings, anchorSuggestionCount = 0, skillDraftCount = 0 }: NavRailProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -249,7 +250,11 @@ export function NavRail({ onOpenCommandPalette, onOpenSettings, anchorSuggestion
               key={item.id}
               item={item}
               expanded={expanded}
-              badge={item.id === 'anchors' ? anchorSuggestionCount : undefined}
+              badge={
+                item.id === 'anchors' ? anchorSuggestionCount
+                : item.id === 'skills' ? skillDraftCount
+                : undefined
+              }
             />
           ))}
         </div>

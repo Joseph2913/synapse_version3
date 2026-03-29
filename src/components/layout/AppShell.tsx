@@ -10,6 +10,7 @@ import { DemoContent } from '../onboarding/DemoContent'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchSuggestedCount } from '../../services/anchorCandidates'
+import { supabase } from '../../services/supabase'
 
 export function AppShell() {
   const location = useLocation()
@@ -18,6 +19,7 @@ export function AppShell() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [suggestedAnchorCount, setSuggestedAnchorCount] = useState(0)
+  const [skillDraftCount, setSkillDraftCount] = useState(0)
   const {
     active: onboardingActive,
     complete: completeOnboarding,
@@ -31,6 +33,21 @@ export function AppShell() {
       try {
         fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
       } catch { /* table may not exist */ }
+    }
+  }, [user])
+
+  // Fetch skill draft count for nav badge
+  useEffect(() => {
+    if (user) {
+      void (async () => {
+        try {
+          const { count } = await supabase
+            .from('knowledge_skills')
+            .select('id', { count: 'exact', head: true })
+            .eq('status', 'draft')
+          setSkillDraftCount(count ?? 0)
+        } catch { /* table may not exist */ }
+      })()
     }
   }, [user])
 
@@ -74,6 +91,7 @@ export function AppShell() {
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
           anchorSuggestionCount={suggestedAnchorCount}
+          skillDraftCount={skillDraftCount}
         />
 
         <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0">
