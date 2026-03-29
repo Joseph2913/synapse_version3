@@ -58,10 +58,18 @@ interface SourceRow {
   created_at: string;
 }
 
+interface AnchorInfo {
+  label: string;
+  entity_type: string;
+  description: string | null;
+}
+
 interface AssessmentResult {
   generalizability: number;
   structuralDensity: number;
   instructionalRatio: number;
+  anchorRelevance: number;
+  anchorMatches: string[];
   proposedSkillTitle: string;
   proposedSkillTitleHuman: string;
   proposedDomain: string;
@@ -184,30 +192,36 @@ async function generateEmbedding(text: string): Promise<number[]> {
 
 function computeSkillReadiness(assessment: AssessmentResult): number {
   return (
-    assessment.instructionalRatio * 0.35 +
-    assessment.generalizability * 0.40 +
-    assessment.structuralDensity * 0.25
+    assessment.instructionalRatio * 0.25 +
+    assessment.generalizability * 0.25 +
+    assessment.structuralDensity * 0.20 +
+    assessment.anchorRelevance * 0.30
   );
 }
 
 async function assessSource(
   content: string,
   entities: Array<{ label: string; entity_type: string; description: string | null }>,
-  metadata: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null,
+  anchors: AnchorInfo[]
 ): Promise<AssessmentResult> {
   const entitySummary = entities
     .map(e => `${e.entity_type}: ${e.label}${e.description ? ` — ${e.description}` : ''}`)
+    .join('\n');
+
+  const anchorSummary = anchors
+    .map(a => `- ${a.label} (${a.entity_type})${a.description ? `: ${a.description}` : ''}`)
     .join('\n');
 
   const existingIR = metadata?.skill_candidate_checks
     ? (metadata.skill_candidate_checks as Record<string, unknown>).instructionalRatio
     : null;
 
-  const systemPrompt = `You are a skill assessment engine for a personal knowledge graph system. Your job is to evaluate whether a source (a YouTube video transcript, meeting transcript, or document) contains extractable, reusable methodology that could be encoded as a structured Claude skill.
+  const systemPrompt = `You are a skill assessment engine for a personal knowledge graph system. Your job is to evaluate whether a source (a YouTube video transcript, meeting transcript, or document) contains extractable, reusable methodology that could be encoded as a structured Claude skill — specifically for THIS user, based on their declared interests and expertise (anchors).
 
 A Claude skill is a SKILL.md file that teaches Claude how to perform a specific task or follow a specific methodology. Good skills contain: step-by-step processes, named frameworks, decision criteria, concrete techniques, or structured approaches that someone could apply repeatedly in different contexts.
 
-Evaluate this source on three dimensions:
+Evaluate this source on four dimensions:
 
 1. GENERALIZABILITY (0.0–1.0): Could someone with no knowledge of this specific project, client, or meeting use the methodology described here?
    - 0.9+ = Completely portable, no context needed (e.g., "3 rules for preventing AI hallucination")
@@ -221,7 +235,17 @@ Evaluate this source on three dimensions:
 
 3. INSTRUCTIONAL RATIO (0.0–1.0): What proportion of the content is teaching methodology vs. narrative, status updates, or off-topic conversation?${existingIR ? ` (The source metadata includes a pre-computed instructionalRatio of ${existingIR} — use it as a reference but compute your own from the content.)` : ''}
 
+4. ANCHOR RELEVANCE (0.0–1.0): How relevant is this source's methodology to the user's declared interests and expertise (their "anchors")? This is the most important personalization signal.
+   - 0.9+ = Directly addresses one or more of the user's core anchors (e.g., source about AI prompting techniques when user has "AI Prompting" and "Claude" anchors)
+   - 0.6–0.8 = Tangentially related to user's anchors or addresses adjacent topics the user would benefit from
+   - 0.3–0.5 = Weak connection — the methodology exists in a domain the user doesn't focus on, but could have some cross-domain utility
+   - Below 0.3 = No meaningful connection to the user's interests (e.g., a source about currency trading when user focuses on AI and consulting)
+
+THE USER'S ANCHORS (their declared areas of interest/expertise):
+${anchorSummary || '(no anchors defined — score anchorRelevance based on general utility)'}
+
 Also provide:
+- anchorMatches: An array of the specific anchor labels that this source is relevant to (empty array if none)
 - proposedSkillTitle: A kebab-case name for the skill (e.g., "ai-honesty-prompting")
 - proposedSkillTitleHuman: A human-readable title (e.g., "AI Honesty Prompting")
 - proposedDomain: One of: ai-tooling, ai-prompting, consulting-methodology, change-management, financial-analysis, risk-management, sales-methodology, project-management, product-design, general
@@ -229,7 +253,7 @@ Also provide:
 - transferableMethods: An array of the specific techniques/steps that are portable
 - contextDependencies: An array of things that would need to be stripped or generalized
 
-Return your assessment as a JSON object with these exact keys: generalizability, structuralDensity, instructionalRatio, proposedSkillTitle, proposedSkillTitleHuman, proposedDomain, extractableMethodology, transferableMethods, contextDependencies.`;
+Return your assessment as a JSON object with these exact keys: generalizability, structuralDensity, instructionalRatio, anchorRelevance, anchorMatches, proposedSkillTitle, proposedSkillTitleHuman, proposedDomain, extractableMethodology, transferableMethods, contextDependencies.`;
 
   const userContent = `SOURCE CONTENT (may be truncated):\n${content.slice(0, MAX_CONTENT_CHARS)}\n\nEXTRACTED ENTITIES:\n${entitySummary || '(no entities extracted)'}`;
 
@@ -490,10 +514,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return bIR - aIR;
   }).slice(0, batchSize);
 
+  // ─── Fetch user's anchors for relevance scoring ──────────────────────────────
+
+  const targetUserId = userId ?? sources[0]?.user_id;
+  let userAnchors: AnchorInfo[] = [];
+
+  if (targetUserId) {
+    const { data: anchorNodes } = await supabase
+      .from('knowledge_nodes')
+      .select('label, entity_type, description')
+      .eq('user_id', targetUserId)
+      .eq('is_anchor', true)
+      .order('label');
+
+    userAnchors = (anchorNodes ?? []) as AnchorInfo[];
+  }
+
   // ─── Fetch existing skills for deduplication ────────────────────────────────
 
-  // For user-scoped runs, get the user_id from first source
-  const targetUserId = userId ?? sources[0]?.user_id;
   let existingSkills: ExistingSkill[] = [];
 
   if (targetUserId) {
@@ -593,7 +631,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const entityList = (entities ?? []) as Array<{ label: string; entity_type: string; description: string | null }>;
 
       // ── Step 3: Three-signal assessment (Gemini) ────────────────────────────
-      const assessment = await assessSource(source.content, entityList, source.metadata);
+      const assessment = await assessSource(source.content, entityList, source.metadata, userAnchors);
       const skillReadiness = computeSkillReadiness(assessment);
 
       if (skillReadiness < SKILL_READINESS_THRESHOLD) {
