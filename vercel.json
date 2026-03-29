@@ -46,6 +46,10 @@
     {
       "path": "/api/digest/generate-scheduled",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/skills/backfill?batch_size=8",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

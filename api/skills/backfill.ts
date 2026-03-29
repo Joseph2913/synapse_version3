@@ -139,10 +139,11 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2): P
 async function callGeminiJSON<T>(
   systemPrompt: string,
   userContent: string,
-  temperature: number = 0.1
+  temperature: number = 0.1,
+  model: string = 'gemini-2.0-flash'
 ): Promise<T> {
   const response = await fetchWithRetry(
-    `${GEMINI_BASE}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -332,7 +333,8 @@ async function generateSkillContent(
   source: SourceRow,
   content: string,
   entities: Array<{ label: string; entity_type: string; description: string | null }>,
-  assessment: AssessmentResult
+  assessment: AssessmentResult,
+  confidence: number
 ): Promise<GenerationResult> {
   const entitySummary = entities
     .map(e => `${e.entity_type}: ${e.label}${e.description ? ` — ${e.description}` : ''}`)
@@ -340,32 +342,41 @@ async function generateSkillContent(
 
   const createdDate = source.created_at ? new Date(source.created_at).toISOString().split('T')[0] : 'unknown';
 
-  const systemPrompt = `You are generating a Claude skill from a knowledge source. A Claude skill is a structured SKILL.md file that teaches Claude a specific methodology, framework, or technique.
+  const systemPrompt = `You are generating a Claude skill from a knowledge source. A Claude skill is a structured SKILL.md file that teaches Claude a specific, reusable methodology. It will be retrieved via semantic search and injected into Claude's context — so it must be immediately actionable and self-contained.
 
-Generate the skill content following this exact structure:
+Generate the skill content following this EXACT structure (use these exact section headers):
 
-## Context
-{When and why to use this skill. What problem it solves. Who benefits from it. Write 2-3 sentences.}
+> {One sharp sentence summarising what this skill produces and its primary trigger. Include 3-5 specific keywords a user might say to invoke it. Example: "Use when designing AI agent harnesses for long-running tasks — triggered by keywords like harness architecture, context reset, adversarial evaluation, agent reliability."}
+
+## Prerequisites
+{Bullet list of what must be true before applying this skill: required tools, setup, knowledge, or context. Be specific — list actual tool names, environment requirements, or assumed knowledge. If there are no prerequisites, write "None — applicable in any context."}
 
 ## Methodology
-{The core process, framework, or technique. Structure as numbered steps, principles, or decision criteria. Write in imperative form ("Do X", "Check Y", "If Z then..."). Be specific and actionable. Strip all project-specific context — make this universally applicable. This is the most important section.}
+{The core process. CRITICAL RULES:
+- Number every step
+- Bold the step name: **Step Name:** then the instruction
+- Write the HOW, not just the WHAT. "Connect to an API" is not a step — "Call the endpoint with a POST request containing {field}: {value} in the body" IS a step.
+- Generalise WHO and WHAT (strip specific project/company names), but KEEP the specificity of HOW
+- Minimum 4 steps, maximum 12
+- Imperative form: "Do X", "Check Y", "If Z then..."}
+
+## Output Format
+{Describe what the final output looks like when this skill is correctly applied. Is it a document? A table with specific columns? A code snippet? A structured prompt? Show a template or example structure. This section is mandatory — without it Claude doesn't know what to produce.}
+
+## Limitations
+{Bullet list of: when NOT to use this skill, common failure modes, edge cases where the methodology breaks down. Minimum 2 points. This helps Claude avoid misapplying the skill.}
 
 ## Examples
-{1-2 concrete examples showing the methodology applied. Derived from the source content but generalized.}
+{1-2 concrete examples derived from the actual source content. Use real scenarios from the source, generalised slightly. Each example should show the methodology applied end-to-end, not just describe it.}
 
-## Synapse Source Attribution
-This skill was auto-generated from the following Synapse knowledge source:
-- **${source.title || 'Untitled Source'}** (${source.source_type || 'unknown'}, ${createdDate})
-  - Source ID: \`${source.id}\`
-  - To retrieve the full transcript: use \`get_meeting_transcript\` or \`get_source_content\` with source_id \`${source.id}\` via the Synapse MCP
-  - To explore entities from this source: use \`search_entities\` with source_id \`${source.id}\`
-  - To find related sources: use \`get_related_sources\` with source_id \`${source.id}\`
+---
+*Domain: ${assessment.proposedDomain} | Confidence: ${confidence.toFixed(2)} | Sources: 1 | Added: ${createdDate} | Source: [${source.title || 'Untitled'}](synapse:source:${source.id})*
 
 Also generate:
-- A triggering description: a paragraph that tells Claude WHEN to use this skill. Be slightly "pushy" — include specific keywords, contexts, and task types that should activate it. This should be compelling enough that Claude picks this skill when relevant.
-- A tags array: 3-5 relevant keywords.
+- description: 2-3 sentences. Sentence 1: what the skill does (topic summary for browsing). Sentence 2-3: when to invoke it, with specific trigger keywords and task types. This field is used for both index browsing AND semantic search — make it keyword-rich but readable.
+- tags: array of 4-6 specific keywords (not generic terms like "AI" — use terms like "context-reset", "adversarial-evaluation", "harness-architecture")
 
-Return a JSON object with these exact keys: description, content (the full skill body as described above), tags (string array).`;
+Return a JSON object with these exact keys: description, content (the full skill body exactly as structured above), tags (string array).`;
 
   const userContent = `SOURCE TITLE: ${source.title || 'Untitled'}
 SOURCE TYPE: ${source.source_type || 'unknown'}
@@ -381,7 +392,7 @@ ${content.slice(0, MAX_CONTENT_CHARS)}
 EXTRACTED ENTITIES:
 ${entitySummary || '(no entities)'}`;
 
-  return callGeminiJSON<GenerationResult>(systemPrompt, userContent, 0.2);
+  return callGeminiJSON<GenerationResult>(systemPrompt, userContent, 0.2, 'gemini-2.5-flash');
 }
 
 async function generateUpdateContent(
@@ -390,21 +401,19 @@ async function generateUpdateContent(
   content: string,
   assessment: AssessmentResult
 ): Promise<{ content: string; description: string }> {
-  const createdDate = source.created_at ? new Date(source.created_at).toISOString().split('T')[0] : 'unknown';
-
   const systemPrompt = `You are updating an existing Claude skill with new content from an additional source.
 
-Merge the new content into the existing skill:
-1. Add genuinely new techniques/steps to the Methodology section
-2. Add new examples to the Examples section if the new source provides good ones
-3. Append the new source to the Synapse Source Attribution section:
-   - **${source.title || 'Untitled Source'}** (${source.source_type || 'unknown'}, ${createdDate})
-     - Source ID: \`${source.id}\`
-     - To retrieve the full transcript: use \`get_meeting_transcript\` or \`get_source_content\` with source_id \`${source.id}\` via the Synapse MCP
-4. Do NOT remove or rewrite existing content — only add and refine
-5. If the new source corrects something in the existing skill, apply the correction with a brief note
+Merge the new content into the existing skill following these rules:
+1. Add genuinely new techniques/steps to the Methodology section. Keep all existing steps — only add, never remove.
+2. Update Prerequisites if the new source reveals additional requirements.
+3. Update Output Format if the new source shows a different/better output structure.
+4. Add to Limitations if the new source reveals new failure modes or edge cases.
+5. Add new examples to the Examples section if the new source provides concrete ones — prefer real scenarios over hypothetical.
+6. Update the footer source attribution line: append \`| [${source.title || 'Untitled'}](synapse:source:${source.id})\` to the existing Sources entry and increment the count.
+7. Do NOT rewrite existing content — only add and refine.
+8. If the new source corrects something in the existing skill, apply the correction with a brief inline note.
 
-Return a JSON object with: content (the updated full body), description (updated if needed, otherwise return the existing one unchanged).`;
+Return a JSON object with: content (the updated full body), description (updated 2-3 sentence description if the scope has broadened, otherwise return unchanged).`;
 
   const userContent = `EXISTING SKILL:
 - Name: ${existingSkill.name}
@@ -421,7 +430,7 @@ NEW SOURCE:
 NEW SOURCE CONTENT (may be truncated):
 ${content.slice(0, MAX_CONTENT_CHARS)}`;
 
-  return callGeminiJSON<{ content: string; description: string }>(systemPrompt, userContent, 0.2);
+  return callGeminiJSON<{ content: string; description: string }>(systemPrompt, userContent, 0.2, 'gemini-2.5-flash');
 }
 
 // ─── SOURCE MARKING ───────────────────────────────────────────────────────────
@@ -720,7 +729,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // ── Step 6: Generate or Update ──────────────────────────────────────────
 
       if (dedup.action === 'CREATE') {
-        const generation = await generateSkillContent(source, source.content, entityList, assessment);
+        const generation = await generateSkillContent(source, source.content, entityList, assessment, skillReadiness);
 
         if (dryRun) {
           details.push({
