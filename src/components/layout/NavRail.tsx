@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Home, Compass, MessageSquare, Zap, Navigation, Sparkles, Anchor, Search, Settings, type LucideIcon } from 'lucide-react'
+import { Home, Compass, MessageSquare, Zap, Navigation, Radio, Search, Settings, type LucideIcon } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { Kbd } from '../ui/Kbd'
 import { SynapseLogo } from '../shared/SynapseLogo'
@@ -11,15 +11,13 @@ const NAV_ITEMS: Array<{ id: string; label: string; path: string; icon: LucideIc
   { id: 'ask', label: 'Ask', path: '/ask', icon: MessageSquare },
   { id: 'ingest', label: 'Ingest', path: '/ingest', icon: Zap },
   { id: 'orient', label: 'Orient', path: '/orient', icon: Navigation },
-  { id: 'skills', label: 'Skills', path: '/skills', icon: Sparkles },
-  { id: 'anchors', label: 'Anchors', path: '/anchors', icon: Anchor },
+  { id: 'signals', label: 'Signals', path: '/signals', icon: Radio },
 ]
 
 interface NavRailProps {
   onOpenCommandPalette: () => void
   onOpenSettings: () => void
-  anchorSuggestionCount?: number
-  skillDraftCount?: number
+  signalsPendingCount?: number
 }
 
 function NavItemButton({
@@ -186,7 +184,7 @@ function UtilButton({
   )
 }
 
-export function NavRail({ onOpenCommandPalette, onOpenSettings, anchorSuggestionCount = 0, skillDraftCount = 0 }: NavRailProps) {
+export function NavRail({ onOpenCommandPalette, onOpenSettings, signalsPendingCount = 0 }: NavRailProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -248,11 +246,7 @@ export function NavRail({ onOpenCommandPalette, onOpenSettings, anchorSuggestion
               key={item.id}
               item={item}
               expanded={expanded}
-              badge={
-                item.id === 'anchors' ? anchorSuggestionCount
-                : item.id === 'skills' ? skillDraftCount
-                : undefined
-              }
+              badge={item.id === 'signals' ? signalsPendingCount : undefined}
             />
           ))}
         </div>

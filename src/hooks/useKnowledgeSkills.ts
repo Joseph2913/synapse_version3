@@ -69,6 +69,7 @@ export function useKnowledgeSkills(): UseKnowledgeSkillsReturn {
 
     setSkills((data ?? []) as unknown as KnowledgeSkillListItem[])
     setLoading(false)
+    window.dispatchEvent(new CustomEvent('synapse:skill-drafts-changed'))
   }, [user?.id])
 
   useEffect(() => {
@@ -174,7 +175,10 @@ export function useKnowledgeSkills(): UseKnowledgeSkillsReturn {
       // Revert
       setSkills(prevSkills)
       if (prevSelected) setSelectedSkill(prevSelected)
+      return
     }
+
+    window.dispatchEvent(new CustomEvent('synapse:skill-drafts-changed'))
   }, [skills, selectedSkill])
 
   const activateSkill = useCallback((id: string) => updateStatusOptimistic(id, 'active'), [updateStatusOptimistic])

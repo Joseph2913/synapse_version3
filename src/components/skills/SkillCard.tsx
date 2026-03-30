@@ -1,3 +1,4 @@
+import { BarChart3, FileText, Sparkles } from 'lucide-react'
 import type { KnowledgeSkillListItem } from '../../types/skills'
 
 // ─── Domain Colors ───────────────────────────────────────────────────────────
@@ -20,11 +21,24 @@ function getDomainColor(domain: string | null): string {
   return DOMAIN_COLORS[domain] ?? '#6b7280'
 }
 
-function getConfidenceColor(confidence: number): string {
-  if (confidence >= 0.8) return 'var(--color-accent-500)'
-  if (confidence >= 0.6) return '#10b981'
-  if (confidence >= 0.4) return '#3b82f6'
-  return '#808080'
+function hexToRgba(hex: string, alpha: number): string {
+  const value = hex.replace('#', '')
+  const normalized = value.length === 3
+    ? value.split('').map(char => char + char).join('')
+    : value
+  const int = Number.parseInt(normalized, 16)
+  const r = (int >> 16) & 255
+  const g = (int >> 8) & 255
+  const b = int & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function formatDomainLabel(domain: string | null): string {
+  const raw = domain ?? 'general'
+  return raw
+    .split('-')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function relativeTime(dateStr: string): string {
@@ -53,12 +67,9 @@ interface SkillCardProps {
 
 export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps) {
   const domainColor = getDomainColor(skill.domain)
-  const confColor = getConfidenceColor(skill.confidence)
   const isDraft = skill.status === 'draft'
   const isArchived = skill.status === 'archived'
-  const domainLabel = skill.domain ?? 'general'
-  const visibleTags = skill.tags.slice(0, 3)
-  const extraTagCount = skill.tags.length - 3
+  const domainLabel = formatDomainLabel(skill.domain)
 
   return (
     <div
@@ -70,18 +81,20 @@ export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps)
           : isDraft
             ? '1px dashed var(--border-subtle)'
             : '1px solid var(--border-subtle)',
-        borderRadius: 10,
-        padding: '14px 18px',
+        borderRadius: 12,
+        padding: '16px 18px',
         cursor: 'pointer',
-        opacity: isArchived ? 0.5 : isDraft ? 0.85 : 1,
+        opacity: isArchived ? 0.72 : isDraft ? 0.92 : 1,
         transition: 'all 0.15s ease',
         animation: `fadeUp 0.4s ease ${index * 0.05}s both`,
         position: 'relative',
+        overflow: 'hidden',
+        borderLeft: isDraft ? `3px dashed ${domainColor}` : undefined,
       }}
       onMouseEnter={e => {
         if (!isSelected) {
           e.currentTarget.style.transform = 'translateY(-1px)'
-          e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'
+          e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)'
         }
       }}
       onMouseLeave={e => {
@@ -89,138 +102,101 @@ export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps)
         e.currentTarget.style.boxShadow = 'none'
       }}
     >
-      {/* Status badge (top-right) */}
-      {isDraft && (
-        <span
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: 12,
-            fontSize: 9,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            padding: '2px 6px',
-            borderRadius: 4,
-            background: 'rgba(245,158,11,0.1)',
-            color: 'var(--semantic-amber-500, #f59e0b)',
-          }}
-        >
-          Draft
-        </span>
-      )}
-      {isArchived && (
-        <span
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: 12,
-            fontSize: 9,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            padding: '2px 6px',
-            borderRadius: 4,
-            background: 'rgba(128,128,128,0.1)',
-            color: 'var(--color-text-secondary)',
-          }}
-        >
-          Archived
-        </span>
+      {!isDraft && (
+        <div style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
+          background: domainColor, borderRadius: '12px 0 0 12px',
+        }} />
       )}
 
-      {/* Row 1: Domain badge + Title + Timestamp */}
-      <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
-        {/* Domain badge */}
+      <div className="flex items-start justify-between gap-3" style={{ minWidth: 0, marginBottom: 8 }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: domainColor, flexShrink: 0 }} />
+          <span
+            className="font-display"
+            style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: 'var(--color-text-primary)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            {skill.title}
+          </span>
+        </div>
         <span
-          className="flex items-center gap-1 shrink-0"
-          style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: domainColor }}
-        >
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: domainColor, flexShrink: 0 }} />
-          {domainLabel}
-        </span>
-
-        {/* Title */}
-        <span
-          className="font-body font-semibold"
-          style={{
-            fontSize: 14,
-            color: 'var(--color-text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            flex: 1,
-            minWidth: 0,
-          }}
-        >
-          {skill.title}
-        </span>
-
-        {/* Timestamp — pushed right by the status badge when present */}
-        <span
-          className="shrink-0"
+          className="shrink-0 font-body"
           style={{
             fontSize: 11,
             color: 'var(--color-text-secondary)',
-            marginRight: (isDraft || isArchived) ? 60 : 0,
+            whiteSpace: 'nowrap',
           }}
         >
-          {relativeTime(skill.updated_at)}
+          Updated {relativeTime(skill.updated_at)}
         </span>
       </div>
 
-      {/* Row 2: Description (2-line clamp) */}
-      <p
-        className="font-body"
-        style={{
-          fontSize: 12,
-          color: 'var(--color-text-secondary)',
-          lineHeight: 1.5,
-          marginTop: 6,
-          marginBottom: 0,
-          overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-        }}
-      >
-        {skill.description}
-      </p>
-
-      {/* Row 3: Confidence bar + score */}
-      <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
-        <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--color-bg-inset)', overflow: 'hidden' }}>
-          <div
+      <div className="flex items-center gap-1 flex-wrap" style={{ marginBottom: 10 }}>
+        <span
+          className="flex items-center gap-1"
+          style={{
+            background: hexToRgba(domainColor, 0.06),
+            border: `1px solid ${hexToRgba(domainColor, 0.16)}`,
+            color: domainColor,
+            padding: '3px 9px',
+            borderRadius: 5,
+            fontSize: 11,
+            fontWeight: 600,
+          }}
+        >
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: domainColor, flexShrink: 0 }} />
+          {domainLabel}
+        </span>
+        {isDraft && (
+          <span
             style={{
-              width: `${Math.min(skill.confidence * 100, 100)}%`,
-              height: '100%',
-              borderRadius: 2,
-              background: confColor,
-              transition: 'width 0.3s ease',
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: 4,
+              background: 'rgba(245,158,11,0.08)',
+              border: '1px solid rgba(245,158,11,0.2)',
+              color: 'var(--color-semantic-amber-700, #b45309)',
             }}
-          />
-        </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: confColor, flexShrink: 0 }}>
-          {skill.confidence.toFixed(2)}
-        </span>
+          >
+            Draft
+          </span>
+        )}
+        {isArchived && (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: 4,
+              background: 'rgba(0,0,0,0.04)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            Archived
+          </span>
+        )}
       </div>
 
-      {/* Row 4: Meta line */}
-      <div className="flex items-center gap-1 flex-wrap" style={{ marginTop: 8, fontSize: 11, color: 'var(--color-text-secondary)' }}>
-        <span>{domainLabel}</span>
-        <span style={{ opacity: 0.5 }}>·</span>
-        <span>{skill.source_count} source{skill.source_count !== 1 ? 's' : ''}</span>
-        {skill.usage_count > 0 && (
-          <>
-            <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--color-accent-500)', fontWeight: 600 }}>
-              {skill.usage_count} use{skill.usage_count !== 1 ? 's' : ''}
-            </span>
-          </>
-        )}
-        {visibleTags.length > 0 && <span style={{ opacity: 0.5 }}>·</span>}
-        {visibleTags.map(tag => (
-          <span key={tag} style={{ color: 'var(--color-text-secondary)' }}>#{tag}</span>
-        ))}
-        {extraTagCount > 0 && <span style={{ opacity: 0.6 }}>+{extraTagCount}</span>}
+      <div className="flex items-center gap-4 flex-wrap" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+        <span className="flex items-center gap-1 font-body">
+          <FileText size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{skill.source_count}</span> source{skill.source_count !== 1 ? 's' : ''}
+        </span>
+        <span className="flex items-center gap-1 font-body">
+          <Sparkles size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{skill.usage_count}</span> use{skill.usage_count !== 1 ? 's' : ''}
+        </span>
+        <span className="flex items-center gap-1 font-body">
+          <BarChart3 size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{Math.round(skill.confidence * 100)}%</span> confidence
+        </span>
       </div>
     </div>
   )

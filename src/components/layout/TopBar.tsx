@@ -12,8 +12,9 @@ const VIEW_TITLES: Record<string, string> = {
   '/ask': 'Ask',
   '/ingest': 'Ingest',
   '/orient': 'Orient',
-  '/skills': 'Skills',
-  '/anchors': 'Anchors',
+  '/signals': 'Signals',
+  '/skills': 'Signals',
+  '/anchors': 'Signals',
 }
 
 interface TopBarProps {

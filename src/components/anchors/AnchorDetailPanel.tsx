@@ -234,6 +234,72 @@ export function AnchorDetailPanel({ candidate, onClose, onConfirm, onConfirmAsSu
         </div>
       )}
 
+      {(node.description || node.quote || (node.user_tags?.length ?? 0) > 0) && (
+        <div style={{ marginBottom: 20 }}>
+          <div className="font-display font-bold uppercase" style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+            Reference Notes
+          </div>
+
+          {node.description && (
+            <div
+              style={{
+                background: 'var(--color-bg-inset)',
+                borderRadius: 10,
+                padding: '10px 12px',
+                marginBottom: node.quote || (node.user_tags?.length ?? 0) > 0 ? 8 : 0,
+              }}
+            >
+              <div className="font-body" style={{ fontSize: 10, fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Description
+              </div>
+              <p className="font-body" style={{ fontSize: 12, color: 'var(--color-text-body)', lineHeight: 1.6, margin: 0 }}>
+                {node.description}
+              </p>
+            </div>
+          )}
+
+          {node.quote && (
+            <div
+              style={{
+                background: 'var(--color-bg-inset)',
+                borderRadius: 10,
+                padding: '10px 12px',
+                marginBottom: (node.user_tags?.length ?? 0) > 0 ? 8 : 0,
+              }}
+            >
+              <div className="font-body" style={{ fontSize: 10, fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Settings
+              </div>
+              <p className="font-body" style={{ fontSize: 12, color: 'var(--color-text-body)', lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' }}>
+                {node.quote}
+              </p>
+            </div>
+          )}
+
+          {(node.user_tags?.length ?? 0) > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {node.user_tags?.map(tag => (
+                <span
+                  key={tag}
+                  className="font-body"
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                    background: 'var(--color-bg-inset)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--color-text-secondary)',
+                  }}
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Hierarchy section */}
       {hierarchyInfo && (hierarchyInfo.parentAnchorId || hierarchyInfo.subAnchors.length > 0) && (
         <div style={{ marginBottom: 16 }}>

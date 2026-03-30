@@ -181,6 +181,8 @@ export function useAnchorCandidates() {
                 label:            n.label as string,
                 entity_type:      n.entity_type as EntityType,
                 description:      (n.description ?? null) as string | null,
+                quote:            null,
+                user_tags:        null,
                 confidence:       (n.confidence ?? null) as number | null,
                 is_anchor:        true,
                 parent_anchor_id: (n.parent_anchor_id as string | null) ?? null,

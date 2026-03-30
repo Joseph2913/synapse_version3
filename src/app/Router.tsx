@@ -5,8 +5,7 @@ import { ExploreView } from '../views/ExploreView'
 import { AskView } from '../views/AskView'
 import { IngestView } from '../views/IngestView'
 import { OrientView } from '../views/OrientView'
-import { SkillsView } from '../views/SkillsView'
-import { AnchorsView } from '../views/AnchorsView'
+import { SignalsView } from '../views/SignalsView'
 import OnboardingDemoPage from '../views/OnboardingDemoPage'
 
 const router = createBrowserRouter([
@@ -23,8 +22,9 @@ const router = createBrowserRouter([
       { path: '/automate', element: <Navigate to="/ingest" replace /> },
       { path: '/pipeline', element: <Navigate to="/ingest" replace /> },
       { path: '/orient', element: <OrientView /> },
-      { path: '/skills', element: <SkillsView /> },
-      { path: '/anchors', element: <AnchorsView /> },
+      { path: '/signals', element: <SignalsView /> },
+      { path: '/skills', element: <Navigate to="/signals?mode=skills" replace /> },
+      { path: '/anchors', element: <Navigate to="/signals?mode=anchors" replace /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

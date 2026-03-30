@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Search, Home, Compass, MessageSquare, Plus, Settings,
+  Search, Home, Compass, MessageSquare, Plus, Radio, Settings,
   ArrowRight, Loader2, type LucideIcon,
 } from 'lucide-react'
 import { useSettings } from '../../hooks/useSettings'
@@ -30,6 +30,7 @@ const NAV_ITEMS: Array<{ id: string; label: string; icon: LucideIcon; route?: st
   { id: 'nav-home',     label: 'Go to Home',    icon: Home,          route: '/'        },
   { id: 'nav-explore',  label: 'Go to Explore',  icon: Compass,       route: '/explore' },
   { id: 'nav-ask',      label: 'Open Ask',        icon: MessageSquare, route: '/ask'     },
+  { id: 'nav-signals',  label: 'Go to Signals',  icon: Radio,         route: '/signals' },
   { id: 'nav-ingest',   label: 'Quick Capture',   icon: Plus,          route: '/ingest'  },
   { id: 'nav-settings', label: 'Open Settings',   icon: Settings                         },
 ]
