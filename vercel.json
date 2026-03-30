@@ -50,6 +50,14 @@
     {
       "path": "/api/skills/backfill?batch_size=8",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/skills/daily-cron",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/skills/rescore",
+      "schedule": "0 2 * * 0"
     }
   ]
 }

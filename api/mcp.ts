@@ -1999,19 +1999,46 @@ async function handleGetMeetingTranscript(
   }
 }
 
+// ─── Skill Usage Logging (PRD-Skills-D) ─────────────────────────────────────
+
+function logSkillUsage(
+  sb: SupabaseClient,
+  userId: string,
+  toolName: string,
+  skillIds: string[],
+  queryText: string | null,
+  queryContext: Record<string, unknown>,
+  sessionId: string | null
+): void {
+  if (skillIds.length === 0) return
+  const rows = skillIds.map((skillId, idx) => ({
+    user_id: userId,
+    skill_id: skillId,
+    tool_name: toolName,
+    query_text: queryText,
+    query_context: queryContext,
+    session_id: sessionId,
+    retrieval_rank: idx + 1,
+  }))
+  sb.from('skill_usage_log').insert(rows).then(() => {}).catch(err => {
+    console.warn('[mcp] skill usage log failed:', err)
+  })
+}
+
 // ─── Skill library handlers (PRD-Skills-C) ──────────────────────────────────
 
 async function handleGetSkills(
   params: { domain?: string; include_drafts?: boolean },
   userId: string,
-  sb: SupabaseClient
+  sb: SupabaseClient,
+  sessionId?: string | null
 ): Promise<ToolContent> {
   const includeDrafts = params.include_drafts === true
   const statuses = includeDrafts ? ['active', 'draft'] : ['active']
 
   let query = sb
     .from('knowledge_skills')
-    .select('name, title, description, domain, tags, confidence, source_count, status, updated_at')
+    .select('id, name, title, description, domain, tags, confidence, source_count, status, updated_at')
     .eq('user_id', userId)
     .in('status', statuses)
     .order('confidence', { ascending: false })
@@ -2029,7 +2056,7 @@ async function handleGetSkills(
   }
 
   const skills = (data ?? []) as Array<{
-    name: string; title: string; description: string; domain: string | null
+    id: string; name: string; title: string; description: string; domain: string | null
     tags: string[]; confidence: number; source_count: number; status: string
     updated_at: string
   }>
@@ -2074,17 +2101,23 @@ async function handleGetSkills(
     lines.push('Showing top 100 by confidence. Use search_skills for targeted discovery.')
   }
 
+  // Fire-and-forget usage logging (PRD-Skills-D)
+  logSkillUsage(sb, userId, 'get_skills', skills.map(s => s.id), null,
+    { filters: { domain: params.domain ?? null, include_drafts: includeDrafts } },
+    sessionId ?? null)
+
   return { content: [{ type: 'text', text: lines.join('\n') }] }
 }
 
 async function handleGetSkillContent(
   params: { name: string },
   userId: string,
-  sb: SupabaseClient
+  sb: SupabaseClient,
+  sessionId?: string | null
 ): Promise<ToolContent> {
   const { data, error } = await sb
     .from('knowledge_skills')
-    .select('name, title, description, domain, tags, content, confidence, instructional_ratio, generalizability, structural_density, source_ids, source_count, status, created_at, updated_at, usage_count, last_used_at')
+    .select('id, name, title, description, domain, tags, content, confidence, instructional_ratio, generalizability, structural_density, source_ids, source_count, status, created_at, updated_at, usage_count, last_used_at')
     .eq('user_id', userId)
     .eq('name', params.name)
     .maybeSingle()
@@ -2146,13 +2179,19 @@ async function handleGetSkillContent(
     .eq('name', params.name)
     .then(() => { /* fire-and-forget */ })
 
+  // Fire-and-forget usage logging (PRD-Skills-D)
+  const skillId = (data as Record<string, unknown>).id as string
+  logSkillUsage(sb, userId, 'get_skill_content', [skillId], skill.title,
+    { request_type: 'full_content' }, sessionId ?? null)
+
   return { content: [{ type: 'text', text: header }] }
 }
 
 async function handleSearchSkills(
   params: { query: string; max_results?: number },
   userId: string,
-  sb: SupabaseClient
+  sb: SupabaseClient,
+  sessionId?: string | null
 ): Promise<ToolContent> {
   const maxResults = Math.min(Math.max(params.max_results ?? 5, 1), 10)
 
@@ -2160,7 +2199,7 @@ async function handleSearchSkills(
   // which returns null with the service-role client used by MCP)
   let usedSemantic = false
   let results: Array<{
-    name: string; title: string; description: string; domain: string | null
+    id: string; name: string; title: string; description: string; domain: string | null
     tags: string[]; confidence: number; source_count: number; status: string
     similarity: number
   }> = []
@@ -2189,7 +2228,7 @@ async function handleSearchSkills(
     const pattern = `%${params.query}%`
     const { data: textData } = await sb
       .from('knowledge_skills')
-      .select('name, title, description, domain, tags, confidence, source_count, status')
+      .select('id, name, title, description, domain, tags, confidence, source_count, status')
       .eq('user_id', userId)
       .eq('status', 'active')
       .or(`title.ilike.${pattern},description.ilike.${pattern}`)
@@ -2198,7 +2237,7 @@ async function handleSearchSkills(
 
     if (textData && textData.length > 0) {
       results = (textData as Array<{
-        name: string; title: string; description: string; domain: string | null
+        id: string; name: string; title: string; description: string; domain: string | null
         tags: string[]; confidence: number; source_count: number; status: string
       }>).map(r => ({ ...r, similarity: 0 }))
     }
@@ -2230,6 +2269,10 @@ async function handleSearchSkills(
 
   lines.push('Use get_skill_content with the skill name to load the full methodology.')
 
+  // Fire-and-forget usage logging (PRD-Skills-D)
+  logSkillUsage(sb, userId, 'search_skills', results.map(r => r.id), params.query,
+    { result_count: results.length, used_semantic: usedSemantic }, sessionId ?? null)
+
   return { content: [{ type: 'text', text: lines.join('\n') }] }
 }
 
@@ -2245,7 +2288,8 @@ function jsonRpcResult(id: string | number | null, result: unknown): JsonRpcResp
 
 async function handleMcpRequest(
   body: JsonRpcRequest,
-  userId: string
+  userId: string,
+  sessionId: string | null
 ): Promise<JsonRpcResponse> {
   const { method, params, id } = body
   const reqId = id ?? null
@@ -2438,7 +2482,8 @@ async function handleMcpRequest(
                   include_drafts: toolArgs.include_drafts as boolean | undefined,
                 },
                 userId,
-                sb
+                sb,
+                sessionId
               )
             )
 
@@ -2448,7 +2493,8 @@ async function handleMcpRequest(
               await handleGetSkillContent(
                 { name: toolArgs.name as string },
                 userId,
-                sb
+                sb,
+                sessionId
               )
             )
 
@@ -2461,7 +2507,8 @@ async function handleMcpRequest(
                   max_results: toolArgs.max_results as number | undefined,
                 },
                 userId,
-                sb
+                sb,
+                sessionId
               )
             )
 
@@ -2494,12 +2541,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    // Extract session ID for usage logging (PRD-Skills-D)
+    const sessionId = (req.headers['x-session-id'] as string)
+      ?? (req.headers['x-request-id'] as string)
+      ?? crypto.randomUUID()
+
     const body = req.body as JsonRpcRequest
     if (!body || body.jsonrpc !== '2.0' || !body.method) {
       return res.status(400).json(jsonRpcError(null, -32600, 'Invalid JSON-RPC request'))
     }
 
-    const result = await handleMcpRequest(body, auth.userId)
+    const result = await handleMcpRequest(body, auth.userId, sessionId)
     return res.status(200).json(result)
   } catch {
     return res.status(500).json(jsonRpcError(null, -32603, 'Internal error'))
