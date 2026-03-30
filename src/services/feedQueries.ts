@@ -242,21 +242,23 @@ export async function fetchActivityFeed(
           }
         }
       } else if (!fromIn && toIn) {
-        // Edge comes from an outside node (external or another page source) into this source
+        // Edge comes from an outside node (external or another page source) into this source.
+        // Normalise so that `to` = the external node (consistent with the fromIn && !toIn case),
+        // ensuring anchor chips always read from toNodeId/toLabel.
         relationCount++
         const otherNode = otherNodeMap.get(edge.source_node_id) ?? allNodesByIdMap.get(edge.source_node_id)
         if (otherNode && crossConnections.length < 500) {
-          const toNode = sourceNodeMap.get(edge.target_node_id)
+          const internalNode = sourceNodeMap.get(edge.target_node_id)
           const otherSrc = otherNode.source_id ? combinedSourceMap.get(otherNode.source_id) : null
-          if (toNode) {
+          if (internalNode) {
             crossConnections.push({
               id: edge.id,
-              fromNodeId: edge.source_node_id,
-              fromLabel: otherNode.label,
-              fromEntityType: otherNode.entity_type,
-              toNodeId: edge.target_node_id,
-              toLabel: toNode.label,
-              toEntityType: toNode.entity_type,
+              fromNodeId: edge.target_node_id,
+              fromLabel: internalNode.label,
+              fromEntityType: internalNode.entity_type,
+              toNodeId: edge.source_node_id,
+              toLabel: otherNode.label,
+              toEntityType: otherNode.entity_type,
               relationType: edge.relation_type ?? 'relates_to',
               isAnchor: otherNode.is_anchor === true,
               toSourceId: otherNode.source_id,
