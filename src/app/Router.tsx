@@ -3,10 +3,8 @@ import { AppShell } from '../components/layout/AppShell'
 import { HomeView } from '../views/HomeView'
 import { ExploreView } from '../views/ExploreView'
 import { AskView } from '../views/AskView'
-import { CaptureView } from '../views/CaptureView'
-import { AutomateView } from '../views/AutomateView'
+import { IngestView } from '../views/IngestView'
 import { OrientView } from '../views/OrientView'
-import { PipelineView } from '../views/PipelineView'
 import { SkillsView } from '../views/SkillsView'
 import { AnchorsView } from '../views/AnchorsView'
 import OnboardingDemoPage from '../views/OnboardingDemoPage'
@@ -20,11 +18,11 @@ const router = createBrowserRouter([
       { path: '/', element: <HomeView /> },
       { path: '/explore', element: <ExploreView /> },
       { path: '/ask', element: <AskView /> },
-      { path: '/capture', element: <CaptureView /> },
-      { path: '/ingest', element: <Navigate to="/capture" replace /> },
-      { path: '/automate', element: <AutomateView /> },
+      { path: '/ingest', element: <IngestView /> },
+      { path: '/capture', element: <Navigate to="/ingest" replace /> },
+      { path: '/automate', element: <Navigate to="/ingest" replace /> },
+      { path: '/pipeline', element: <Navigate to="/ingest" replace /> },
       { path: '/orient', element: <OrientView /> },
-      { path: '/pipeline', element: <PipelineView /> },
       { path: '/skills', element: <SkillsView /> },
       { path: '/anchors', element: <AnchorsView /> },
       { path: '*', element: <Navigate to="/" replace /> },

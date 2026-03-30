@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { ArrowLeft, Copy, Check, Plug2 } from 'lucide-react'
+import { ArrowLeft, Copy, Check, Plug2, FileText, Type, Globe, Mic, Youtube, ChevronRight } from 'lucide-react'
 import type { AutomationSource, SourceSettings } from '../../services/automationSources'
+import type { ManualUploadType } from '../../views/IngestView'
 import { addYouTubePlaylist, DEFAULT_SOURCE_SETTINGS } from '../../services/automationSources'
 import { connectMicrosoft } from '../../services/microsoft'
 import { useSettings } from '../../hooks/useSettings'
@@ -11,6 +12,7 @@ import { getEntityColor } from '../../config/entityTypes'
 interface NewSourcePanelProps {
   onSourceAdded: (source: AutomationSource) => void
   onSelectMcp?: () => void
+  onSelectManualUpload: (type: ManualUploadType) => void
 }
 
 type SourceTypeId = 'youtube-playlist' | 'circleback' | 'firefly' | 'microsoft'
@@ -210,12 +212,21 @@ function ExtractionSettingsForm({ settings, onChange }: ExtractionSettingsFormPr
 
 // ─── Step 1: Source type picker ───────────────────────────────────────────────
 
+const MANUAL_UPLOAD_OPTIONS: { type: ManualUploadType; icon: React.ElementType; label: string; description: string }[] = [
+  { type: 'document', icon: FileText, label: 'Document', description: 'Upload a PDF, DOCX, or text file' },
+  { type: 'text', icon: Type, label: 'Text', description: 'Paste or type content directly' },
+  { type: 'url', icon: Globe, label: 'URL', description: 'Extract knowledge from a web page' },
+  { type: 'transcript', icon: Mic, label: 'Transcript', description: 'Paste a meeting or video transcript' },
+  { type: 'youtube', icon: Youtube, label: 'YouTube Video', description: 'Add a single video by URL' },
+]
+
 interface StepPickProps {
   onPick: (type: SourceTypeId) => void
   onSelectMcp?: () => void
+  onSelectManualUpload: (type: ManualUploadType) => void
 }
 
-function StepPick({ onPick, onSelectMcp }: StepPickProps) {
+function StepPick({ onPick, onSelectMcp, onSelectManualUpload }: StepPickProps) {
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}>
       <div style={{ padding: '24px 28px' }}>
@@ -228,6 +239,54 @@ function StepPick({ onPick, onSelectMcp }: StepPickProps) {
             Choose what kind of source to add
           </div>
         </div>
+
+        {/* Manual Upload section */}
+        <SL>Manual Upload</SL>
+        <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 12 }}>
+          Add content directly to your knowledge graph
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 0 }}>
+          {MANUAL_UPLOAD_OPTIONS.map(({ type, icon: Icon, label, description }) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => onSelectManualUpload(type)}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--color-bg-card)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                transition: 'background 0.15s ease, border-color 0.15s ease',
+                width: '100%',
+                textAlign: 'left',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'var(--color-bg-hover)'
+                e.currentTarget.style.borderColor = 'var(--border-default)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'var(--color-bg-card)'
+                e.currentTarget.style.borderColor = 'var(--border-subtle)'
+              }}
+            >
+              <div style={{ width: 28, height: 28, borderRadius: 7, background: 'var(--color-bg-inset)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon size={14} style={{ color: 'var(--color-text-secondary)' }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="font-body" style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)' }}>{label}</div>
+                <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 1 }}>{description}</div>
+              </div>
+              <ChevronRight size={14} style={{ color: 'var(--color-text-placeholder)', marginLeft: 'auto', flexShrink: 0 }} />
+            </button>
+          ))}
+        </div>
+
+        {/* Divider */}
+        <div style={{ height: 1, background: 'var(--border-subtle)', margin: '16px 0' }} />
 
         {/* Active source types */}
         <SL>Available</SL>
@@ -561,7 +620,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-export function NewSourcePanel({ onSourceAdded, onSelectMcp }: NewSourcePanelProps) {
+export function NewSourcePanel({ onSourceAdded, onSelectMcp, onSelectManualUpload }: NewSourcePanelProps) {
   const [step, setStep] = useState<'pick' | 'configure'>('pick')
   const [selectedType, setSelectedType] = useState<SourceTypeId | null>(null)
 
@@ -580,5 +639,5 @@ export function NewSourcePanel({ onSourceAdded, onSelectMcp }: NewSourcePanelPro
     )
   }
 
-  return <StepPick onPick={handlePick} onSelectMcp={onSelectMcp} />
+  return <StepPick onPick={handlePick} onSelectMcp={onSelectMcp} onSelectManualUpload={onSelectManualUpload} />
 }

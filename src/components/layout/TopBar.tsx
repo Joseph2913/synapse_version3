@@ -10,11 +10,10 @@ const VIEW_TITLES: Record<string, string> = {
   '/': 'Home',
   '/explore': 'Explore',
   '/ask': 'Ask',
-  '/capture': 'Capture',
-  '/automate': 'Automate',
+  '/ingest': 'Ingest',
   '/orient': 'Orient',
-  '/pipeline': 'Pipeline',
   '/skills': 'Skills',
+  '/anchors': 'Anchors',
 }
 
 interface TopBarProps {

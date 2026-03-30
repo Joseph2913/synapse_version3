@@ -464,6 +464,7 @@ export function AutomateView() {
               <NewSourcePanel
                 onSourceAdded={handleSourceAdded}
                 onSelectMcp={handleMcpCardClick}
+                onSelectManualUpload={() => undefined}
               />
             )
         }
