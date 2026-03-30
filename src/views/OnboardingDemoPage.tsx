@@ -7,7 +7,7 @@ import {
   Zap,
   Navigation,
   Activity,
-  Anchor,
+  Radio,
   Search,
   Settings,
   ChevronRight,
@@ -28,7 +28,7 @@ const NAV_ITEMS: Array<{ id: string; label: string; path: string; icon: LucideIc
   { id: 'automate', label: 'Automate', path: '/automate', icon: Zap },
   { id: 'orient', label: 'Orient', path: '/orient', icon: Navigation },
   { id: 'pipeline', label: 'Pipeline', path: '/pipeline', icon: Activity },
-  { id: 'anchors', label: 'Anchors', path: '/anchors', icon: Anchor },
+  { id: 'signals', label: 'Signals', path: '/signals', icon: Radio },
 ]
 
 /* ─── Mini NavRail (visual only) ─────────────────────────────── */
@@ -531,7 +531,7 @@ export default function OnboardingDemoPage() {
     '/automate': 'Automate',
     '/orient': 'Orient',
     '/pipeline': 'Pipeline',
-    '/anchors': 'Anchors',
+    '/signals': 'Signals',
   }
 
   return (

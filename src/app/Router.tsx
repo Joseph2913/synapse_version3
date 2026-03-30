@@ -7,8 +7,7 @@ import { CaptureView } from '../views/CaptureView'
 import { AutomateView } from '../views/AutomateView'
 import { OrientView } from '../views/OrientView'
 import { PipelineView } from '../views/PipelineView'
-import { SkillsView } from '../views/SkillsView'
-import { AnchorsView } from '../views/AnchorsView'
+import { SignalsView } from '../views/SignalsView'
 import OnboardingDemoPage from '../views/OnboardingDemoPage'
 
 const router = createBrowserRouter([
@@ -25,8 +24,9 @@ const router = createBrowserRouter([
       { path: '/automate', element: <AutomateView /> },
       { path: '/orient', element: <OrientView /> },
       { path: '/pipeline', element: <PipelineView /> },
-      { path: '/skills', element: <SkillsView /> },
-      { path: '/anchors', element: <AnchorsView /> },
+      { path: '/signals', element: <SignalsView /> },
+      { path: '/skills', element: <Navigate to="/signals?mode=skills" replace /> },
+      { path: '/anchors', element: <Navigate to="/signals?mode=anchors" replace /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

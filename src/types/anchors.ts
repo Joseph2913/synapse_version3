@@ -128,6 +128,8 @@ export interface AnchorCandidateWithNode extends AnchorCandidate {
     label:            string
     entity_type:      EntityType
     description:      string | null
+    quote:            string | null
+    user_tags:        string[] | null
     confidence:       number | null
     is_anchor:        boolean
     parent_anchor_id: string | null

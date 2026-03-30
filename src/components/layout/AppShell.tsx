@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { NavRail } from './NavRail'
 import { TopBar } from './TopBar'
@@ -27,42 +27,63 @@ export function AppShell() {
     setStep: setOnboardingStep,
   } = useOnboarding()
 
+  const refreshAnchorSuggestionCount = useCallback(async () => {
+    if (!user?.id) {
+      setSuggestedAnchorCount(0)
+      return
+    }
+
+    try {
+      const count = await fetchSuggestedCount(user.id)
+      setSuggestedAnchorCount(count)
+    } catch {
+      setSuggestedAnchorCount(0)
+    }
+  }, [user?.id])
+
+  const refreshSkillDraftCount = useCallback(async () => {
+    if (!user?.id) {
+      setSkillDraftCount(0)
+      return
+    }
+
+    try {
+      const { count } = await supabase
+        .from('knowledge_skills')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'draft')
+      setSkillDraftCount(count ?? 0)
+    } catch {
+      setSkillDraftCount(0)
+    }
+  }, [user?.id])
+
   // Fetch anchor suggestion count (non-blocking — table may not exist yet)
   useEffect(() => {
-    if (user) {
-      try {
-        fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
-      } catch { /* table may not exist */ }
-    }
-  }, [user])
+    void refreshAnchorSuggestionCount()
+  }, [refreshAnchorSuggestionCount])
 
   // Fetch skill draft count for nav badge
   useEffect(() => {
-    if (user) {
-      void (async () => {
-        try {
-          const { count } = await supabase
-            .from('knowledge_skills')
-            .select('id', { count: 'exact', head: true })
-            .eq('status', 'draft')
-          setSkillDraftCount(count ?? 0)
-        } catch { /* table may not exist */ }
-      })()
-    }
-  }, [user])
+    void refreshSkillDraftCount()
+  }, [refreshSkillDraftCount])
 
   // Listen for anchor suggestion changes
   useEffect(() => {
     const handler = () => {
-      if (user) {
-        try {
-          fetchSuggestedCount(user.id).then(setSuggestedAnchorCount).catch(() => {})
-        } catch { /* ignore */ }
-      }
+      void refreshAnchorSuggestionCount()
     }
     window.addEventListener('synapse:anchor-suggestions-changed', handler)
     return () => window.removeEventListener('synapse:anchor-suggestions-changed', handler)
-  }, [user])
+  }, [refreshAnchorSuggestionCount])
+
+  useEffect(() => {
+    const handler = () => {
+      void refreshSkillDraftCount()
+    }
+    window.addEventListener('synapse:skill-drafts-changed', handler)
+    return () => window.removeEventListener('synapse:skill-drafts-changed', handler)
+  }, [refreshSkillDraftCount])
 
   const isAskView = location.pathname === '/ask'
   // Ask view has its own internal right panel, so skip the AppShell one
@@ -90,8 +111,7 @@ export function AppShell() {
         <NavRail
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
-          anchorSuggestionCount={suggestedAnchorCount}
-          skillDraftCount={skillDraftCount}
+          signalsPendingCount={suggestedAnchorCount + skillDraftCount}
         />
 
         <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0">

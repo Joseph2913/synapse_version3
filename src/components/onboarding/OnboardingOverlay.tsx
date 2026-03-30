@@ -7,8 +7,8 @@ import {
   Compass,
   MessageSquare,
   Navigation,
-  Anchor,
   Home,
+  Radio,
   ChevronRight,
   ChevronLeft,
 } from 'lucide-react'
@@ -66,11 +66,11 @@ export const STEPS: OnboardingStep[] = [
     icon: Navigation,
   },
   {
-    path: '/anchors',
-    title: 'Anchors',
+    path: '/signals',
+    title: 'Signals',
     description:
-      'Anchors are the fundamental concepts that structure your knowledge — they shape how content is visualised, organised, and retrieved. New anchors are surfaced automatically using entity co-occurrence and centrality analysis. You choose which ones to keep.',
-    icon: Anchor,
+      'Signals brings anchors and skills into one place. Review suggested anchors, inspect confirmed ones, and manage your skill library without bouncing between separate pages.',
+    icon: Radio,
   },
   {
     path: '/',

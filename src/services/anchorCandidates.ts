@@ -76,21 +76,21 @@ export async function fetchCandidatesWithNodes(
 
   const nodeMap = new Map<string, {
     id: string; label: string; entity_type: EntityType;
-    description: string | null; confidence: number | null;
+    description: string | null; quote: string | null; user_tags: string[] | null; confidence: number | null;
     is_anchor: boolean; parent_anchor_id: string | null; created_at: string
   }>()
 
   if (nodeIds.length > 0) {
     const { data: nodes } = await supabase
       .from('knowledge_nodes')
-      .select('id, label, entity_type, description, confidence, is_anchor, parent_anchor_id, created_at')
+      .select('id, label, entity_type, description, quote, user_tags, confidence, is_anchor, parent_anchor_id, created_at')
       .in('id', nodeIds)
       .eq('is_merged', false)
 
     for (const n of nodes ?? []) {
       nodeMap.set(n.id as string, n as {
         id: string; label: string; entity_type: EntityType;
-        description: string | null; confidence: number | null;
+        description: string | null; quote: string | null; user_tags: string[] | null; confidence: number | null;
         is_anchor: boolean; parent_anchor_id: string | null; created_at: string
       })
     }

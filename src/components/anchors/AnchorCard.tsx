@@ -30,17 +30,18 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
   const node = candidate.node
   const isSuggested = candidate.status === 'suggested'
   const isDormant = candidate.status === 'dormant'
+  const isManual = candidate.compositeScore === 1
   const entityColor = node ? getEntityColor(node.entity_type) : '#808080'
 
   // Orphaned node — show with delete option
   if (!node) {
     return (
       <div
-        style={{
+      style={{
           background: 'var(--color-bg-card)',
           border: '1px solid var(--border-subtle)',
           borderRadius: 12,
-          padding: '12px 16px',
+          padding: '16px 18px',
           opacity: 0.5,
           animation: `fadeUp 0.4s ease ${index * 0.05}s both`,
           display: 'flex',
@@ -75,10 +76,10 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
       style={{
         position: 'relative',
         overflow: 'hidden',
-        background: isSelected ? 'rgba(254,242,237,0.5)' : 'var(--color-bg-card)',
+        background: isSelected ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
         border: `1px solid ${isSelected ? 'rgba(214,58,0,0.3)' : hovered ? 'var(--border-default, var(--border-subtle))' : 'var(--border-subtle)'}`,
         borderRadius: 12,
-        padding: isSuggested ? '12px 16px 12px 16px' : '12px 16px 12px 16px',
+        padding: '16px 18px',
         borderLeft: isSuggested ? `3px dashed ${entityColor}` : undefined,
         transform: hovered && !isSelected ? 'translateY(-1px)' : undefined,
         boxShadow: hovered && !isSelected ? '0 2px 8px rgba(0,0,0,0.04)' : undefined,
@@ -95,57 +96,77 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
       )}
 
       {/* Header row */}
-      <div className="flex items-start justify-between gap-2" style={{ marginBottom: 4 }}>
+      <div className="flex items-start justify-between gap-3" style={{ marginBottom: 8 }}>
         <div className="flex items-center gap-2 min-w-0">
           <div className="shrink-0" style={{ width: 8, height: 8, borderRadius: '50%', background: entityColor }} />
           <span className="font-display truncate" style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)' }}>
             {node.label}
           </span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {isSuggested && (
+        <span
+          className="shrink-0 font-body"
+          style={{
+            fontSize: 11,
+            color: 'var(--color-text-secondary)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {isSuggested ? `Detected ${formatRelativeTime(candidate.firstScoredAt)}` : `Updated ${formatRelativeTime(candidate.updatedAt)}`}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-1 flex-wrap" style={{ marginBottom: 10 }}>
+        <EntityBadge type={node.entity_type} size="xs" />
+        {isManual && !isSuggested && !isDormant && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, color: 'var(--color-accent-500)',
+            background: 'var(--color-accent-50)', border: '1px solid rgba(214,58,0,0.15)',
+            padding: '2px 7px', borderRadius: 4,
+          }}>
+            Manual
+          </span>
+        )}
+        {isSuggested && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, color: '#d97706',
+            background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+            padding: '2px 7px', borderRadius: 4,
+          }}>
+            ✦ Suggested
+          </span>
+        )}
+        {isDormant && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, color: '#d97706',
+            background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+            padding: '2px 7px', borderRadius: 4,
+          }}>
+            ◑ Dormant
+          </span>
+        )}
+        {isSuggested && (() => {
+          const pct = Math.round(candidate.compositeScore * 100)
+          const isGreen = pct >= 60
+          const isAmber = pct >= 50 && pct < 60
+          return (
             <span style={{
-              fontSize: 10, fontWeight: 700, color: '#d97706',
-              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+              fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 700,
               padding: '2px 7px', borderRadius: 4,
+              background: isGreen ? 'rgba(34,197,94,0.08)' : isAmber ? 'rgba(245,158,11,0.08)' : 'rgba(0,0,0,0.04)',
+              border: `1px solid ${isGreen ? 'rgba(34,197,94,0.25)' : isAmber ? 'rgba(245,158,11,0.25)' : 'rgba(0,0,0,0.08)'}`,
+              color: isGreen ? '#16a34a' : isAmber ? '#d97706' : 'var(--color-text-secondary)',
             }}>
-              ✦ Suggested
+              {pct}%
             </span>
-          )}
-          {isDormant && (
-            <span style={{
-              fontSize: 10, fontWeight: 700, color: '#d97706',
-              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
-              padding: '2px 7px', borderRadius: 4,
-            }}>
-              ◑ Dormant
-            </span>
-          )}
-          <EntityBadge type={node.entity_type} size="xs" />
-          {isSuggested && (() => {
-            const pct = Math.round(candidate.compositeScore * 100)
-            const isGreen = pct >= 60
-            const isAmber = pct >= 50 && pct < 60
-            return (
-              <span style={{
-                fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 700,
-                padding: '2px 7px', borderRadius: 4,
-                background: isGreen ? 'rgba(34,197,94,0.08)' : isAmber ? 'rgba(245,158,11,0.08)' : 'rgba(0,0,0,0.04)',
-                border: `1px solid ${isGreen ? 'rgba(34,197,94,0.25)' : isAmber ? 'rgba(245,158,11,0.25)' : 'rgba(0,0,0,0.08)'}`,
-                color: isGreen ? '#16a34a' : isAmber ? '#d97706' : 'var(--color-text-secondary)',
-              }}>
-                {pct}%
-              </span>
-            )
-          })()}
-        </div>
+          )
+        })()}
       </div>
 
       {/* Reasoning text for suggested */}
       {isSuggested && candidate.reasoningText && (
         <p
           className="font-body truncate"
-          style={{ fontSize: 11, color: 'var(--color-text-secondary)', fontStyle: 'italic', margin: '2px 0 6px 0' }}
+          style={{ fontSize: 11, color: 'var(--color-text-secondary)', fontStyle: 'italic', margin: '0 0 8px 0' }}
         >
           {candidate.dismissCount >= 3 && 'You\'ve dismissed this before — it re-appeared because activity increased. '}
           {candidate.reasoningText}
@@ -154,7 +175,7 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
 
       {/* Parent badge for sub-anchors */}
       {parentLabel && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 8 }}>
           <span className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)' }}>
             sub-anchor of
           </span>
@@ -171,7 +192,7 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
       )}
 
       {/* Stats row */}
-      <div className="flex items-center gap-4" style={{ marginTop: 6, marginBottom: isSuggested ? 8 : 4 }}>
+      <div className="flex items-center gap-4 flex-wrap" style={{ marginTop: 0, marginBottom: isSuggested ? 12 : 0 }}>
         <span className="flex items-center gap-1 font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
           <Network size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{candidate.connectionCount}</span> nodes
         </span>
@@ -183,8 +204,8 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
         </span>
       </div>
 
-      {/* Bottom row: actions for suggested, timestamp for confirmed */}
-      {isSuggested ? (
+      {/* Bottom row: actions for suggested */}
+      {isSuggested && (
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -209,16 +230,6 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
           >
             Dismiss ×
           </button>
-          <span className="flex-1" />
-          <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}>
-            Detected {formatRelativeTime(candidate.firstScoredAt)}
-          </span>
-        </div>
-      ) : (
-        <div className="flex items-center justify-between" style={{ marginTop: 2 }}>
-          <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}>
-            Updated {formatRelativeTime(candidate.updatedAt)}
-          </span>
         </div>
       )}
     </div>

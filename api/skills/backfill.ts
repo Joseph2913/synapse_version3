@@ -480,6 +480,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const batchSize = Math.min(Math.max(parseInt(body.batchSize || query.batch_size as string) || 10, 1), 20);
   const page = Math.max(parseInt(body.page || query.page as string) || 0, 0);
   const sourceTypeFilter: string | undefined = body.sourceType || (query.source_type as string) || undefined;
+  const sourceIdFilter: string | undefined = body.sourceId || (query.source_id as string) || undefined;
   const dryRun: boolean = body.dryRun === true || query.dry_run === 'true';
 
   const supabase = getSupabase();
@@ -508,6 +509,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (sourceTypeFilter) {
     sourceQuery = sourceQuery.eq('source_type', sourceTypeFilter);
+  }
+
+  if (sourceIdFilter) {
+    sourceQuery = sourceQuery.eq('id', sourceIdFilter);
   }
 
   const { data: rawSources, error: fetchError } = await sourceQuery;
