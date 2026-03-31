@@ -1,14 +1,17 @@
+import { ArrowRight } from 'lucide-react'
 import type { InlineCitation } from '../../types/rag'
 
 interface CitationTooltipProps {
   citation: InlineCitation
   rect: DOMRect
+  onExploreMore?: (citation: InlineCitation) => void
 }
 
-export function CitationTooltip({ citation, rect }: CitationTooltipProps) {
+export function CitationTooltip({ citation, rect, onExploreMore }: CitationTooltipProps) {
   return (
     <div
       className="font-body"
+      data-citation-tooltip
       style={{
         position: 'fixed',
         top: rect.top - 8,
@@ -21,7 +24,7 @@ export function CitationTooltip({ citation, rect }: CitationTooltipProps) {
         padding: '10px 14px',
         maxWidth: 300,
         boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
       }}
     >
       <div
@@ -64,6 +67,34 @@ export function CitationTooltip({ citation, rect }: CitationTooltipProps) {
         >
           {citation.snippet}…
         </div>
+      )}
+      {onExploreMore && citation.source_id && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onExploreMore(citation)
+          }}
+          className="flex items-center gap-1 font-body font-semibold cursor-pointer w-full"
+          style={{
+            marginTop: 8,
+            paddingTop: 8,
+            borderTop: '1px solid var(--border-subtle)',
+            fontSize: 11,
+            color: 'var(--color-accent-500)',
+            background: 'none',
+            border: 'none',
+            borderTopWidth: 1,
+            borderTopStyle: 'solid',
+            borderTopColor: 'var(--border-subtle)',
+            padding: '8px 0 0',
+            transition: 'opacity 0.15s ease',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = '0.8' }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+        >
+          Explore more <ArrowRight size={11} />
+        </button>
       )}
     </div>
   )

@@ -1,7 +1,7 @@
 import { ChevronDown } from 'lucide-react'
 import { ChatMessage } from './ChatMessage'
 import { RAGProgressIndicator } from './RAGProgressIndicator'
-import type { ChatMessage as ChatMessageType, RAGStepEvent } from '../../types/rag'
+import type { ChatMessage as ChatMessageType, RAGStepEvent, InlineCitation } from '../../types/rag'
 import type { UseChatScrollReturn } from '../../hooks/useChatScroll'
 
 interface ChatMessageListProps {
@@ -12,6 +12,7 @@ interface ChatMessageListProps {
   onCitationClick?: (index: number) => void
   onFollowUpClick?: (question: string) => void
   onCitationHoverChange?: (index: number | null) => void
+  onExploreMore?: (citation: InlineCitation) => void
 }
 
 export function ChatMessageList({
@@ -22,6 +23,7 @@ export function ChatMessageList({
   onCitationClick,
   onFollowUpClick,
   onCitationHoverChange,
+  onExploreMore,
 }: ChatMessageListProps) {
   return (
     <div
@@ -31,8 +33,8 @@ export function ChatMessageList({
       style={{ scrollBehavior: 'smooth' }}
     >
       <div
-        className="flex flex-col mx-auto"
-        style={{ maxWidth: 840, padding: '24px 48px', gap: 16 }}
+        className="flex flex-col"
+        style={{ maxWidth: 1020, margin: '0 auto', padding: '24px 24px', gap: 16, width: '100%' }}
       >
         {messages.map((message, i) => {
           // PRD-C: Only show follow-up pill on the latest assistant message
@@ -46,6 +48,7 @@ export function ChatMessageList({
               onCitationClick={onCitationClick}
               onFollowUpClick={onFollowUpClick}
               onCitationHoverChange={onCitationHoverChange}
+              onExploreMore={onExploreMore}
               isLatest={isLatestAssistant}
             />
           )

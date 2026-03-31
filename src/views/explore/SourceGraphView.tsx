@@ -40,6 +40,7 @@ interface SourceGraphViewProps {
   selectedSourceId: string | null
   onSelectSource: (source: SourceNode | null) => void
   onSourcesLoaded?: (sources: SourceNode[], edges: SourceEdge[], anchors: SourceGraphAnchor[]) => void
+  showEdges?: boolean
 }
 
 export function SourceGraphView({
@@ -47,6 +48,7 @@ export function SourceGraphView({
   selectedSourceId,
   onSelectSource,
   onSourcesLoaded,
+  showEdges = true,
 }: SourceGraphViewProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -559,7 +561,7 @@ export function SourceGraphView({
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
 
             {/* 1. Source-to-source edges — simple thin lines */}
-            {filteredEdges.map(edge => {
+            {showEdges && filteredEdges.map(edge => {
               const fromPos = livePositions.get(edge.fromSourceId)
               const toPos = livePositions.get(edge.toSourceId)
               if (!fromPos || !toPos) return null
@@ -583,7 +585,7 @@ export function SourceGraphView({
             })}
 
             {/* 2. Source-to-anchor edges — thin dashed */}
-            {anchors.map(anchor => {
+            {showEdges && anchors.map(anchor => {
               const anchorPos = livePositions.get(anchor.id)
               if (!anchorPos) return null
               return anchor.connectedSourceIds.map(srcId => {

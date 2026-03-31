@@ -15,7 +15,7 @@ const DEFAULT_FILTERS: ExploreFilters = {
 export function useExploreFilters() {
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // View mode: anchors | sources | entity-browser
+  // View mode: anchors | sources
   const [viewMode, setViewMode] = useState<ExploreViewMode>(
     (searchParams.get('mode') as ExploreViewMode) || 'anchors'
   )
@@ -141,6 +141,13 @@ export function useExploreFilters() {
     }))
   }, [])
 
+  const resetFilters = useCallback(() => {
+    setFilters({ ...DEFAULT_FILTERS })
+    setActiveClusterId(null)
+    setZoomLevel('landscape')
+    setSelectedEntityId(null)
+  }, [])
+
   // Cluster visibility: determines if a cluster should be dimmed or bright
   const isClusterVisible = useCallback((cluster: ClusterData): boolean => {
     // If no filters active, all visible
@@ -187,5 +194,6 @@ export function useExploreFilters() {
     toggleSourceType,
     toggleConnType,
     setSourceAnchorFilter,
+    resetFilters,
   }
 }

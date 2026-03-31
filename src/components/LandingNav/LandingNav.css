@@ -1,0 +1,116 @@
+.lp-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  padding: 16px var(--lp-page-pad);
+}
+
+.lp-nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--lp-border);
+  border-radius: 100px;
+  padding: 10px 12px 10px 20px;
+  max-width: 720px;
+  width: 100%;
+}
+
+.lp-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--lp-font-display);
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--lp-text-primary);
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.lp-nav-brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--lp-accent);
+  flex-shrink: 0;
+}
+
+.lp-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex: 1;
+  justify-content: center;
+}
+
+.lp-nav-link {
+  font-family: var(--lp-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--lp-text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+}
+
+.lp-nav-link:hover {
+  color: var(--lp-text-primary);
+}
+
+.lp-nav-cta {
+  background: var(--lp-accent);
+  color: #fff;
+  font-family: var(--lp-font-body);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 100px;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.lp-nav-cta:hover {
+  background: #D45520;
+}
+
+/* Dark variant when over problem section */
+.lp-nav.is-dark .lp-nav-bar {
+  background: rgba(17, 16, 8, 0.75);
+  border-color: rgba(240, 237, 230, 0.08);
+}
+
+.lp-nav.is-dark .lp-nav-brand {
+  color: var(--lp-inv-text);
+}
+
+.lp-nav.is-dark .lp-nav-link {
+  color: rgba(240, 237, 230, 0.5);
+}
+
+.lp-nav.is-dark .lp-nav-link:hover {
+  color: var(--lp-inv-text);
+}
+
+@media (max-width: 767px) {
+  .lp-nav {
+    padding: 12px var(--lp-page-pad-mobile);
+  }
+  .lp-nav-links {
+    display: none;
+  }
+  .lp-nav-bar {
+    gap: 16px;
+  }
+}

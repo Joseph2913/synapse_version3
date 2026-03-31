@@ -84,6 +84,15 @@ const TEMPLATES: Record<string, { name: string; systemPrompt: string }> = {
   monthly_priorities: { name: 'Monthly Priorities', systemPrompt: 'Establish priorities for the coming month based on goal trajectories, emerging themes, pending decisions, and strategic direction.' },
 }
 
+const TEMPLATE_ALIASES: Record<string, string> = {
+  weekly_progress_review: 'weekly_progress',
+  weekly_next_week_preview: 'week_ahead',
+}
+
+function resolveTemplateId(id: string): string {
+  return TEMPLATE_ALIASES[id] ?? id
+}
+
 // ─── RAG ──────────────────────────────────────────────────────────────────────
 
 async function runModuleRAG(
@@ -475,7 +484,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         continue
       }
 
-      const template = TEMPLATES[templateId]
+      const resolvedId = resolveTemplateId(templateId)
+      const template = TEMPLATES[resolvedId]
       if (!template) continue
 
       try {

@@ -8,12 +8,51 @@ interface ChatMessageProps {
   onCitationClick?: (index: number) => void
   onFollowUpClick?: (question: string) => void
   onCitationHoverChange?: (index: number | null) => void
+  onExploreMore?: (citation: InlineCitation) => void
   isLatest?: boolean
 }
 
 interface HoveredCitation {
   citation: InlineCitation
   rect: DOMRect
+}
+
+/** Render a single citation badge */
+function CitationBadge({
+  citIndex,
+  citation,
+  onCitationClick,
+  onCitationHover,
+  onCitationLeave,
+}: {
+  citIndex: number
+  citation: InlineCitation
+  onCitationClick?: (index: number) => void
+  onCitationHover?: (citation: InlineCitation, rect: DOMRect) => void
+  onCitationLeave?: () => void
+}) {
+  return (
+    <span
+      onClick={() => onCitationClick?.(citIndex)}
+      onMouseEnter={e => onCitationHover?.(citation, e.currentTarget.getBoundingClientRect())}
+      onMouseLeave={onCitationLeave}
+      className="font-body font-bold cursor-pointer"
+      style={{
+        background: 'rgba(214,58,0,0.08)',
+        border: '1px solid rgba(214,58,0,0.15)',
+        borderRadius: 4,
+        padding: '1px 5px',
+        fontSize: 10,
+        fontWeight: 700,
+        color: 'var(--color-accent-500)',
+        verticalAlign: 'super',
+        lineHeight: 1,
+        transition: 'background 0.15s ease, border-color 0.15s ease',
+      }}
+    >
+      {citIndex}
+    </span>
+  )
 }
 
 function parseContent(
@@ -23,37 +62,60 @@ function parseContent(
   onCitationHover?: (citation: InlineCitation, rect: DOMRect) => void,
   onCitationLeave?: () => void
 ): React.ReactNode[] {
-  const parts = content.split(/(\[\d+\])/g)
+  // Match both single [5] and grouped [5, 15, 19] citation patterns
+  const parts = content.split(/(\[\d+(?:\s*,\s*\d+)*\])/g)
   return parts.map((part, i) => {
-    const match = part.match(/^\[(\d+)\]$/)
+    // Check for citation bracket (single or comma-separated)
+    const match = part.match(/^\[(\d+(?:\s*,\s*\d+)*)\]$/)
     if (match) {
-      const citIndex = parseInt(match[1] ?? '0', 10)
-      const citation = citations.find(c => c.index === citIndex)
-      if (!citation) return <span key={i}>{part}</span>
+      const indices = match[1]!.split(/\s*,\s*/).map(s => parseInt(s, 10))
 
-      return (
-        <span
-          key={i}
-          onClick={() => onCitationClick?.(citIndex)}
-          onMouseEnter={e => onCitationHover?.(citation, e.currentTarget.getBoundingClientRect())}
-          onMouseLeave={onCitationLeave}
-          className="font-body font-bold cursor-pointer"
-          style={{
-            background: 'rgba(214,58,0,0.08)',
-            border: '1px solid rgba(214,58,0,0.15)',
-            borderRadius: 4,
-            padding: '1px 5px',
-            fontSize: 10,
-            fontWeight: 700,
-            color: 'var(--color-accent-500)',
-            verticalAlign: 'super',
-            lineHeight: 1,
-            transition: 'background 0.15s ease, border-color 0.15s ease',
-          }}
-        >
-          {citIndex}
-        </span>
-      )
+      // Render each number as its own clickable badge
+      const badges: React.ReactNode[] = []
+      indices.forEach((citIndex, idx) => {
+        const citation = citations.find(c => c.index === citIndex)
+        if (citation) {
+          badges.push(
+            <CitationBadge
+              key={`${i}-cit-${citIndex}`}
+              citIndex={citIndex}
+              citation={citation}
+              onCitationClick={onCitationClick}
+              onCitationHover={onCitationHover}
+              onCitationLeave={onCitationLeave}
+            />
+          )
+        } else {
+          // No matching citation object — still render as clickable orange badge
+          badges.push(
+            <span
+              key={`${i}-cit-${citIndex}`}
+              onClick={() => onCitationClick?.(citIndex)}
+              className="font-body font-bold cursor-pointer"
+              style={{
+                background: 'rgba(214,58,0,0.08)',
+                border: '1px solid rgba(214,58,0,0.15)',
+                borderRadius: 4,
+                padding: '1px 5px',
+                fontSize: 10,
+                fontWeight: 700,
+                color: 'var(--color-accent-500)',
+                verticalAlign: 'super',
+                lineHeight: 1,
+                transition: 'background 0.15s ease, border-color 0.15s ease',
+              }}
+            >
+              {citIndex}
+            </span>
+          )
+        }
+        // Add a thin space between badges in a group
+        if (idx < indices.length - 1) {
+          badges.push(<span key={`${i}-sep-${idx}`} style={{ width: 2, display: 'inline-block' }} />)
+        }
+      })
+
+      return <span key={i}>{badges}</span>
     }
 
     // Parse markdown within non-citation parts
@@ -89,10 +151,11 @@ function parseContent(
   })
 }
 
-export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitationHoverChange, isLatest }: ChatMessageProps) {
+export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitationHoverChange, onExploreMore, isLatest }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false)
   const [hoveredCitation, setHoveredCitation] = useState<HoveredCitation | null>(null)
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isOverTooltipRef = useRef(false)
 
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -114,8 +177,26 @@ export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitat
 
   const handleCitationLeave = () => {
     if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
-    setHoveredCitation(null)
-    onCitationHoverChange?.(null)
+    // Delay dismiss so user can move mouse to the tooltip
+    tooltipTimerRef.current = setTimeout(() => {
+      if (!isOverTooltipRef.current) {
+        setHoveredCitation(null)
+        onCitationHoverChange?.(null)
+      }
+    }, 250)
+  }
+
+  const handleTooltipMouseEnter = () => {
+    isOverTooltipRef.current = true
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
+  }
+
+  const handleTooltipMouseLeave = () => {
+    isOverTooltipRef.current = false
+    tooltipTimerRef.current = setTimeout(() => {
+      setHoveredCitation(null)
+      onCitationHoverChange?.(null)
+    }, 200)
   }
 
   if (isSystem) {
@@ -155,7 +236,7 @@ export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitat
     >
       <div
         style={{
-          maxWidth: '85%',
+          maxWidth: isUser ? '75%' : '90%',
           padding: '12px 16px',
           borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
           background: isUser ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
@@ -269,10 +350,16 @@ export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitat
 
       {/* Citation tooltip portal-like overlay */}
       {hoveredCitation && (
-        <CitationTooltip
-          citation={hoveredCitation.citation}
-          rect={hoveredCitation.rect}
-        />
+        <div
+          onMouseEnter={handleTooltipMouseEnter}
+          onMouseLeave={handleTooltipMouseLeave}
+        >
+          <CitationTooltip
+            citation={hoveredCitation.citation}
+            rect={hoveredCitation.rect}
+            onExploreMore={onExploreMore}
+          />
+        </div>
       )}
     </div>
   )

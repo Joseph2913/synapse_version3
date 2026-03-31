@@ -131,7 +131,6 @@ export function useRAGQuery(): UseRAGQueryReturn {
       setMessages(prev => [...prev, assistantMessage])
       setLastResponseContext(ctx)
       setAskContext(ctx)
-      setRightPanelContent({ type: 'ask_context', data: ctx })
 
       // Persist to chat_sessions (PRD-D §2.7)
       if (user) {

@@ -1,0 +1,4442 @@
+{
+  "meta": {
+    "scannedAt": "2026-03-23T22:16:06.341Z",
+    "sourcesScanned": 201,
+    "clustersEvaluated": 176,
+    "confirmedCandidates": 3,
+    "pendingCandidates": 0,
+    "weakSignalCandidates": 47,
+    "failedUniversal": 67,
+    "evaluationErrors": 0,
+    "durationMs": 76826
+  },
+  "candidates": [
+    {
+      "id": "cd82c42c6fb82c8b",
+      "suggestedSkillLabel": "Intermediate Technical Skills",
+      "domain": "technical",
+      "status": "confirmed_candidate",
+      "exposureLevel": "proficient",
+      "criteriaPassedCount": 3,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source discusses the need for training and development of intermediate technical skills within the context of a data skills project."
+        },
+        "C2": {
+          "pass": false,
+          "rationale": "The concept of 'intermediate technical skills' is too broad. It lacks the specificity needed to be actionable without further context."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "While the specific skills vary by department, the general need for intermediate technical skills applies across different departments within the organization."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source does not provide a describable sequence of steps, decisions, or principles for acquiring or applying intermediate technical skills. It only mentions the need for them."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a reasonable amount of time discussing the importance and departmental variations of intermediate technical skills."
+        }
+      },
+      "relevanceScore": 0.59,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 1,
+          "relatedNodeCount": 1000
+        },
+        "sourceHistory": {
+          "score": 1,
+          "relatedSourceCount": 62
+        },
+        "graphProximity": {
+          "score": 0.3,
+          "hopsToNearestAnchor": 3
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 1,
+          "recentSourceCount": 8
+        }
+      },
+      "primarySource": {
+        "id": "42a11001-06c7-4524-859d-dc2decfd080c",
+        "title": "Chiesi Data Skills - Alignment on \"intermediate\" skills requirements",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T14:07:42.581387+00:00"
+      },
+      "contributingSources": [
+        {
+          "id": "1dc654c0-4d6b-4b60-8147-49609fa48c84",
+          "title": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+          "source_type": "Meeting"
+        },
+        {
+          "id": "56475131-b636-41ec-a616-5a2eb70bb31e",
+          "title": "Boring Everyday Habits That Completely Transform Your Life",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "31f1c29d-11f2-4f57-a2bd-3f0175472819",
+          "title": "Every Mental Disorder & Their Effects Explained",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "8771c529-7ccf-41da-9167-cc9b20399c8f",
+          "title": "AI Agents, Clearly Explained",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "59297dc6-f72c-4aaf-b54e-6c3b3749bee2",
+          "title": "Why $650 Billion in AI Spending ISN'T Enough. The 4 Skills that Survive and What This Means for You.",
+          "source_type": "YouTube"
+        }
+      ],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Intermediate Technical Skills",
+      "clusterNodeLabels": [
+        "Intermediate Technical Skills"
+      ]
+    },
+    {
+      "id": "213b8f2b20b8670b",
+      "suggestedSkillLabel": "Advanced Technical Skills",
+      "domain": "technical",
+      "status": "confirmed_candidate",
+      "exposureLevel": "proficient",
+      "criteriaPassedCount": 3,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source discusses the need for training and development of advanced technical skills within the context of a data skills project."
+        },
+        "C2": {
+          "pass": false,
+          "rationale": "The concept of 'advanced technical skills' is too broad. It lacks the specificity needed to be actionable without further context."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "While the specific skills vary by department, the general need for advanced technical skills applies across different departments within the organization."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source does not provide a describable sequence of steps, decisions, or principles for acquiring or applying advanced technical skills. It only mentions the need for them."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a reasonable amount of time discussing the importance and departmental variations of advanced technical skills."
+        }
+      },
+      "relevanceScore": 0.59,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 1,
+          "relatedNodeCount": 1000
+        },
+        "sourceHistory": {
+          "score": 1,
+          "relatedSourceCount": 62
+        },
+        "graphProximity": {
+          "score": 0.3,
+          "hopsToNearestAnchor": 3
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 1,
+          "recentSourceCount": 8
+        }
+      },
+      "primarySource": {
+        "id": "42a11001-06c7-4524-859d-dc2decfd080c",
+        "title": "Chiesi Data Skills - Alignment on \"intermediate\" skills requirements",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T14:07:42.581387+00:00"
+      },
+      "contributingSources": [
+        {
+          "id": "1dc654c0-4d6b-4b60-8147-49609fa48c84",
+          "title": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+          "source_type": "Meeting"
+        },
+        {
+          "id": "56475131-b636-41ec-a616-5a2eb70bb31e",
+          "title": "Boring Everyday Habits That Completely Transform Your Life",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "31f1c29d-11f2-4f57-a2bd-3f0175472819",
+          "title": "Every Mental Disorder & Their Effects Explained",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "8771c529-7ccf-41da-9167-cc9b20399c8f",
+          "title": "AI Agents, Clearly Explained",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "59297dc6-f72c-4aaf-b54e-6c3b3749bee2",
+          "title": "Why $650 Billion in AI Spending ISN'T Enough. The 4 Skills that Survive and What This Means for You.",
+          "source_type": "YouTube"
+        }
+      ],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Advanced Technical Skills",
+      "clusterNodeLabels": [
+        "Advanced Technical Skills"
+      ]
+    },
+    {
+      "id": "64ac943020279c01",
+      "suggestedSkillLabel": "Managerial Skills",
+      "domain": "interpersonal",
+      "status": "confirmed_candidate",
+      "exposureLevel": "proficient",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly mentions managerial skills (communication, strategic thinking, regulatory compliance, quality skills) as a training area."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "Managerial skills like communication and strategic thinking are specific enough to be actionable, especially when considered in a digital context as mentioned in the source."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The source indicates that managerial skills are consistent across all departments, suggesting reusability across contexts."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "While the source mentions managerial skills, it doesn't provide a specific method or sequence of steps for applying them. It only suggests adapting existing courses."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a reasonable amount of time discussing the importance and consistency of managerial skills across departments."
+        }
+      },
+      "relevanceScore": 0.59,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 1,
+          "relatedNodeCount": 1000
+        },
+        "sourceHistory": {
+          "score": 1,
+          "relatedSourceCount": 62
+        },
+        "graphProximity": {
+          "score": 0.3,
+          "hopsToNearestAnchor": 3
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 1,
+          "recentSourceCount": 8
+        }
+      },
+      "primarySource": {
+        "id": "42a11001-06c7-4524-859d-dc2decfd080c",
+        "title": "Chiesi Data Skills - Alignment on \"intermediate\" skills requirements",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T14:07:42.581387+00:00"
+      },
+      "contributingSources": [
+        {
+          "id": "1dc654c0-4d6b-4b60-8147-49609fa48c84",
+          "title": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+          "source_type": "Meeting"
+        },
+        {
+          "id": "56475131-b636-41ec-a616-5a2eb70bb31e",
+          "title": "Boring Everyday Habits That Completely Transform Your Life",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "31f1c29d-11f2-4f57-a2bd-3f0175472819",
+          "title": "Every Mental Disorder & Their Effects Explained",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "8771c529-7ccf-41da-9167-cc9b20399c8f",
+          "title": "AI Agents, Clearly Explained",
+          "source_type": "YouTube"
+        },
+        {
+          "id": "59297dc6-f72c-4aaf-b54e-6c3b3749bee2",
+          "title": "Why $650 Billion in AI Spending ISN'T Enough. The 4 Skills that Survive and What This Means for You.",
+          "source_type": "YouTube"
+        }
+      ],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Managerial Skills",
+      "clusterNodeLabels": [
+        "Managerial Skills"
+      ]
+    },
+    {
+      "id": "191d12637fce52b8",
+      "suggestedSkillLabel": "Applying AI field companion technology for pharmaceutical sales",
+      "domain": "domain_specific",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the purpose and functionality of the AI field companion."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to understand its role in assisting field reps and MSLs."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technology can be applied in various contexts within the pharmaceutical sales and MSL fields."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes how the AI agent integrates data and provides guidance, suggesting a method of operation."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a significant portion to explaining the AI field companion's features, benefits, and adoption challenges."
+        }
+      },
+      "relevanceScore": 0.3,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.15,
+          "relatedNodeCount": 14
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "b00cbe2d-0f3d-48f1-b0a0-abfffa1cb31e",
+        "title": "Potential collab discussion",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T14:07:07.984271+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "AI field companion technology",
+      "clusterNodeLabels": [
+        "AI field companion technology"
+      ]
+    },
+    {
+      "id": "01f86f4a8f7d487d",
+      "suggestedSkillLabel": "Detecting Deception Through Micro-expressions",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly teaches how to spot micro-expressions as indicators of deception."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, describing the speed and types of micro-expressions."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique applies across various contexts where deception might be present."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source provides a describable sequence of observations: watch for brief flashes of emotion, identify the emotion, and compare it to the expressed emotion."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the nature and interpretation of micro-expressions."
+        }
+      },
+      "relevanceScore": 0.29,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.11,
+          "relatedNodeCount": 10
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "37ce70c7-c734-4bfa-bbef-6330c29ff957",
+        "title": "Every Way to Spot a Liar Like an FBI Agent",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T07:32:07.963117+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Micro-expressions",
+      "clusterNodeLabels": [
+        "Micro-expressions"
+      ]
+    },
+    {
+      "id": "73c31918a3a7162d",
+      "suggestedSkillLabel": "Identifying and avoiding foods engineered for the bliss point",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the concept of the bliss point in relation to food addiction."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable; one can identify and avoid foods engineered to hit the bliss point."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The concept applies across different types of processed foods."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes how the bliss point is achieved through specific combinations of sugar, fat, and salt, implying a method for identifying and avoiding such combinations."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a reasonable amount of time explaining the concept and its effects on the brain."
+        }
+      },
+      "relevanceScore": 0.29,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.11,
+          "relatedNodeCount": 10
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "7a18e15f-b64b-43fd-beac-3fa48a82e2b7",
+        "title": "Every Type of Addiction & How it Controls YOU... Explained in 15 Minutes",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T07:27:15.372291+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "The Bliss Point",
+      "clusterNodeLabels": [
+        "The Bliss Point"
+      ]
+    },
+    {
+      "id": "68fd7a283cc8ddd1",
+      "suggestedSkillLabel": "Avoiding Minimum Payment Traps",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains and teaches about the dangers of only paying the minimum payment on credit cards."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as it focuses on the specific behavior of making minimum payments."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This applies to anyone with a credit card and outstanding balance, making it reusable across contexts."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the steps involved (making minimum payments, interest accruing, debt increasing) and the consequences."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the concept and its implications."
+        }
+      },
+      "relevanceScore": 0.29,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "2aa05556-36fb-45c8-a6e9-e2389edbc5a8",
+        "title": "Every Financial Trap Middle Class People Fall Into Explained",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:35:58.478705+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Minimum Payment Illusion",
+      "clusterNodeLabels": [
+        "Minimum Payment Illusion",
+        "Compound Interest",
+        "Retirement Delay"
+      ]
+    },
+    {
+      "id": "60ae235bd0227a03",
+      "suggestedSkillLabel": "SMART Goal Setting for AI Projects",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The meeting discusses and refines SMART goals, indicating an instructional intent regarding goal setting and project management."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The discussion includes specific examples of SMART goals with timeframes and success metrics, making the concept actionable."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principles of SMART goal setting are applicable across various projects and organizational contexts."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source outlines a process for defining and refining goals using the SMART framework, which involves setting specific, measurable, achievable, relevant, and time-bound objectives."
+        },
+        "C5": {
+          "pass": false,
+          "rationale": "Fewer than 3 chunks."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.05,
+          "relatedNodeCount": 5
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "9243666f-fa82-49dc-b467-d3f07f9b7068",
+        "title": "AI CoE Workstream SMART Goals- Enablement Review",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T18:46:07.26998+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "AI CoE Workstream SMART Goals- Enablement Review",
+      "clusterNodeLabels": [
+        "AI CoE Workstream SMART Goals- Enablement Review"
+      ]
+    },
+    {
+      "id": "388df1f9c7a3a3e1",
+      "suggestedSkillLabel": "Applying an AI Risk Management Workflow",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the ISO-based risk management workflow with 5 steps."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as it outlines the steps involved in AI risk management."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The risk management workflow can be applied across different AI systems and contexts."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a sequence of steps: identification, estimation, evaluation, treatment, and monitoring."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a significant portion of the content discussing the AI risk management workflow."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.09,
+          "relatedNodeCount": 8
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "fcd95a24-4c1d-4ae3-b88b-5c62d012fb92",
+        "title": "Deep-dive on InfoAIcert's AI Risk Management stream",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T14:15:40.516912+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "AI Risk Management Workflow",
+      "clusterNodeLabels": [
+        "AI Risk Management Workflow"
+      ]
+    },
+    {
+      "id": "e8706d429cf6ad2c",
+      "suggestedSkillLabel": "N/A",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly mentions getting unit economics back on track as a key focus for profitability."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "Unit economics is a specific and actionable concept, referring to the revenue and costs associated with a single unit of a product or service."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principles of unit economics are applicable across various business models and industries, especially when evaluating profitability."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source mentions 'getting unit economics back on track' but doesn't describe the specific steps or methods used to achieve this. It lacks a clear methodology."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a reasonable amount of time discussing the importance of unit economics and its impact on profitability."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "739a7ec0-fb1f-4625-b782-aed811101acf",
+        "title": "Mistakes to Avoid While Scaling a Consumer Brand That Can Cost You ₹90 Cr | IBP CLIPS",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:56:17.630542+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Unit Economics",
+      "clusterNodeLabels": [
+        "Unit Economics"
+      ]
+    },
+    {
+      "id": "7a90f6d821f15aaf",
+      "suggestedSkillLabel": "N/A",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 3,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly states that innovation is important for any individual or business to avoid becoming a commodity."
+        },
+        "C2": {
+          "pass": false,
+          "rationale": "The concept of 'innovation' is too broad and lacks specificity. It's not actionable without further breakdown into specific innovation strategies or techniques."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principle of innovation applies across various industries and contexts, as it's essential for staying competitive and relevant."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source mentions the importance of innovation but doesn't provide a describable sequence of steps, decisions, or principles for achieving it. It lacks a clear methodology."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the importance of innovation and its role in differentiating a brand from a commodity."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "739a7ec0-fb1f-4625-b782-aed811101acf",
+        "title": "Mistakes to Avoid While Scaling a Consumer Brand That Can Cost You ₹90 Cr | IBP CLIPS",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:56:17.630542+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Innovation",
+      "clusterNodeLabels": [
+        "Innovation"
+      ]
+    },
+    {
+      "id": "34cf2598721deb8e",
+      "suggestedSkillLabel": "Leveraging Amazon for Product Sales and Trend Identification",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source discusses using Amazon to identify product trends and sell products."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as it involves using Amazon as a platform for business."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique of using Amazon for product sales and trend identification can be applied across various product categories and business models."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a method of identifying trends on Amazon, sourcing products, and selling them through the platform."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the use of Amazon for business purposes."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.05,
+          "relatedNodeCount": 5
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "d4fbb1e6-e634-420c-a899-9761ef305c43",
+        "title": "How a US Trend Took Him From ₹6.5 Cr Debt to ₹275 Cr Revenue? | IBP CLIPS",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:56:57.77321+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Amazon",
+      "clusterNodeLabels": [
+        "Amazon"
+      ]
+    },
+    {
+      "id": "03cd26e37e3a7c6f",
+      "suggestedSkillLabel": "Formulating Sulfate-Free and Paraben-Free Products",
+      "domain": "domain_specific",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the trend of sulfate-free and paraben-free products and how the speaker capitalized on it."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as it involves formulating products without sulfates and parabens."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique of formulating products without sulfates and parabens can be applied across various personal care and cosmetic products."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a method of identifying the trend, sourcing ingredients, and formulating products without sulfates and parabens."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the trend of sulfate-free and paraben-free products and its impact on the business."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.05,
+          "relatedNodeCount": 5
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "d4fbb1e6-e634-420c-a899-9761ef305c43",
+        "title": "How a US Trend Took Him From ₹6.5 Cr Debt to ₹275 Cr Revenue? | IBP CLIPS",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:56:57.77321+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Sulfate-free and Paraben-free",
+      "clusterNodeLabels": [
+        "Sulfate-free and Paraben-free"
+      ]
+    },
+    {
+      "id": "e62987767142f68c",
+      "suggestedSkillLabel": "Recognizing Future Faking",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and describes the manipulation tactic of future faking."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, describing the behaviors and promises involved."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This technique can be applied across various interpersonal contexts, such as romantic relationships, business partnerships, and family dynamics."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a sequence of steps: making promises, creating a vision, delaying fulfillment, and repeating the cycle."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a substantial portion to explaining the concept, its effects, and how it works."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.09,
+          "relatedNodeCount": 8
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "26c7709d-a642-414f-b2e4-f1ac860d556a",
+        "title": "Simply Explaining Complex Manipulation Techniques",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T07:28:03.212838+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Future Faking",
+      "clusterNodeLabels": [
+        "Future Faking"
+      ]
+    },
+    {
+      "id": "e224900a710d6c62",
+      "suggestedSkillLabel": "Identifying Selective Memory",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and describes the manipulation tactic of selective memory."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, describing the denial and rewriting of past events."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This technique can be applied across various contexts, such as personal relationships, legal proceedings, and historical narratives."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a sequence of steps: an event occurs, the manipulator denies or alters the memory, and the victim questions their own perception."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a substantial portion to explaining the concept, its effects, and how it works."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.09,
+          "relatedNodeCount": 8
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "26c7709d-a642-414f-b2e4-f1ac860d556a",
+        "title": "Simply Explaining Complex Manipulation Techniques",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T07:28:03.212838+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Selective Memory",
+      "clusterNodeLabels": [
+        "Selective Memory"
+      ]
+    },
+    {
+      "id": "06ad7f85f430d1d5",
+      "suggestedSkillLabel": "Analyzing Systemic Advantages",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and demonstrates the concept of structural power."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, referring to laws, institutions, and economic structures that advantage certain groups."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique applies across multiple contexts, such as understanding zoning laws, tax codes, and algorithms."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "There is a describable sequence of steps or principles, such as identifying systemic advantages and understanding how they perpetuate inequality."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time defining and illustrating the concept of structural power, including its weaknesses."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.08,
+          "relatedNodeCount": 7
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "93286122-534d-4bdc-b77c-cd48367b5f00",
+        "title": "Every Level of Power (And How to Get It)",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T05:58:15.786965+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Structural Power",
+      "clusterNodeLabels": [
+        "Structural Power"
+      ]
+    },
+    {
+      "id": "d98eaa732a905a49",
+      "suggestedSkillLabel": "Understanding Ideological Influence",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and demonstrates the concept of ideological power."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, referring to controlling beliefs about truth, morality, and normalcy."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique applies across multiple contexts, such as religion, patriotism, and cultural myths."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "There is a describable sequence of steps or principles, such as understanding how ideologies shape behavior and maintain power structures."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time defining and illustrating the concept of ideological power, including its ability to make other forms of power invisible."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.08,
+          "relatedNodeCount": 7
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "93286122-534d-4bdc-b77c-cd48367b5f00",
+        "title": "Every Level of Power (And How to Get It)",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T05:58:15.786965+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Ideological Power",
+      "clusterNodeLabels": [
+        "Ideological Power"
+      ]
+    },
+    {
+      "id": "d839ed17be635957",
+      "suggestedSkillLabel": "N/A",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 3,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains how trust is essential for financial systems to function."
+        },
+        "C2": {
+          "pass": false,
+          "rationale": "While important, 'trust' is too broad to be actionable without further context. It needs to be tied to a specific application."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Trust is important in many contexts, including finance, relationships, and business."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source doesn't provide a specific method for building or maintaining trust, only that it is important."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source mentions trust in several contexts, highlighting its importance."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "7bbb7c7c-cb1e-448e-854b-39fc85d729a0",
+        "title": "Every Historic Financial Event & How It Changed the World",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:36:44.145808+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Trust",
+      "clusterNodeLabels": [
+        "Trust"
+      ]
+    },
+    {
+      "id": "0f7c11065618eb2a",
+      "suggestedSkillLabel": "Analyzing Centralized Control",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the concept of centralized control in the context of the Federal Reserve."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, especially in the context of governance and economics."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Centralized control is a concept that applies across various contexts, including government, business, and technology."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes how the Federal Reserve centralizes control over the financial system through interest rates, money supply, and lending to banks."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a substantial portion to explaining the implications of centralized control in the context of the Federal Reserve and its impact on the economy."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "7bbb7c7c-cb1e-448e-854b-39fc85d729a0",
+        "title": "Every Historic Financial Event & How It Changed the World",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:36:44.145808+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Centralized Control",
+      "clusterNodeLabels": [
+        "Centralized Control"
+      ]
+    },
+    {
+      "id": "fc958069c3553820",
+      "suggestedSkillLabel": "Cultivating Deep Thinking",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains and describes the concept of having a strong internal world."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as it describes how individuals with this trait engage in active mental processing."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The concept applies across various contexts, such as problem-solving, creativity, and self-reflection."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes how to cultivate a strong internal world by engaging in deep thinking, reflection, and imagination."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the trait and its effects."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.07,
+          "relatedNodeCount": 6
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "33330e0e-12a4-47e1-b7af-9d3d6edab410",
+        "title": "Every Psychological Trait Of Someone Who Loves Staying Home",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T05:57:36.069732+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Internal World",
+      "clusterNodeLabels": [
+        "Internal World"
+      ]
+    },
+    {
+      "id": "287febeb1455620c",
+      "suggestedSkillLabel": "Accelerated AI Engagement",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source uses the bike analogy to explicitly teach the importance of engaging with AI quickly and continuously."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept of 'going faster' on the 'AI bike' is actionable, suggesting active and rapid engagement with AI tools and learning."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The analogy applies to various contexts of learning and adapting to new technologies, not just AI."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The analogy implies a method: overcome initial fear, engage quickly, and continuously adapt to maintain balance and progress."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a substantial portion to explaining and reinforcing the bike analogy."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.07,
+          "relatedNodeCount": 6
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "89828592-43d1-4dbf-bbbf-823b8899faef",
+        "title": "Going Slower Feels Safer, But Your Domain Expertise Won't Save You Anymore. Here's What Will.",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:27:36.520091+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Riding the Bike Analogy",
+      "clusterNodeLabels": [
+        "Riding the Bike Analogy"
+      ]
+    },
+    {
+      "id": "f82df2d702fa17b6",
+      "suggestedSkillLabel": "AI Agent Orchestration",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the convergence of different roles into a meta-competency of orchestrating AI agents."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept of orchestrating AI agents is specific enough to be actionable, implying a need to develop skills in prompt engineering and AI workflow management."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The concept applies across various industries and domains where AI is being integrated into workflows."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source implies a method: learn to use AI agents to perform tasks previously done by specialists in different roles."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a significant amount of time explaining the implications of horizontal collapse and the need to adapt."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.07,
+          "relatedNodeCount": 6
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "89828592-43d1-4dbf-bbbf-823b8899faef",
+        "title": "Going Slower Feels Safer, But Your Domain Expertise Won't Save You Anymore. Here's What Will.",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:27:36.520091+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Horizontal Collapse",
+      "clusterNodeLabels": [
+        "Horizontal Collapse"
+      ]
+    },
+    {
+      "id": "96d9fafc322b5607",
+      "suggestedSkillLabel": "GTD-based Task Management",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly mentions that the book provides a comprehensive system for capturing, organizing, and executing tasks."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept of capturing, organizing, and executing tasks is specific enough to be actionable."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principles learned from the book are said to be genuinely useful for the rest of one's life, indicating reusability across contexts."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source mentions a system for capturing, organizing, and executing, implying a describable sequence of steps."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source mentions rereading the book multiple times and highlights game-changing principles, suggesting substantial time spent on the concept."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "899b1fcc-3bee-45bb-830b-493024f93d41",
+        "title": "19 Books to Transform Your 2026 - YouTube",
+        "source_type": "YouTube",
+        "created_at": "2026-01-14T22:29:01.197895+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Getting Things Done",
+      "clusterNodeLabels": [
+        "Getting Things Done"
+      ]
+    },
+    {
+      "id": "bc63a899829739b3",
+      "suggestedSkillLabel": "Entrepreneurial Operating System (EOS) Implementation",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source recommends the book to entrepreneurs running businesses, implying it teaches something."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The book is recommended for businesses with at least three people, suggesting a specific context and actionable advice."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The book is described as essential reading for entrepreneurs, suggesting its principles are reusable across different businesses."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source doesn't explicitly describe a sequence of steps or principles taught in the book, only that it is recommended for businesses of a certain size."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source mentions recommending the book to other entrepreneurs, implying familiarity and substantial engagement with its content."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "899b1fcc-3bee-45bb-830b-493024f93d41",
+        "title": "19 Books to Transform Your 2026 - YouTube",
+        "source_type": "YouTube",
+        "created_at": "2026-01-14T22:29:01.197895+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Traction",
+      "clusterNodeLabels": [
+        "Traction"
+      ]
+    },
+    {
+      "id": "d63f0e8b55b51782",
+      "suggestedSkillLabel": "Slow Productivity Implementation",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source mentions that the book talks about the three rules of slow productivity."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The three rules (do fewer things at once, work at a natural pace, obsess over quality) are specific enough to be actionable."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The rules are presented as applicable to knowledge workers and can be applied to various tasks and projects."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The rules provide a set of principles to guide work habits, implying a method."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source mentions a whole video dedicated to slow productivity, suggesting substantial time spent on the concept."
+        }
+      },
+      "relevanceScore": 0.28,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "899b1fcc-3bee-45bb-830b-493024f93d41",
+        "title": "19 Books to Transform Your 2026 - YouTube",
+        "source_type": "YouTube",
+        "created_at": "2026-01-14T22:29:01.197895+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Slow Productivity Rules",
+      "clusterNodeLabels": [
+        "Slow Productivity Rules"
+      ]
+    },
+    {
+      "id": "d005b48b6add7b78",
+      "suggestedSkillLabel": "Effective Course Completion",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly teaches the benefits of structured learning through courses, contrasting it with unstructured learning from sources like YouTube."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough, advocating for completing structured courses from credible institutions, focusing on practical skills, and avoiding random, unstructured learning."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique of structured learning can be applied across various domains and subjects, making it reusable in different contexts."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a method: choosing specific, useful courses; prioritizing completion; and selecting courses from credible institutions with real structure."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the benefits of structured learning, contrasting it with unstructured learning, and providing examples."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.01,
+          "relatedNodeCount": 1
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "56475131-b636-41ec-a616-5a2eb70bb31e",
+        "title": "Boring Everyday Habits That Completely Transform Your Life",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T10:40:15.604178+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Structured Learning",
+      "clusterNodeLabels": [
+        "Structured Learning"
+      ]
+    },
+    {
+      "id": "4dc25a1e168ed771",
+      "suggestedSkillLabel": "Commodity Trading Risk Assessment",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly advises against being a commodity trader without a significant price advantage, framing it as a lesson learned."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is actionable; one can choose to avoid commodity trading or focus on creating a price arbitrage."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principle of avoiding commodity trading without a price advantage applies across various business contexts and industries."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The method is to analyze the market, assess your competitive advantage (specifically price), and then decide whether to engage in commodity trading or not. The decision hinges on the presence of 'insane price arbitrage'."
+        },
+        "C5": {
+          "pass": false,
+          "rationale": "Fewer than 3 chunks."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.03,
+          "relatedNodeCount": 3
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a5a188d4-ef42-46ae-8b7b-88cce860504c",
+        "title": "From Losing Crores at 29 to Starting Again from Zero: A Founder’s Comeback Story",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:57:40.960069+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Commodity Trading",
+      "clusterNodeLabels": [
+        "Commodity Trading"
+      ]
+    },
+    {
+      "id": "98033dfdd5437663",
+      "suggestedSkillLabel": "Developing Software Vision",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and teaches the concept of 'software vision'."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable; it involves recognizing opportunities for automation and software solutions in everyday tasks."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This technique applies across various contexts, from automating personal tasks to identifying business opportunities."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the process of developing software vision: noticing repetitive tasks, identifying potential for automation, and recognizing software-shaped problems."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a significant portion to explaining and illustrating the concept of software vision."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.01,
+          "relatedNodeCount": 1
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "58c56a3e-86ab-41cc-8867-8334f2a940df",
+        "title": "90% of People Fail at Vibe Coding. Here's the Actual Reason: You're Skipping the Hard Part.",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T10:32:32.568943+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Software Vision",
+      "clusterNodeLabels": [
+        "Software Vision"
+      ]
+    },
+    {
+      "id": "012bb4eee4372998",
+      "suggestedSkillLabel": "Defining Software Requirements",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source teaches the importance of clearly defining what you want to build before starting the 'vibe coding' process."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable; it involves plainly describing the desired outcome and purpose of the software."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This technique applies across various software development contexts, ensuring the final product aligns with the initial vision."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the steps: pause, describe what you want plainly, know why you're building it, and define what success looks like."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the failure mode of not specifying requirements and the importance of doing so."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.01,
+          "relatedNodeCount": 1
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "58c56a3e-86ab-41cc-8867-8334f2a940df",
+        "title": "90% of People Fail at Vibe Coding. Here's the Actual Reason: You're Skipping the Hard Part.",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T10:32:32.568943+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Specification",
+      "clusterNodeLabels": [
+        "Specification"
+      ]
+    },
+    {
+      "id": "94c5718479c0233a",
+      "suggestedSkillLabel": "Developing Opportunity Recognition",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and uses the analogy of 'parkour vision' to illustrate 'software vision'."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "While 'parkour vision' itself is a metaphor, the explanation of how parkour practitioners see the environment differently is specific enough to understand the analogy."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The concept of 'parkour vision' as a way of seeing opportunities applies to various problem-solving contexts beyond just software development."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the process of developing 'parkour vision': training to see walls as surfaces, gaps as spaces, and railings as pathways."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a portion to explaining and illustrating the concept of 'parkour vision' as an analogy for 'software vision'."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.01,
+          "relatedNodeCount": 1
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "58c56a3e-86ab-41cc-8867-8334f2a940df",
+        "title": "90% of People Fail at Vibe Coding. Here's the Actual Reason: You're Skipping the Hard Part.",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T10:32:32.568943+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Parkour Vision",
+      "clusterNodeLabels": [
+        "Parkour Vision"
+      ]
+    },
+    {
+      "id": "e40ec6cf06bc5bac",
+      "suggestedSkillLabel": "Understanding AI Infrastructure Constraints",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 3,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the nature, causes, and implications of the AI infrastructure crisis."
+        },
+        "C2": {
+          "pass": false,
+          "rationale": "While the concept is well-defined, it's a broad situation rather than a specific, actionable technique."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Understanding this crisis is relevant across various industries and organizational roles."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source describes the crisis but doesn't provide a specific method or sequence of steps to directly address it, beyond general guidance."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a significant portion of its content to explaining the AI infrastructure crisis."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.02,
+          "relatedNodeCount": 2
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "968a379f-d1dc-482f-a3d1-d51e94bb3d37",
+        "title": "Why the Smartest AI Teams Are Panic-Buying Compute: The 36-Month AI Infrastructure Crisis Is Here",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T10:46:53.665684+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "AI Infrastructure Crisis",
+      "clusterNodeLabels": [
+        "AI Infrastructure Crisis"
+      ]
+    },
+    {
+      "id": "5595452dcbaec944",
+      "suggestedSkillLabel": "Understanding Inference Compute Requirements",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains what inference compute is and why it's important in the context of AI."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "Inference compute is a specific concept related to running AI models."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Understanding inference compute is relevant in various AI-related contexts, such as model deployment and resource allocation."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source explains the concept but doesn't provide a method or sequence of steps for optimizing or managing inference compute beyond general strategies."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing inference compute and its challenges."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.02,
+          "relatedNodeCount": 2
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "968a379f-d1dc-482f-a3d1-d51e94bb3d37",
+        "title": "Why the Smartest AI Teams Are Panic-Buying Compute: The 36-Month AI Infrastructure Crisis Is Here",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T10:46:53.665684+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Inference Compute",
+      "clusterNodeLabels": [
+        "Inference Compute"
+      ]
+    },
+    {
+      "id": "cb1786b3b82d17ef",
+      "suggestedSkillLabel": "Evaluating Agentic System Resource Consumption",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains what agentic systems are and how they impact AI compute consumption."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "Agentic systems are a specific type of AI system with defined characteristics."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The concept of agentic systems is applicable across various domains where AI automation is used."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source describes agentic systems but doesn't provide a specific method or sequence of steps for designing or implementing them."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a significant portion of its content to explaining agentic systems and their implications."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.02,
+          "relatedNodeCount": 2
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "968a379f-d1dc-482f-a3d1-d51e94bb3d37",
+        "title": "Why the Smartest AI Teams Are Panic-Buying Compute: The 36-Month AI Infrastructure Crisis Is Here",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T10:46:53.665684+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Agentic Systems",
+      "clusterNodeLabels": [
+        "Agentic Systems"
+      ]
+    },
+    {
+      "id": "c53683760e7457a5",
+      "suggestedSkillLabel": "Mitigating Context Rot in LLMs",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and teaches about the concept of context rot in LLMs."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as the video discusses how to mitigate it."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique of managing context rot applies across various LLM interactions and coding tasks."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source provides a method for mitigating context rot, including task and session management, and breaking down tasks into smaller parts."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining context rot, its causes, and mitigation strategies."
+        }
+      },
+      "relevanceScore": 0.27,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.01,
+          "relatedNodeCount": 1
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "3e38ac8b-a557-4dc7-b5c6-f38b4510da6d",
+        "title": "The Secret Poison Killing Your Claude Code Performance - YouTube",
+        "source_type": "YouTube",
+        "created_at": "2026-01-14T21:01:54.409957+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Context Rot",
+      "clusterNodeLabels": [
+        "100k Token Threshold",
+        "Context Rot",
+        "Chroma Study"
+      ]
+    },
+    {
+      "id": "6a73178a1787deb0",
+      "suggestedSkillLabel": "Applying an AI Upskilling Framework",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains the five levels of the AI upskilling framework, indicating an instructional intent."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The framework is described with enough detail (basics, building agents, workflows, dashboards, full apps) to be actionable."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "AI upskilling frameworks can be applied across different organizations and roles, demonstrating reusability."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The framework provides a progression from basic understanding to full application development, suggesting a sequence of steps."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates a significant portion to explaining and demonstrating the framework within the microsite context, showing substantial time investment."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a1d97a88-c5fd-4d87-98fd-378e8e244cf4",
+        "title": "AI Upskilling offering",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T13:53:09.254036+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "OXYGY's five levels of AI upskilling framework",
+      "clusterNodeLabels": [
+        "OXYGY's five levels of AI upskilling framework"
+      ]
+    },
+    {
+      "id": "a94faf6c7e53f38e",
+      "suggestedSkillLabel": "Defining an Ideal Customer Profile",
+      "domain": "consulting",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source emphasizes the importance of defining an ideal customer profile, indicating an intent to explain its significance."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The discussion includes specific examples like learning and development managers versus managing directors, making it actionable."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Defining ideal customer profiles is applicable across various marketing and sales strategies, demonstrating reusability."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The discussion involves identifying key characteristics and pain points of different customer segments, suggesting a method."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source dedicates time to discussing and aligning on the ideal customer profile strategy, showing substantial time investment."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a1d97a88-c5fd-4d87-98fd-378e8e244cf4",
+        "title": "AI Upskilling offering",
+        "source_type": "Meeting",
+        "created_at": "2026-02-22T13:53:09.254036+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Ideal customer profile",
+      "clusterNodeLabels": [
+        "Ideal customer profile"
+      ]
+    },
+    {
+      "id": "89f9afdfb8278353",
+      "suggestedSkillLabel": "Recognizing and mitigating variable reward schedules",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains how variable reward schedules work and their effect on the brain."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable; one can identify and potentially modify variable reward schedules in their own life or in systems they design."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique applies across multiple contexts, such as gambling, gaming, and social media."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the mechanism by which variable rewards influence behavior, which implies a method for identifying and potentially mitigating their effects."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the concept and its effects."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.11,
+          "relatedNodeCount": 10
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "7a18e15f-b64b-43fd-beac-3fa48a82e2b7",
+        "title": "Every Type of Addiction & How it Controls YOU... Explained in 15 Minutes",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T07:27:15.372291+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Variable Reward Schedule",
+      "clusterNodeLabels": [
+        "Variable Reward Schedule"
+      ]
+    },
+    {
+      "id": "fb933e0d8a46f5d2",
+      "suggestedSkillLabel": "Breaking the Car Payment Treadmill",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and teaches about the car payment treadmill."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, focusing on the cycle of trading in cars for lower monthly payments."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This applies to anyone who finances a car and is tempted to trade it in frequently, making it reusable."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the steps involved (trading in, rolling over debt, extending loan terms) and the consequences."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the concept and its implications."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "2aa05556-36fb-45c8-a6e9-e2389edbc5a8",
+        "title": "Every Financial Trap Middle Class People Fall Into Explained",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:35:58.478705+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Car Payment Treadmill",
+      "clusterNodeLabels": [
+        "Car Payment Treadmill"
+      ]
+    },
+    {
+      "id": "16efdcc6c8b4b6ef",
+      "suggestedSkillLabel": "Controlling Convenience Spending",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and teaches about the dangers of overspending on convenience."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, focusing on small, recurring convenience purchases."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This applies to almost everyone, as most people make convenience purchases regularly, making it reusable."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the steps involved (making small convenience purchases, accumulating costs, impacting budget) and the consequences."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the concept and its implications."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "2aa05556-36fb-45c8-a6e9-e2389edbc5a8",
+        "title": "Every Financial Trap Middle Class People Fall Into Explained",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:35:58.478705+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Paying for Convenience",
+      "clusterNodeLabels": [
+        "Paying for Convenience",
+        "Lifestyle Creep",
+        "Side Hustle Trap"
+      ]
+    },
+    {
+      "id": "c59181e5de3e8ee2",
+      "suggestedSkillLabel": "Resisting Social Spending Pressure",
+      "domain": "interpersonal",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and teaches about the dangers of overspending to maintain a certain image."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, focusing on spending driven by social comparison."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This applies to anyone who feels pressure to spend to impress others, making it reusable."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the steps involved (social comparison, impulsive spending, debt accumulation) and the consequences."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the concept and its implications."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "2aa05556-36fb-45c8-a6e9-e2389edbc5a8",
+        "title": "Every Financial Trap Middle Class People Fall Into Explained",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:35:58.478705+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Keeping Up Appearances",
+      "clusterNodeLabels": [
+        "Keeping Up Appearances",
+        "Marketing",
+        "Brand Loyalty Tax"
+      ]
+    },
+    {
+      "id": "8532624e9c0184c3",
+      "suggestedSkillLabel": "Building an Emergency Fund",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly explains and teaches about the risks of not having an emergency fund."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, focusing on the lack of savings for unexpected expenses."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "This applies to anyone who doesn't have an emergency fund, making it reusable."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the steps involved (lack of savings, unexpected expenses, debt accumulation) and the consequences."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining the concept and its implications."
+        }
+      },
+      "relevanceScore": 0.23,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.12,
+          "relatedNodeCount": 11
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "2aa05556-36fb-45c8-a6e9-e2389edbc5a8",
+        "title": "Every Financial Trap Middle Class People Fall Into Explained",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:35:58.478705+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Emergency Free Delusion",
+      "clusterNodeLabels": [
+        "Emergency Free Delusion"
+      ]
+    },
+    {
+      "id": "de29f6f08d8a67c0",
+      "suggestedSkillLabel": "Understanding AI Training Costs",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source mentions the high costs associated with training AI models."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to understand its role in AI development and resource consumption."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Training is a fundamental concept applicable across various AI models and development stages."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "The source does not describe the process of training AI models, only the cost."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source mentions training costs as a significant factor in AI infrastructure spending."
+        }
+      },
+      "relevanceScore": 0.22,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.09,
+          "relatedNodeCount": 8
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "59297dc6-f72c-4aaf-b54e-6c3b3749bee2",
+        "title": "Why $650 Billion in AI Spending ISN'T Enough. The 4 Skills that Survive and What This Means for You.",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T17:03:14.237264+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Training",
+      "clusterNodeLabels": [
+        "Training"
+      ]
+    },
+    {
+      "id": "5131c56d5a1efa50",
+      "suggestedSkillLabel": "N/A",
+      "domain": "consulting",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 3,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source discusses the implementation of professional management and its impact on the business, including mistakes made during the transition."
+        },
+        "C2": {
+          "pass": false,
+          "rationale": "The concept is too broad. It's not specific enough to be actionable without further breakdown into specific management practices."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principles of professional management can be applied across various business contexts and industries."
+        },
+        "C4": {
+          "pass": false,
+          "rationale": "While the source mentions the implementation of professional management, it doesn't provide a detailed, step-by-step method for doing so. It lacks specific guidance."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the impact of professional management on the business, including the challenges and mistakes made."
+        }
+      },
+      "relevanceScore": 0.22,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "739a7ec0-fb1f-4625-b782-aed811101acf",
+        "title": "Mistakes to Avoid While Scaling a Consumer Brand That Can Cost You ₹90 Cr | IBP CLIPS",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:56:17.630542+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Professional Management",
+      "clusterNodeLabels": [
+        "Professional Management"
+      ]
+    },
+    {
+      "id": "64889daef29343ef",
+      "suggestedSkillLabel": "Implementing Psychological Pricing Strategies",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly teaches about using psychological pricing strategies, specifically the '99 endings' technique."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, as it involves setting prices ending in .99."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique of using psychological pricing can be applied across various product categories and retail settings."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes the method of setting prices ending in .99 to create the perception of a lower price."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the psychological pricing strategy and its impact on sales."
+        }
+      },
+      "relevanceScore": 0.22,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.05,
+          "relatedNodeCount": 5
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "d4fbb1e6-e634-420c-a899-9761ef305c43",
+        "title": "How a US Trend Took Him From ₹6.5 Cr Debt to ₹275 Cr Revenue? | IBP CLIPS",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:56:57.77321+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Psychological Pricing",
+      "clusterNodeLabels": [
+        "Psychological Pricing"
+      ]
+    },
+    {
+      "id": "cbfc8886f8c697da",
+      "suggestedSkillLabel": "Understanding Self-Policing Mechanisms",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains how ideologies lead to self-policing."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, referring to how individuals internalize and enforce norms and beliefs."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Self-policing applies across various contexts, such as religion, patriotism, and cultural norms."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "There is a describable sequence of steps or principles, such as understanding how ideologies shape behavior and lead to internal enforcement of norms."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing how self-policing is a result of ideological power."
+        }
+      },
+      "relevanceScore": 0.22,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.08,
+          "relatedNodeCount": 7
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "93286122-534d-4bdc-b77c-cd48367b5f00",
+        "title": "Every Level of Power (And How to Get It)",
+        "source_type": "YouTube",
+        "created_at": "2026-02-10T05:58:15.786965+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Self-Policing",
+      "clusterNodeLabels": [
+        "Self-Policing"
+      ]
+    },
+    {
+      "id": "c7af746962ec3ac0",
+      "suggestedSkillLabel": "Analyzing Risk Redistribution",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source implicitly teaches about risk redistribution by describing how banks lend money and how taxation works."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, especially in the context of finance and insurance."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Risk redistribution applies across various contexts, including finance, insurance, and social safety nets."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes how banks redistribute risk by lending money and how governments redistribute risk through taxation and social programs."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time discussing the implications of risk redistribution in different historical financial events."
+        }
+      },
+      "relevanceScore": 0.22,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.04,
+          "relatedNodeCount": 4
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "7bbb7c7c-cb1e-448e-854b-39fc85d729a0",
+        "title": "Every Historic Financial Event & How It Changed the World",
+        "source_type": "YouTube",
+        "created_at": "2026-02-09T18:36:44.145808+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Risk Redistribution",
+      "clusterNodeLabels": [
+        "Risk Redistribution"
+      ]
+    },
+    {
+      "id": "fb6a0296601cfaf6",
+      "suggestedSkillLabel": "Brand-Focused Business Strategy",
+      "domain": "strategic",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly contrasts building a business with building a brand, framing it as a key takeaway."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "While 'brand building' is broad, the context suggests focusing on creating a unique identity and value proposition rather than just reselling."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The principle of building a brand for long-term value applies across various industries and business models."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The method is implied: focus on creating a brand rather than just reselling commodities. This involves developing a unique value proposition and identity."
+        },
+        "C5": {
+          "pass": false,
+          "rationale": "Fewer than 3 chunks."
+        }
+      },
+      "relevanceScore": 0.21,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.03,
+          "relatedNodeCount": 3
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a5a188d4-ef42-46ae-8b7b-88cce860504c",
+        "title": "From Losing Crores at 29 to Starting Again from Zero: A Founder’s Comeback Story",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:57:40.960069+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Brand Building",
+      "clusterNodeLabels": [
+        "Brand Building"
+      ]
+    },
+    {
+      "id": "c6519792f26d8507",
+      "suggestedSkillLabel": "Just-in-Time Logistics Implementation",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains how the speaker implemented a JIT system in their early business."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough; it involves minimizing inventory and fulfilling orders on demand."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "JIT logistics is applicable in various industries and contexts where inventory management is crucial."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The method involves taking orders, quickly sourcing the required items, and delivering them to the customer promptly, minimizing inventory holding."
+        },
+        "C5": {
+          "pass": false,
+          "rationale": "Fewer than 3 chunks."
+        }
+      },
+      "relevanceScore": 0.21,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.03,
+          "relatedNodeCount": 3
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a5a188d4-ef42-46ae-8b7b-88cce860504c",
+        "title": "From Losing Crores at 29 to Starting Again from Zero: A Founder’s Comeback Story",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:57:40.960069+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Just-in-Time (JIT) Logistics",
+      "clusterNodeLabels": [
+        "Just-in-Time (JIT) Logistics"
+      ]
+    },
+    {
+      "id": "8fb9e3084dc35988",
+      "suggestedSkillLabel": "Indian Market Price Sensitivity Analysis",
+      "domain": "domain_specific",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 4,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explicitly discusses the high price sensitivity of Indian customers and its impact on business loyalty."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough; it highlights the importance of price competitiveness in the Indian market."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "Understanding price sensitivity is relevant across various industries and business models operating in India."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The method involves recognizing that price is a dominant factor in customer decisions in India and adjusting business strategies accordingly (e.g., competitive pricing, value-added services)."
+        },
+        "C5": {
+          "pass": false,
+          "rationale": "Fewer than 3 chunks."
+        }
+      },
+      "relevanceScore": 0.21,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0.03,
+          "relatedNodeCount": 3
+        },
+        "sourceHistory": {
+          "score": 0.33,
+          "relatedSourceCount": 1
+        },
+        "graphProximity": {
+          "score": 0.6,
+          "hopsToNearestAnchor": 2
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a5a188d4-ef42-46ae-8b7b-88cce860504c",
+        "title": "From Losing Crores at 29 to Starting Again from Zero: A Founder’s Comeback Story",
+        "source_type": "YouTube",
+        "created_at": "2026-02-15T12:57:40.960069+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Price Sensitivity in India",
+      "clusterNodeLabels": [
+        "Price Sensitivity in India"
+      ]
+    },
+    {
+      "id": "6f5a8c144f439b07",
+      "suggestedSkillLabel": "Connect and Evolve Ideas",
+      "domain": "technical",
+      "status": "weak_signal",
+      "exposureLevel": "novice",
+      "criteriaPassedCount": 5,
+      "criteria": {
+        "C1": {
+          "pass": true,
+          "rationale": "The source explains how Obsidian facilitates the collision and intermixing of ideas for complex projects."
+        },
+        "C2": {
+          "pass": true,
+          "rationale": "The concept is specific enough to be actionable, referring to the process of connecting and evolving ideas within a note-taking system."
+        },
+        "C3": {
+          "pass": true,
+          "rationale": "The technique of connecting ideas can be applied across various contexts, such as writing, research, and project management."
+        },
+        "C4": {
+          "pass": true,
+          "rationale": "The source describes a method involving storing information locally, linking related ideas, and using search to find connections."
+        },
+        "C5": {
+          "pass": true,
+          "rationale": "The source spends a substantial amount of time explaining how Obsidian enables the collision of ideas, providing examples and use cases."
+        }
+      },
+      "relevanceScore": 0.2,
+      "signalBreakdown": {
+        "anchorAlignment": {
+          "score": 0,
+          "matchedAnchor": null
+        },
+        "nodeDensity": {
+          "score": 0,
+          "relatedNodeCount": 0
+        },
+        "sourceHistory": {
+          "score": 0,
+          "relatedSourceCount": 0
+        },
+        "graphProximity": {
+          "score": 1,
+          "hopsToNearestAnchor": 1
+        },
+        "profileContext": {
+          "score": 0.5,
+          "multiplierApplied": 1
+        },
+        "velocity": {
+          "score": 0,
+          "recentSourceCount": 0
+        }
+      },
+      "primarySource": {
+        "id": "a23a37c9-9ad7-41dd-afe2-d5015fcdd5f4",
+        "title": "(10) My Top 5 Productivity Apps That Survived Years of Testing - YouTube",
+        "source_type": "YouTube",
+        "created_at": "2026-01-27T23:05:15.25199+00:00"
+      },
+      "contributingSources": [],
+      "relatedAnchors": [],
+      "primaryNodeLabel": "Idea Collision",
+      "clusterNodeLabels": [
+        "Idea Collision"
+      ]
+    }
+  ],
+  "failedCandidates": [
+    {
+      "clusterLabel": "Rag",
+      "sourceTitle": "OpenAI Leaked GPT-5.4. It's a Distraction. (The AI Lock-In No One Is Talking About)",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C1",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Teams Channel",
+      "sourceTitle": "Neo Learning Platform – Debrief with Marisha",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Supabase",
+      "sourceTitle": "Joseph & Marisha",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "OpenRouter",
+      "sourceTitle": "Joseph & Marisha",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "ChatGPT",
+      "sourceTitle": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Ethical Considerations",
+      "sourceTitle": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Compliance",
+      "sourceTitle": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "EU Regulation",
+      "sourceTitle": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Learning Curve",
+      "sourceTitle": "Future proofing AI tool usage - OpenAI, Claude, and other tools",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Data privacy expertise",
+      "sourceTitle": "Personalised AI Upskilling",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Formal client approval",
+      "sourceTitle": "AI CoE Workstream SMART Goals- Enablement Review",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C1",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Proposal sign-off",
+      "sourceTitle": "AI CoE Workstream SMART Goals- Enablement Review",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C1",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Contract initiation",
+      "sourceTitle": "AI CoE Workstream SMART Goals- Enablement Review",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C1",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "SharePoint system",
+      "sourceTitle": "OXYGY Quarterly Update",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "SharePoint site",
+      "sourceTitle": "OXYGY Quarterly Update",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "CRM",
+      "sourceTitle": "OXYGY Quarterly Update",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Circleback AI",
+      "sourceTitle": "Deep-dive on InfoAIcert's AI Risk Management stream",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "InfoCert's competitive advantages",
+      "sourceTitle": "Deep-dive on InfoAIcert's AI Risk Management stream",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "AI TRISM (Trust, Risk, Information Security Management)",
+      "sourceTitle": "Deep-dive on InfoAIcert's AI Risk Management stream",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Graph RAG system",
+      "sourceTitle": "Deep-dive on InfoAIcert's AI Risk Management stream",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Public AI Risk Repositories",
+      "sourceTitle": "Deep-dive on InfoAIcert's AI Risk Management stream",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Circleback AI",
+      "sourceTitle": "Deep-dive on InfoAIcert's AI Risk Management stream",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Second Brain",
+      "sourceTitle": "The $285 Billion Crash Wall Street Won't Explain Honestly. Here's What Everyone Missed.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Codeex",
+      "sourceTitle": "The $285 Billion Crash Wall Street Won't Explain Honestly. Here's What Everyone Missed.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "OpenAI Frontier",
+      "sourceTitle": "The $285 Billion Crash Wall Street Won't Explain Honestly. Here's What Everyone Missed.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Cursor",
+      "sourceTitle": "The $285 Billion Crash Wall Street Won't Explain Honestly. Here's What Everyone Missed.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Second Brain",
+      "sourceTitle": "Claude Opus 4.6: The Biggest AI Jump I've Covered--It's Not Close. (Here's What You Need to Know)",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Personal Software",
+      "sourceTitle": "Claude Opus 4.6: The Biggest AI Jump I've Covered--It's Not Close. (Here's What You Need to Know)",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Vibe Working",
+      "sourceTitle": "Claude Opus 4.6: The Biggest AI Jump I've Covered--It's Not Close. (Here's What You Need to Know)",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Role Associations",
+      "sourceTitle": "Chiesi Data Skills - Alignment on \"intermediate\" skills requirements",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Skill Level Requirements",
+      "sourceTitle": "Chiesi Data Skills - Alignment on \"intermediate\" skills requirements",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Salesforce",
+      "sourceTitle": "Potential collab discussion",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "CRM data",
+      "sourceTitle": "Potential collab discussion",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Sales data",
+      "sourceTitle": "Potential collab discussion",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Competitive intelligence",
+      "sourceTitle": "Potential collab discussion",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Authentication",
+      "sourceTitle": "AI Upskilling offering",
+      "source_type": "Meeting",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Relentless Honesty",
+      "sourceTitle": "Why $650 Billion in AI Spending ISN'T Enough. The 4 Skills that Survive and What This Means for You.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Taste",
+      "sourceTitle": "Why $650 Billion in AI Spending ISN'T Enough. The 4 Skills that Survive and What This Means for You.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "GoKwik",
+      "sourceTitle": "Shark Tank Was Viral… But Sales Didn’t Explode | Ft.ADIL QADRI | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Highway Stores",
+      "sourceTitle": "Shark Tank Was Viral… But Sales Didn’t Explode | Ft.ADIL QADRI | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Shopify",
+      "sourceTitle": "Shark Tank Was Viral… But Sales Didn’t Explode | Ft.ADIL QADRI | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Financial Literacy",
+      "sourceTitle": "Shark Tank Was Viral… But Sales Didn’t Explode | Ft.ADIL QADRI | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Advancements happening in India.",
+      "sourceTitle": "Mistakes to Avoid While Scaling a Consumer Brand That Can Cost You ₹90 Cr | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Advancements in India",
+      "sourceTitle": "How a US Trend Took Him From ₹6.5 Cr Debt to ₹275 Cr Revenue? | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Financial Literacy",
+      "sourceTitle": "How a US Trend Took Him From ₹6.5 Cr Debt to ₹275 Cr Revenue? | IBP CLIPS",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Schizophrenia",
+      "sourceTitle": "Every Mental Disorder & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Generalized Anxiety Disorder",
+      "sourceTitle": "Every Mental Disorder & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "ADHD",
+      "sourceTitle": "Every Mental Disorder & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Obsessive Compulsive Disorder",
+      "sourceTitle": "Every Mental Disorder & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "PTSD",
+      "sourceTitle": "Every Mental Disorder & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 1,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Epinephrine",
+      "sourceTitle": "Every Brain Chemical & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Cortisol",
+      "sourceTitle": "Every Brain Chemical & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Norepinephrine",
+      "sourceTitle": "Every Brain Chemical & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Acetylcholine",
+      "sourceTitle": "Every Brain Chemical & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Glutamate",
+      "sourceTitle": "Every Brain Chemical & Their Effects Explained",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Default Mode Network",
+      "sourceTitle": "Every Type of Addiction & How it Controls YOU... Explained in 15 Minutes",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Familiarity Bias",
+      "sourceTitle": "Every Type of Addiction & How it Controls YOU... Explained in 15 Minutes",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Lovable",
+      "sourceTitle": "Going Slower Feels Safer, But Your Domain Expertise Won't Save You Anymore. Here's What Will.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Claude Code",
+      "sourceTitle": "Going Slower Feels Safer, But Your Domain Expertise Won't Save You Anymore. Here's What Will.",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Smashables",
+      "sourceTitle": "Chiesi Corporate Identity_umbrella brand_v.6.0 (2) (1).pdf",
+      "source_type": "Document",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Routing Layer",
+      "sourceTitle": "Why the Smartest AI Teams Are Panic-Buying Compute: The 36-Month AI Infrastructure Crisis Is Here",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Agent Mode",
+      "sourceTitle": "(10) I Ranked Every AI Feature by How Useful It ACTUALLY Is (Tier List) - YouTube",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Image Generation",
+      "sourceTitle": "(10) I Ranked Every AI Feature by How Useful It ACTUALLY Is (Tier List) - YouTube",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "F Tier AI Features",
+      "sourceTitle": "(10) I Ranked Every AI Feature by How Useful It ACTUALLY Is (Tier List) - YouTube",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "The Whiteboard Analogy",
+      "sourceTitle": "https://www.youtube.com/watch?v=xaQG-eD9d58",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 2,
+      "failedCriteria": [
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "clusterLabel": "Million Dollar Weekend",
+      "sourceTitle": "19 Books to Transform Your 2026 - YouTube",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    {
+      "clusterLabel": "Theory of Constraints",
+      "sourceTitle": "19 Books to Transform Your 2026 - YouTube",
+      "source_type": "YouTube",
+      "failReason": "insufficient_criteria",
+      "criteriaPassedCount": 0,
+      "failedCriteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    }
+  ]
+}

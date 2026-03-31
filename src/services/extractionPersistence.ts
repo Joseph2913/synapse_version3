@@ -231,7 +231,10 @@ export async function saveChunks(
 
   if (error) throw new PersistenceError('Failed to save chunks', error)
   if (!data || data.length === 0) {
-    console.error('[saveChunks] Insert returned 0 rows — possible table name mismatch or RLS rejection')
+    throw new PersistenceError(
+      'Failed to save chunks — insert returned 0 rows (likely RLS rejection)',
+      { message: `Attempted ${toInsert.length} rows for source ${sourceId}, got 0 back`, details: '', hint: '', code: 'EMPTY_INSERT' },
+    )
   }
 }
 

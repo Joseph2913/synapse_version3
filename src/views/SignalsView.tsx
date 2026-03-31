@@ -20,6 +20,7 @@ import { SkillCard } from '../components/skills/SkillCard'
 import { SkillDetailPanel } from '../components/skills/SkillDetailPanel'
 import { SkillOverviewPanel } from '../components/skills/SkillOverviewPanel'
 import { CombinedOverviewPanel } from '../components/signals/CombinedOverviewPanel'
+import { ProcessingCard } from '../components/signals/ProcessingCard'
 import { ToggleGroup } from '../components/shared/ToggleGroup'
 import { SectionLabel } from '../components/ui/SectionLabel'
 import type { AnchorCandidateWithNode } from '../types/anchors'
@@ -555,6 +556,7 @@ function AllModeList({
   searchActive,
   selectedId,
   selectedType,
+  processingItems,
   onSelectAnchor,
   onSelectSkill,
   onConfirmAnchor,
@@ -566,6 +568,7 @@ function AllModeList({
   searchActive: boolean
   selectedId: string | null
   selectedType: 'anchor' | 'skill' | null
+  processingItems: Array<{ id: string; type: 'skill' | 'anchor'; title?: string }>
   onSelectAnchor: (id: string) => void
   onSelectSkill: (id: string) => void
   onConfirmAnchor: (candidateId: string, nodeId: string) => void
@@ -589,6 +592,15 @@ function AllModeList({
 
   return (
     <div style={{ padding: '20px 36px' }}>
+      {/* Processing cards at the top */}
+      {processingItems.length > 0 && (
+        <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
+          {processingItems.map((item, i) => (
+            <ProcessingCard key={item.id} type={item.type} title={item.title} index={i} />
+          ))}
+        </div>
+      )}
+
       {anchors.length > 0 && (
         <div style={{ marginBottom: skills.length > 0 ? 24 : 0 }}>
           <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
@@ -742,6 +754,10 @@ export function SignalsView() {
   const [isDragging, setIsDragging] = useState(false)
   const [toast, setToast] = useState<{ text: string; color: string } | null>(null)
   const [totalSourcesIngested, setTotalSourcesIngested] = useState(0)
+  const [processingItems, setProcessingItems] = useState<Array<{ id: string; type: 'skill' | 'anchor'; title?: string }>>([])
+  const removeProcessingItem = useCallback((id: string) => {
+    setProcessingItems(prev => prev.filter(item => item.id !== id))
+  }, [])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const dragStartX = useRef(0)
@@ -912,18 +928,27 @@ export function SignalsView() {
   ) => {
     if (!user?.id) throw new Error('Not authenticated.')
 
-    const result = await createManualAnchorFromScratch({
-      userId: user.id,
-      title: input.title,
-      description: input.description,
-      settings: input.settings,
-    })
-
-    setSelection({ type: 'anchor', id: result.candidateId })
+    const tempId = crypto.randomUUID()
+    setProcessingItems(prev => [...prev, { id: tempId, type: 'anchor', title: input.title }])
     setCreatePanel(null)
-    await refetch()
-    showToast('✦ Anchor created', '#22c55e')
-  }, [refetch, showToast, user?.id])
+
+    try {
+      const result = await createManualAnchorFromScratch({
+        userId: user.id,
+        title: input.title,
+        description: input.description,
+        settings: input.settings,
+      })
+
+      removeProcessingItem(tempId)
+      setSelection({ type: 'anchor', id: result.candidateId })
+      await refetch()
+      showToast('✦ Anchor created', '#22c55e')
+    } catch (err) {
+      removeProcessingItem(tempId)
+      showToast(err instanceof Error ? err.message : 'Failed to create anchor.', '#ef4444')
+    }
+  }, [refetch, removeProcessingItem, showToast, user?.id])
 
   const handleProcessSkillSource = useCallback(async (
     input: {
@@ -936,26 +961,45 @@ export function SignalsView() {
   ) => {
     if (!user?.id || !session?.access_token) throw new Error('Not authenticated.')
 
-    const result = await createAndProcessSkillSource({
-      userId: user.id,
-      accessToken: session.access_token,
-      title: input.title,
-      content: input.content,
-      sourceType: input.sourceType,
-      sourceUrl: input.sourceUrl,
-      inputType: input.inputType,
-    })
-
-    await refresh()
-    return result
-  }, [refresh, session?.access_token, user?.id])
-
-  const handleOpenCreatedSkill = useCallback(async (skillId: string, message: string) => {
+    // Add a processing card immediately and close the create panel
+    const tempId = crypto.randomUUID()
+    setProcessingItems(prev => [...prev, { id: tempId, type: 'skill', title: input.title }])
     setCreatePanel(null)
-    setSelection({ type: 'skill', id: skillId })
-    await selectSkill(skillId)
-    showToast(message, '#22c55e')
-  }, [selectSkill, showToast])
+
+    // Run the full ingestion + skill extraction in the background
+    try {
+      const result = await createAndProcessSkillSource({
+        userId: user.id,
+        accessToken: session.access_token,
+        title: input.title,
+        content: input.content,
+        sourceType: input.sourceType,
+        sourceUrl: input.sourceUrl,
+        inputType: input.inputType,
+      })
+
+      removeProcessingItem(tempId)
+      await refresh()
+
+      if (result.skillId) {
+        setSelection({ type: 'skill', id: result.skillId })
+        await selectSkill(result.skillId)
+        showToast('✦ Skill created', '#22c55e')
+      } else if (result.action === 'skipped_below_threshold') {
+        showToast('Source ingested — content did not meet skill threshold.', '#d97706')
+      } else if (result.action === 'updated') {
+        showToast('✦ Existing skill reinforced', '#22c55e')
+      } else {
+        showToast('Source ingested — skill extraction pending.', '#3b82f6')
+      }
+
+      return result
+    } catch (err) {
+      removeProcessingItem(tempId)
+      showToast(err instanceof Error ? err.message : 'Failed to process skill source.', '#ef4444')
+      throw err
+    }
+  }, [refresh, removeProcessingItem, selectSkill, session?.access_token, showToast, user?.id])
 
   const handleConfirmAsSubAnchor = useCallback(async (candidateId: string, nodeId: string, parentId: string) => {
     const success = await promoteToSubAnchor(candidateId, nodeId, parentId)
@@ -1200,7 +1244,6 @@ export function SignalsView() {
       <SkillCreatePanel
         onClose={() => setCreatePanel(null)}
         onProcess={handleProcessSkillSource}
-        onOpenSkill={handleOpenCreatedSkill}
       />
     )
   } else if (selection?.type === 'anchor' && !selectedAnchor) {
@@ -1450,6 +1493,7 @@ export function SignalsView() {
                   searchActive={searchActive}
                   selectedId={selectedId}
                   selectedType={selectedType}
+                  processingItems={processingItems}
                   onSelectAnchor={handleSelectAnchor}
                   onSelectSkill={handleSelectSkill}
                   onConfirmAnchor={handleConfirm}
@@ -1462,6 +1506,13 @@ export function SignalsView() {
 
           {mode === 'anchors' && (
             <div style={{ padding: '20px 36px' }}>
+              {processingItems.filter(p => p.type === 'anchor').length > 0 && (
+                <div className="flex flex-col gap-2" style={{ marginBottom: 12 }}>
+                  {processingItems.filter(p => p.type === 'anchor').map((item, i) => (
+                    <ProcessingCard key={item.id} type="anchor" title={item.title} index={i} />
+                  ))}
+                </div>
+              )}
               {anchorLoading ? (
                 <div className="flex flex-col gap-2">
                   {[0, 1, 2].map(index => (
@@ -1629,6 +1680,13 @@ export function SignalsView() {
 
           {mode === 'skills' && (
             <div style={{ padding: '20px 36px' }}>
+              {processingItems.filter(p => p.type === 'skill').length > 0 && (
+                <div className="flex flex-col gap-2" style={{ marginBottom: 12 }}>
+                  {processingItems.filter(p => p.type === 'skill').map((item, i) => (
+                    <ProcessingCard key={item.id} type="skill" title={item.title} index={i} />
+                  ))}
+                </div>
+              )}
               {skillLoading && skills.length === 0 ? (
                 <div className="flex flex-col gap-2">
                   {[0, 1, 2].map(index => (

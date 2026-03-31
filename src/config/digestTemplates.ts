@@ -243,6 +243,13 @@ export function getTemplatesForFrequency(
   return DIGEST_TEMPLATES.filter(t => t.frequency === frequency)
 }
 
+/** Maps legacy/variant template IDs to current canonical IDs */
+const TEMPLATE_ALIASES: Record<string, string> = {
+  weekly_progress_review: 'weekly_progress',
+  weekly_next_week_preview: 'week_ahead',
+}
+
 export function getTemplateById(id: string): DigestTemplate | undefined {
-  return DIGEST_TEMPLATES.find(t => t.id === id)
+  const canonicalId = TEMPLATE_ALIASES[id] ?? id
+  return DIGEST_TEMPLATES.find(t => t.id === canonicalId)
 }

@@ -24,6 +24,8 @@ export interface QueryConfig {
   systemDirective?: string   // Hidden instruction for Gemini system prompt (PRD-A)
   thinkingBudget?: number    // Gemini 2.5 Flash thinking budget (PRD-C)
   responseFormat?: string    // Response format key from responseFormats.ts (PRD-C)
+  skipClassification?: boolean  // Skip query classification (digest modules already have known intent)
+  skipDecomposition?: boolean   // Skip query decomposition (digest templates are already focused)
 }
 
 export const DEFAULT_QUERY_CONFIG: QueryConfig = {

@@ -139,6 +139,32 @@ const TEMPLATES: Record<string, { name: string; systemPrompt: string }> = {
   },
 }
 
+/** Maps legacy/variant template IDs to current canonical IDs */
+const TEMPLATE_ALIASES: Record<string, string> = {
+  weekly_progress_review: 'weekly_progress',
+  weekly_next_week_preview: 'week_ahead',
+}
+
+function resolveTemplateId(id: string): string {
+  return TEMPLATE_ALIASES[id] ?? id
+}
+
+// ─── CONCURRENCY HELPER ──────────────────────────────────────────────────────
+
+async function runConcurrent<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length)
+  let nextIndex = 0
+  async function runNext(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const idx = nextIndex++
+      results[idx] = await tasks[idx]()
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => runNext())
+  await Promise.all(workers)
+  return results
+}
+
 // ─── SIMPLIFIED RAG: embed query → semantic search → generate ─────────────────
 
 async function runModuleRAG(
@@ -483,27 +509,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log(`[generate-scheduled] Generating digest: "${title}" for user ${userId}`)
 
       try {
-        // 3. Generate each module
+        // 3. Generate each module (parallel with concurrency limit)
         const modules = ((profile.digest_modules ?? []) as Array<{
           template_id: string; is_active: boolean; custom_context: string | null; sort_order: number
         }>)
           .filter(m => m.is_active)
           .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
 
-        const moduleOutputs: Array<{
+        type ModuleResult = {
           templateId: string; name: string; content: string
           sourceCount: number; durationMs: number; error?: string
-        }> = []
+        }
 
-        for (const mod of modules) {
+        const moduleTasks = modules.map(mod => async (): Promise<ModuleResult> => {
           const moduleStart = Date.now()
           const templateId = mod.template_id as string
 
           // Custom agent modules
           if (templateId === 'custom_agent') {
             let customConfig: { name?: string; task?: string; behavior?: string; goal?: string; outputFormat?: string } = {}
-            try { customConfig = JSON.parse(mod.custom_context ?? '{}') } catch { continue }
-            if (!customConfig.task?.trim()) continue
+            try { customConfig = JSON.parse(mod.custom_context ?? '{}') } catch {
+              return { templateId, name: 'Custom Agent', content: '', sourceCount: 0, durationMs: 0, error: 'Invalid JSON config' }
+            }
+            if (!customConfig.task?.trim()) {
+              return { templateId, name: customConfig.name?.trim() || 'Custom Agent', content: '', sourceCount: 0, durationMs: 0, error: 'No task configured' }
+            }
 
             const moduleName = customConfig.name?.trim() || 'Custom Agent'
             try {
@@ -515,49 +545,62 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               }
 
               const result = await runModuleRAG(sb, userId, prompt, density)
-              moduleOutputs.push({
-                templateId, name: moduleName, content: result.content,
-                sourceCount: result.sourceCount, durationMs: Date.now() - moduleStart,
-              })
+              return { templateId, name: moduleName, content: result.content, sourceCount: result.sourceCount, durationMs: Date.now() - moduleStart }
             } catch (err) {
-              moduleOutputs.push({
-                templateId, name: moduleName, content: '',
-                sourceCount: 0, durationMs: Date.now() - moduleStart,
-                error: err instanceof Error ? err.message : 'Unknown error',
-              })
+              return { templateId, name: moduleName, content: '', sourceCount: 0, durationMs: Date.now() - moduleStart, error: err instanceof Error ? err.message : 'Unknown error' }
             }
-            continue
           }
 
-          // Standard template modules
-          const template = TEMPLATES[templateId]
-          if (!template) continue
+          // Standard template modules (resolve aliases for legacy IDs)
+          const resolvedId = resolveTemplateId(templateId)
+          const template = TEMPLATES[resolvedId]
+          if (!template) {
+            return { templateId, name: templateId, content: '', sourceCount: 0, durationMs: 0, error: `Template not found: ${templateId}` }
+          }
 
           try {
             const result = await runModuleRAG(sb, userId, template.systemPrompt, density)
-            moduleOutputs.push({
-              templateId, name: template.name, content: result.content,
-              sourceCount: result.sourceCount, durationMs: Date.now() - moduleStart,
-            })
+            return { templateId, name: template.name, content: result.content, sourceCount: result.sourceCount, durationMs: Date.now() - moduleStart }
           } catch (err) {
-            moduleOutputs.push({
-              templateId, name: template.name, content: '',
-              sourceCount: 0, durationMs: Date.now() - moduleStart,
-              error: err instanceof Error ? err.message : 'Unknown error',
-            })
+            return { templateId, name: template.name, content: '', sourceCount: 0, durationMs: Date.now() - moduleStart, error: err instanceof Error ? err.message : 'Unknown error' }
           }
-        }
+        })
 
-        // 4. Generate executive summary
+        // Run modules with concurrency limit of 3
+        const moduleOutputs = await runConcurrent(moduleTasks, 3)
+
+        // 4. Generate executive summary (direct Gemini call — no RAG needed)
         let executiveSummary = ''
         const successfulModules = moduleOutputs.filter(m => !m.error)
         if (successfulModules.length > 0) {
           const summaryContext = successfulModules
-            .map(m => `[${m.name}]: ${m.content}`)
-            .join('\n\n')
+            .map(m => `## ${m.name}\n${m.content}`)
+            .join('\n\n---\n\n')
+
+          const summarySystemPrompt = `You are a senior intelligence analyst synthesising a personal knowledge briefing. Your role is to transform individual module outputs into a cohesive executive overview that is MORE valuable than the sum of its parts.
+
+Your synthesis must:
+1. CONNECT cross-module patterns — identify themes, tensions, or opportunities that span multiple modules but that no single module surfaced
+2. PRIORITISE strategically — lead with the highest-impact insight, not a generic summary
+3. SURFACE actionable implications — what should the reader do, investigate, or watch based on the combined intelligence?
+4. PRESERVE specificity — reference concrete entities, projects, people, and data points by name. Never flatten rich findings into vague generalities
+
+Format your response as:
+**Key Insight:** [One powerful sentence capturing the most important cross-module finding]
+
+**Strategic Context:** [2-3 sentences connecting the dots across modules — what patterns emerge when you look at these findings together?]
+
+**Action Items:**
+- [Specific, actionable item derived from the combined intelligence]
+- [Another action item if warranted]
+
+**Watch List:** [1-2 sentences on emerging signals or risks worth monitoring]
+
+Keep the total response under 250 words. Every sentence must earn its place by adding insight beyond what the individual modules already stated.`
+
           executiveSummary = await generateWithGemini(
-            'You are a concise intelligence analyst. Write a 2-3 sentence executive summary.',
-            `Given these intelligence module outputs, highlight the most important findings and cross-module patterns:\n\n${summaryContext}`
+            summarySystemPrompt,
+            `Here are the intelligence module outputs from my knowledge graph. Synthesise them into a strategic executive overview:\n\n${summaryContext}`
           )
         } else {
           executiveSummary = 'All modules encountered errors during generation.'

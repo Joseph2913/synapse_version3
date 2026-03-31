@@ -285,7 +285,11 @@ export async function queryGraph(
   let responseFormatInstruction: string | undefined
   let thinkingBudget: number | undefined
 
-  if (mindsetId === 'auto') {
+  if (queryConfig?.skipClassification) {
+    // Digest modules: skip classification entirely, use factual mindset
+    effectiveMindsetId = 'analytical'
+    thinkingBudget = queryConfig?.thinkingBudget ?? 1024
+  } else if (mindsetId === 'auto') {
     // Build conversation context from last few messages for classifier
     const recentContext = conversationHistory.slice(-2).map(m => m.content).join(' ')
     classification = await classifyQuery(question, recentContext || undefined)
@@ -312,7 +316,7 @@ export async function queryGraph(
   // ─── Approach 5: Query Decomposition + Embedding (parallel) ──────────────
   onStepChange?.({ step: 'embedding', status: 'running' })
   const [subQueries, queryEmbedding] = await Promise.all([
-    decomposeQuery(question),
+    queryConfig?.skipDecomposition ? Promise.resolve([question]) : decomposeQuery(question),
     embedQuery(question),
   ])
   const hasEmbedding = queryEmbedding.length > 0

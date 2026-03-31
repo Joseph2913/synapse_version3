@@ -36,7 +36,6 @@ interface SkillCreateRequest {
 interface SkillCreatePanelProps {
   onClose: () => void
   onProcess: (input: SkillCreateRequest) => Promise<ProcessSkillSourceResult>
-  onOpenSkill: (skillId: string, message: string) => void
 }
 
 const MODES: Array<{ key: SkillInputMode; label: string; icon: LucideIcon }> = [
@@ -67,27 +66,6 @@ const INPUT_STYLE: React.CSSProperties = {
   boxSizing: 'border-box',
 }
 
-function buildActionMessage(result: ProcessSkillSourceResult): string {
-  switch (result.action) {
-    case 'created':
-    case 'dry_run_create':
-      return 'Skill created from the new source.'
-    case 'updated':
-    case 'dry_run_update':
-      return 'Existing skill updated with the new source.'
-    case 'skipped_duplicate':
-      return 'Source matched an existing skill and was linked to it.'
-    case 'skipped_below_threshold':
-      return 'The source was saved, but the extraction model did not find reusable methodology strong enough to create a skill.'
-    case 'skipped_no_content':
-      return 'The source was saved, but there was not enough usable content to extract a skill.'
-    case 'skipped_no_chunks':
-      return 'The source was saved, but it could not be chunked for skill processing.'
-    default:
-      return 'The source was saved, but skill extraction is still pending.'
-  }
-}
-
 function SectionHeader({ title, hint }: { title: string; hint: string }) {
   return (
     <div style={{ marginBottom: 8 }}>
@@ -104,7 +82,6 @@ function SectionHeader({ title, hint }: { title: string; hint: string }) {
 export function SkillCreatePanel({
   onClose,
   onProcess,
-  onOpenSkill,
 }: SkillCreatePanelProps) {
   const { session } = useAuth()
 
@@ -263,23 +240,16 @@ export function SkillCreatePanel({
         throw new Error('Provide at least 500 characters so the extraction model has enough material to build a reusable skill.')
       }
 
-      setStatusText('Creating skill source…')
-      const result = await onProcess(resolved)
-      const message = buildActionMessage(result)
+      setStatusText('Handing off to extraction pipeline…')
 
-      if (result.skillId) {
-        onOpenSkill(result.skillId, message)
-        return
-      }
-
-      setStatusText(message)
-      if (result.action === 'deferred') {
-        setWarning('The source was saved, but the extraction run deferred before a skill could be created.')
-      }
+      // onProcess will close this panel and run the pipeline in the background.
+      // State updates after this point are no-ops since the panel will be unmounted.
+      await onProcess(resolved)
     } catch (err) {
+      // Only reaches here if resolveInput() or the initial validation failed
+      // (before the panel is closed), or if onProcess rejects synchronously.
       setError(err instanceof Error ? err.message : 'Failed to process skill source.')
       setStatusText(null)
-    } finally {
       setProcessing(false)
     }
   }

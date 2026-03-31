@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { saveChunks } from './extractionPersistence'
 import { chunkSourceContent } from '../utils/chunking'
+import { runHeadlessExtraction } from './extractionPipeline'
 
 interface CreateManualAnchorInput {
   userId: string
@@ -140,19 +141,24 @@ export async function createManualAnchorFromScratch({
   }
 }
 
-async function createManualSkillSource({
+export async function createAndProcessSkillSource({
   userId,
+  accessToken,
   title,
   content,
   sourceType,
   sourceUrl,
   inputType,
-}: Omit<CreateSkillSourceInput, 'accessToken'>): Promise<string> {
+  onProgress,
+}: CreateSkillSourceInput & {
+  onProgress?: (step: string, message: string) => void
+}): Promise<ProcessSkillSourceResult> {
   const trimmedContent = content.trim()
   const trimmedTitle = title?.trim()
 
   if (!trimmedContent) throw new Error('Skill source content is required.')
 
+  // Step 1: Create the source row
   const { data: sourceRow, error: sourceError } = await supabase
     .from('knowledge_sources')
     .insert({
@@ -174,43 +180,66 @@ async function createManualSkillSource({
     throw new Error(sourceError?.message ?? 'Failed to save skill source.')
   }
 
-  const chunks = chunkSourceContent(trimmedContent)
-  if (chunks.length === 0) {
-    throw new Error('The content is too short to chunk into a reusable skill source.')
+  const sourceId = sourceRow.id
+
+  // Step 2: Run full extraction pipeline AND skill backfill in parallel.
+  // The extraction pipeline populates nodes, edges, chunks, embeddings,
+  // cross-connections, and anchor scoring — same as the Ingest page.
+  // The skill backfill reads the full source content to generate a skill.
+
+  const [, backfillResult] = await Promise.all([
+    // Full ingestion pipeline (reuses existing source row)
+    runHeadlessExtraction({
+      userId,
+      accessToken,
+      content: trimmedContent,
+      existingSourceId: sourceId,
+      metadata: {
+        title: trimmedTitle || `Manual skill source (${inputType})`,
+        sourceType,
+        sourceUrl,
+      },
+      onProgress,
+    }),
+
+    // Skill generation via backfill endpoint (reads full content from DB)
+    callSkillBackfill(accessToken, sourceId),
+  ])
+
+  // Look up the created skill ID if one was created
+  const skillName = backfillResult.skillName
+  let skillId: string | null = null
+
+  if (skillName) {
+    const { data: skillRow } = await supabase
+      .from('knowledge_skills')
+      .select('id')
+      .eq('name', skillName)
+      .maybeSingle()
+    skillId = skillRow?.id ?? null
   }
 
-  await saveChunks(userId, sourceRow.id, chunks, chunks.map(() => null))
-  return sourceRow.id
+  return {
+    sourceId,
+    action: backfillResult.action,
+    skillName,
+    skillId,
+  }
 }
 
-export async function createAndProcessSkillSource({
-  userId,
-  accessToken,
-  title,
-  content,
-  sourceType,
-  sourceUrl,
-  inputType,
-}: CreateSkillSourceInput): Promise<ProcessSkillSourceResult> {
-  const sourceId = await createManualSkillSource({
-    userId,
-    title,
-    content,
-    sourceType,
-    sourceUrl,
-    inputType,
-  })
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
+async function callSkillBackfill(
+  accessToken: string,
+  sourceId: string,
+): Promise<{ action: string; skillName: string | null }> {
   const response = await fetch('/api/skills/backfill', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({
-      batchSize: 1,
-      sourceId,
-    }),
+    body: JSON.stringify({ batchSize: 1, sourceId }),
   })
 
   if (!response.ok) {
@@ -228,23 +257,11 @@ export async function createAndProcessSkillSource({
     }
   }
 
-  const detail = payload.batch?.details?.find(item => item.sourceId === sourceId) ?? payload.batch?.details?.[0]
-  const skillName = detail?.skillName ?? null
-  let skillId: string | null = null
-
-  if (skillName) {
-    const { data: skillRow } = await supabase
-      .from('knowledge_skills')
-      .select('id')
-      .eq('name', skillName)
-      .maybeSingle()
-    skillId = skillRow?.id ?? null
-  }
+  const detail = payload.batch?.details?.find(item => item.sourceId === sourceId)
+    ?? payload.batch?.details?.[0]
 
   return {
-    sourceId,
     action: detail?.action ?? 'deferred',
-    skillName,
-    skillId,
+    skillName: detail?.skillName ?? null,
   }
 }

@@ -13,6 +13,12 @@ interface SourceDetailCardProps {
   sourceId: string
   onClose: () => void
   onNavigateToSource: (sourceId: string) => void
+  /** When true, renders content only without the absolute-positioned panel wrapper */
+  bare?: boolean
+  /** Override default "Chat with this source" behavior (default navigates to /ask) */
+  onChatWithSourceOverride?: (source: { id: string; title: string; summary: string | null }) => void
+  /** Override default "Compare with related sources" behavior */
+  onCompareWithSourcesOverride?: (sourceA: { id: string; title: string }, sourceB: { id: string; title: string }) => void
 }
 
 const PANEL_WIDTH = 370
@@ -36,6 +42,9 @@ export function SourceDetailCard({
   sourceId,
   onClose,
   onNavigateToSource,
+  bare = false,
+  onChatWithSourceOverride,
+  onCompareWithSourcesOverride,
 }: SourceDetailCardProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -57,34 +66,67 @@ export function SourceDetailCard({
   const handleWheel = useCallback((e: WheelEvent) => { e.stopPropagation() }, [])
 
   useEffect(() => {
+    if (bare) return // Skip wheel capture in bare mode
     const el = panelRef.current
     if (!el) return
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
-  }, [handleWheel])
+  }, [handleWheel, bare])
 
   // Chat with source
   const handleChatWithSource = useCallback(() => {
     if (!detail) return
+    if (onChatWithSourceOverride) {
+      onChatWithSourceOverride({ id: detail.sourceId, title: detail.title, summary: detail.summary })
+      return
+    }
     const context = buildSourceChatContext({
       id: detail.sourceId,
       title: detail.title,
       summary: detail.summary,
     })
     navigate('/ask', { state: { chatContext: context } })
-  }, [detail, navigate])
+  }, [detail, navigate, onChatWithSourceOverride])
 
   // Compare with related sources
   const handleCompareWithSources = useCallback(() => {
     if (!detail || detail.relatedSources.length === 0) return
-    // Compare with the top related source
     const topRelated = detail.relatedSources[0]!
+    if (onCompareWithSourcesOverride) {
+      onCompareWithSourcesOverride(
+        { id: detail.sourceId, title: detail.title },
+        { id: topRelated.sourceId, title: topRelated.title },
+      )
+      return
+    }
     const context = buildSourceCompareContext(
       { id: detail.sourceId, title: detail.title },
       { id: topRelated.sourceId, title: topRelated.title },
     )
     navigate('/ask', { state: { chatContext: context } })
-  }, [detail, navigate])
+  }, [detail, navigate, onCompareWithSourcesOverride])
+
+  const content = loading ? (
+    <div className="flex items-center justify-center flex-1">
+      <Loader2 size={20} style={{ color: 'var(--color-text-secondary)', animation: 'spin 1s linear infinite' }} />
+    </div>
+  ) : !detail ? (
+    <div className="flex items-center justify-center flex-1">
+      <span className="font-body" style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Source not found</span>
+    </div>
+  ) : (
+    <CardContent
+      detail={detail}
+      onClose={onClose}
+      onNavigateToSource={onNavigateToSource}
+      onChatWithSource={handleChatWithSource}
+      onCompareWithSources={handleCompareWithSources}
+    />
+  )
+
+  if (bare) {
+    return <div className="flex flex-col h-full">{content}</div>
+  }
 
   return (
     <div
@@ -98,23 +140,7 @@ export function SourceDetailCard({
       }}
       onClick={e => e.stopPropagation()}
     >
-      {loading ? (
-        <div className="flex items-center justify-center flex-1">
-          <Loader2 size={20} style={{ color: 'var(--color-text-secondary)', animation: 'spin 1s linear infinite' }} />
-        </div>
-      ) : !detail ? (
-        <div className="flex items-center justify-center flex-1">
-          <span className="font-body" style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Source not found</span>
-        </div>
-      ) : (
-        <CardContent
-          detail={detail}
-          onClose={onClose}
-          onNavigateToSource={onNavigateToSource}
-          onChatWithSource={handleChatWithSource}
-          onCompareWithSources={handleCompareWithSources}
-        />
-      )}
+      {content}
     </div>
   )
 }

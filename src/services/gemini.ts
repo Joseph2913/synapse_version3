@@ -287,7 +287,7 @@ function buildRAGSystemPrompt(context: RAGContext, sourceContextNote?: string, m
   const chunksText = context.sourceChunks.length > 0
     ? context.sourceChunks
         .map((c, i) =>
-          `--- Chunk ${i + 1} | Source: "${c.sourceTitle}" | Type: ${c.sourceType} | Date: ${new Date(c.sourceCreatedAt).toLocaleDateString()} ---\n${c.content}`
+          `--- Chunk ${i + 1} | Source: "${c.sourceTitle}" | source_id: "${c.source_id}" | Type: ${c.sourceType} | Date: ${new Date(c.sourceCreatedAt).toLocaleDateString()} ---\n${c.content}`
         )
         .join('\n\n')
     : '(No source chunks were retrieved for this query)'
@@ -448,12 +448,16 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
     ? (parsed.citations as Record<string, unknown>[])
         .filter(c => typeof c === 'object' && c !== null)
         .map((c, i) => ({
-          index: typeof c['index'] === 'number' ? c['index'] : i + 1,
+          index: typeof c['index'] === 'number' ? c['index']
+            : typeof c['index'] === 'string' && /^\d+$/.test(c['index']) ? parseInt(c['index'], 10)
+            : i + 1,
           label: typeof c['label'] === 'string' ? c['label'] : '',
           entity_type: typeof c['entity_type'] === 'string' ? c['entity_type'] : 'Topic',
           node_id: typeof c['node_id'] === 'string' && c['node_id'] !== 'null' ? c['node_id'] : null,
           source_id: typeof c['source_id'] === 'string' && c['source_id'] !== 'null' ? c['source_id'] : null,
-          chunk_index: typeof c['chunk_index'] === 'number' ? c['chunk_index'] : null,
+          chunk_index: typeof c['chunk_index'] === 'number' ? c['chunk_index']
+            : typeof c['chunk_index'] === 'string' && /^\d+$/.test(c['chunk_index']) ? parseInt(c['chunk_index'], 10)
+            : null,
         }))
     : []
 
@@ -471,6 +475,43 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
 }
 
 // ─── RAG: Query Decomposition ─────────────────────────────────────────────────
+
+/**
+ * Lightweight direct Gemini text generation (no RAG, no JSON parsing).
+ * Used for digest executive summaries and other synthesis tasks where
+ * we already have the context and just need LLM generation.
+ */
+export async function generateText(
+  systemPrompt: string,
+  userPrompt: string,
+  options?: { temperature?: number; maxOutputTokens?: number }
+): Promise<string> {
+  if (!GEMINI_API_KEY) throw new ExtractionError('VITE_GEMINI_API_KEY is not configured')
+
+  const response = await fetchWithRetry(
+    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        generationConfig: {
+          temperature: options?.temperature ?? 0.4,
+          maxOutputTokens: options?.maxOutputTokens ?? 4096,
+        },
+      }),
+    }
+  )
+
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
+  }
+  const parts = data.candidates?.[0]?.content?.parts ?? []
+  const textPart = parts.find(p => p.thought !== true && typeof p.text === 'string')
+    ?? parts.find(p => typeof p.text === 'string')
+  return textPart?.text ?? ''
+}
 
 /**
  * For complex multi-concept queries, decomposes into 2-3 focused sub-queries.
@@ -567,7 +608,7 @@ export async function generateRAGResponse(
   // Thinking budgets are disabled for now until Google adds JSON + thinking support.
   const generationConfig: Record<string, unknown> = {
     temperature: temperatureOverride ?? 0.3,
-    maxOutputTokens: maxOutputTokens ?? 8192,
+    maxOutputTokens: maxOutputTokens ?? 16384,
     responseMimeType: 'application/json',
   }
 
@@ -585,12 +626,22 @@ export async function generateRAGResponse(
   )
 
   const data = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
+    candidates?: Array<{
+      content?: { parts?: Array<{ text?: string; thought?: boolean }> }
+      finishReason?: string
+    }>
+  }
+
+  const candidate = data.candidates?.[0]
+  const finishReason = candidate?.finishReason
+
+  if (finishReason === 'MAX_TOKENS') {
+    console.warn('[gemini] RAG response was truncated (MAX_TOKENS). Consider increasing maxOutputTokens.')
   }
 
   // Gemini 2.5 Flash may return thought parts before the real answer.
   // Find the first non-thought text part, or fall back to any text part.
-  const parts = data.candidates?.[0]?.content?.parts ?? []
+  const parts = candidate?.content?.parts ?? []
   const textPart = parts.find(p => p.thought !== true && typeof p.text === 'string')
     ?? parts.find(p => typeof p.text === 'string')
   const responseText = textPart?.text
@@ -600,7 +651,7 @@ export async function generateRAGResponse(
     throw new ExtractionError('Empty response from Gemini', data)
   }
 
-  console.debug('[gemini] RAG response length:', responseText.length, '| starts with:', responseText.slice(0, 80))
+  console.debug('[gemini] RAG response length:', responseText.length, '| finishReason:', finishReason, '| starts with:', responseText.slice(0, 80))
 
   return parseRAGResponse(responseText)
 }
