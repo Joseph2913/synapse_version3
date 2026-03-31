@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { UserProfile, ExtractionSettings, KnowledgeNode, KnowledgeEdge, KnowledgeSource } from '../types/database'
+import type { UserProfile, ExtractionSettings, KnowledgeNode, KnowledgeEdge, KnowledgeSource, KnowledgeSkill } from '../types/database'
 import type { NodeFilters, PaginationOptions, NodeWithMeta, NodeNeighbor } from '../types/nodes'
 import type { CrossConnection } from '../types/feed'
 import type { ExtractionSession } from '../types/extraction'
@@ -2146,4 +2146,363 @@ export async function fetchDirectEdges(
   }
 
   return (data ?? []) as KnowledgeEdge[]
+}
+
+// ─── HOME DASHBOARD QUERIES ─────────────────────────────────────────────
+
+export interface HomeDashboardStats {
+  totalSources: number
+  totalNodes: number
+  activeAnchors: number
+  activeSkills: number
+  sourcesDelta7d: number
+  nodesDelta7d: number
+  anchorsDelta7d: number
+  skillsDelta7d: number
+}
+
+export async function fetchHomeDashboardStats(): Promise<HomeDashboardStats> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+  const [
+    sourcesTotal, nodesTotal, anchorsTotal, skillsTotal,
+    sourcesDelta, nodesDelta, anchorsDelta, skillsDelta,
+  ] = await Promise.all([
+    supabase.from('knowledge_sources').select('id', { count: 'exact', head: true }),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('is_anchor', true),
+    supabase.from('knowledge_skills').select('id', { count: 'exact', head: true }),
+    supabase.from('knowledge_sources').select('id', { count: 'exact', head: true }).gte('created_at', sevenDaysAgo),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).gte('created_at', sevenDaysAgo),
+    supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('is_anchor', true).gte('created_at', sevenDaysAgo),
+    supabase.from('knowledge_skills').select('id', { count: 'exact', head: true }).gte('created_at', sevenDaysAgo),
+  ])
+
+  return {
+    totalSources: sourcesTotal.count ?? 0,
+    totalNodes: nodesTotal.count ?? 0,
+    activeAnchors: anchorsTotal.count ?? 0,
+    activeSkills: skillsTotal.count ?? 0,
+    sourcesDelta7d: sourcesDelta.count ?? 0,
+    nodesDelta7d: nodesDelta.count ?? 0,
+    anchorsDelta7d: anchorsDelta.count ?? 0,
+    skillsDelta7d: skillsDelta.count ?? 0,
+  }
+}
+
+export async function fetchRecentSources(limit = 5): Promise<KnowledgeSource[]> {
+  const { data, error } = await supabase
+    .from('knowledge_sources')
+    .select('id, title, source_type, source_url, metadata, summary, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error('[supabase] fetchRecentSources failed:', error.message)
+    return []
+  }
+  return (data ?? []) as KnowledgeSource[]
+}
+
+export async function fetchSourceEntityCounts(
+  sourceIds: string[]
+): Promise<Record<string, number>> {
+  if (sourceIds.length === 0) return {}
+
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('source_id')
+    .in('source_id', sourceIds)
+
+  if (error || !data) return {}
+
+  const counts: Record<string, number> = {}
+  for (const row of data as { source_id: string | null }[]) {
+    if (row.source_id) {
+      counts[row.source_id] = (counts[row.source_id] ?? 0) + 1
+    }
+  }
+  return counts
+}
+
+export async function fetchRecentAnchors(limit = 4): Promise<KnowledgeNode[]> {
+  const { data, error } = await supabase
+    .from('knowledge_nodes')
+    .select('id, label, entity_type, description, is_anchor, created_at, user_id, source_id')
+    .eq('is_anchor', true)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error('[supabase] fetchRecentAnchors failed:', error.message)
+    return []
+  }
+  return (data ?? []) as KnowledgeNode[]
+}
+
+export async function fetchAnchorConnectionCounts(
+  anchorIds: string[]
+): Promise<Record<string, number>> {
+  if (anchorIds.length === 0) return {}
+
+  const orFilter = anchorIds
+    .map(id => `source_node_id.eq.${id},target_node_id.eq.${id}`)
+    .join(',')
+
+  const { data, error } = await supabase
+    .from('knowledge_edges')
+    .select('source_node_id, target_node_id')
+    .or(orFilter)
+
+  if (error || !data) return {}
+
+  const counts: Record<string, number> = {}
+  for (const edge of data as { source_node_id: string; target_node_id: string }[]) {
+    for (const id of anchorIds) {
+      if (edge.source_node_id === id || edge.target_node_id === id) {
+        counts[id] = (counts[id] ?? 0) + 1
+      }
+    }
+  }
+  return counts
+}
+
+// TODO: verify skills table — if knowledge_skills doesn't exist, fall back to
+// knowledge_nodes WHERE entity_type = 'Skill'
+export async function fetchRecentSkills(limit = 3): Promise<KnowledgeSkill[]> {
+  const { data, error } = await supabase
+    .from('knowledge_skills')
+    .select('id, name, title, description, domain, status, confidence, created_at, user_id, tags, content, source_ids, source_count, instructional_ratio, generalizability, structural_density, embedding, usage_count, last_used_at, updated_at')
+    .order('usage_count', { ascending: false })
+    .order('confidence', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error('[supabase] fetchRecentSkills failed:', error.message)
+    return []
+  }
+  return (data ?? []) as KnowledgeSkill[]
+}
+
+export interface CrossConnectionEdge {
+  id: string
+  sourceNode: { id: string; label: string; entity_type: string; source_id: string }
+  targetNode: { id: string; label: string; entity_type: string; source_id: string }
+  relation_type: string
+  sourceTitles: string[]
+  created_at: string
+}
+
+export async function fetchCrossConnectionEdges(
+  limit = 5
+): Promise<CrossConnectionEdge[]> {
+  // Step 1: Fetch recent edges
+  const { data: edges, error: edgeError } = await supabase
+    .from('knowledge_edges')
+    .select('id, relation_type, created_at, source_node_id, target_node_id')
+    .order('created_at', { ascending: false })
+    .limit(limit * 3)
+
+  if (edgeError || !edges || edges.length === 0) return []
+
+  // Step 2: Collect all node IDs and fetch nodes
+  const nodeIds = new Set<string>()
+  for (const edge of edges as { source_node_id: string; target_node_id: string }[]) {
+    nodeIds.add(edge.source_node_id)
+    nodeIds.add(edge.target_node_id)
+  }
+
+  const { data: nodes, error: nodeError } = await supabase
+    .from('knowledge_nodes')
+    .select('id, label, entity_type, source_id')
+    .in('id', Array.from(nodeIds))
+
+  if (nodeError || !nodes) return []
+
+  const nodeMap = new Map<string, { id: string; label: string; entity_type: string; source_id: string | null }>()
+  for (const n of nodes as { id: string; label: string; entity_type: string; source_id: string | null }[]) {
+    nodeMap.set(n.id, n)
+  }
+
+  // Step 3: Filter to cross-source edges (source_id on both nodes must differ)
+  const crossEdges: Array<{
+    id: string
+    relation_type: string
+    created_at: string
+    sn: { id: string; label: string; entity_type: string; source_id: string }
+    tn: { id: string; label: string; entity_type: string; source_id: string }
+  }> = []
+
+  for (const edge of edges as { id: string; relation_type: string | null; created_at: string; source_node_id: string; target_node_id: string }[]) {
+    const sn = nodeMap.get(edge.source_node_id)
+    const tn = nodeMap.get(edge.target_node_id)
+    if (!sn?.source_id || !tn?.source_id) continue
+    if (sn.source_id === tn.source_id) continue
+    crossEdges.push({
+      id: edge.id,
+      relation_type: edge.relation_type ?? 'relates_to',
+      created_at: edge.created_at,
+      sn: { id: sn.id, label: sn.label, entity_type: sn.entity_type, source_id: sn.source_id },
+      tn: { id: tn.id, label: tn.label, entity_type: tn.entity_type, source_id: tn.source_id },
+    })
+    if (crossEdges.length >= limit) break
+  }
+
+  if (crossEdges.length === 0) return []
+
+  // Step 4: Fetch source titles for attribution
+  const sourceIdSet = new Set<string>()
+  for (const ce of crossEdges) {
+    sourceIdSet.add(ce.sn.source_id)
+    sourceIdSet.add(ce.tn.source_id)
+  }
+
+  const { data: sources } = await supabase
+    .from('knowledge_sources')
+    .select('id, title')
+    .in('id', Array.from(sourceIdSet))
+
+  const sourceMap = new Map<string, string>()
+  if (sources) {
+    for (const s of sources as { id: string; title: string | null }[]) {
+      sourceMap.set(s.id, s.title ?? 'Untitled')
+    }
+  }
+
+  return crossEdges.map(ce => ({
+    id: ce.id,
+    sourceNode: ce.sn,
+    targetNode: ce.tn,
+    relation_type: ce.relation_type,
+    sourceTitles: [
+      sourceMap.get(ce.sn.source_id) ?? 'Untitled',
+      sourceMap.get(ce.tn.source_id) ?? 'Untitled',
+    ],
+    created_at: ce.created_at,
+  }))
+}
+
+export interface PipelineStatus {
+  lastScanAt: string | null
+  lastScanVideosFound: number
+  pendingQueueCount: number
+  failedQueueCount: number
+  lastProcessedSource: { title: string; created_at: string } | null
+}
+
+export async function fetchPipelineStatus(): Promise<PipelineStatus> {
+  type ScanRow = { created_at: string; videos_found: number }
+  type SourceRow = { title: string | null; created_at: string }
+
+  let scanData: ScanRow | null = null
+  let pendingCount = 0
+  let failedCount = 0
+  let lastSource: SourceRow | null = null
+
+  try {
+    const scanResult = await supabase
+      .from('youtube_scan_history')
+      .select('created_at, videos_found')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    scanData = scanResult.data as ScanRow | null
+  } catch { /* youtube tables may not exist */ }
+
+  try {
+    const pendingResult = await supabase
+      .from('youtube_ingestion_queue')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'pending')
+    pendingCount = pendingResult.count ?? 0
+  } catch { /* ignore */ }
+
+  try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const failedResult = await supabase
+      .from('youtube_ingestion_queue')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'failed')
+      .gte('created_at', sevenDaysAgo)
+    failedCount = failedResult.count ?? 0
+  } catch { /* ignore */ }
+
+  try {
+    const sourceResult = await supabase
+      .from('knowledge_sources')
+      .select('title, created_at')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    lastSource = sourceResult.data as SourceRow | null
+  } catch { /* ignore */ }
+
+  return {
+    lastScanAt: scanData?.created_at ?? null,
+    lastScanVideosFound: scanData?.videos_found ?? 0,
+    pendingQueueCount: pendingCount,
+    failedQueueCount: failedCount,
+    lastProcessedSource: lastSource
+      ? { title: lastSource.title ?? 'Untitled', created_at: lastSource.created_at }
+      : null,
+  }
+}
+
+export interface KnowledgeSnapshot {
+  entityTypeCounts: Array<{ entity_type: string; count: number }>
+  topAnchors: Array<{ id: string; label: string; entity_type: string; connectionCount: number }>
+  sourceTypeCounts: Array<{ source_type: string; count: number }>
+}
+
+export async function fetchKnowledgeSnapshot(): Promise<KnowledgeSnapshot> {
+  // Query 1: Entity type distribution
+  const { data: entityData } = await supabase
+    .from('knowledge_nodes')
+    .select('entity_type')
+
+  const entityCounts: Record<string, number> = {}
+  if (entityData) {
+    for (const row of entityData as { entity_type: string }[]) {
+      entityCounts[row.entity_type] = (entityCounts[row.entity_type] ?? 0) + 1
+    }
+  }
+  const entityTypeCounts = Object.entries(entityCounts)
+    .map(([entity_type, count]) => ({ entity_type, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+
+  // Query 2: Top anchors with connection counts
+  const { data: anchorData } = await supabase
+    .from('knowledge_nodes')
+    .select('id, label, entity_type')
+    .eq('is_anchor', true)
+    .limit(8)
+
+  let topAnchors: Array<{ id: string; label: string; entity_type: string; connectionCount: number }> = []
+  if (anchorData && anchorData.length > 0) {
+    const anchorIds = (anchorData as { id: string }[]).map(a => a.id)
+    const connCounts = await fetchAnchorConnectionCounts(anchorIds)
+    topAnchors = (anchorData as { id: string; label: string; entity_type: string }[])
+      .map(a => ({ ...a, connectionCount: connCounts[a.id] ?? 0 }))
+      .sort((a, b) => b.connectionCount - a.connectionCount)
+      .slice(0, 4)
+  }
+
+  // Query 3: Source type distribution
+  const { data: sourceData } = await supabase
+    .from('knowledge_sources')
+    .select('source_type')
+
+  const sourceCounts: Record<string, number> = {}
+  if (sourceData) {
+    for (const row of sourceData as { source_type: string | null }[]) {
+      const st = row.source_type ?? 'Other'
+      sourceCounts[st] = (sourceCounts[st] ?? 0) + 1
+    }
+  }
+  const sourceTypeCounts = Object.entries(sourceCounts)
+    .map(([source_type, count]) => ({ source_type, count }))
+    .sort((a, b) => b.count - a.count)
+
+  return { entityTypeCounts, topAnchors, sourceTypeCounts }
 }

@@ -10,7 +10,9 @@ import { NodeDetail } from '../panels/NodeDetail'
 import { SourceDetail } from '../panels/SourceDetail'
 import { AskRightPanel } from '../ask/AskRightPanel'
 import { McpAccessPanel } from '../automate/McpAccessPanel'
+import { KnowledgeSnapshotPanel } from '../home/KnowledgeSnapshotPanel'
 import type { KnowledgeNode } from '../../types/database'
+import type { KnowledgeSnapshot, PipelineStatus } from '../../services/supabase'
 
 const MIN_WIDTH = 240
 const MAX_WIDTH = 560
@@ -136,6 +138,19 @@ export function RightPanel() {
   const location = useLocation()
   const { rightPanelContent, clearRightPanel, askContext, setRightPanelContent } = useGraphContext()
   const isAskView = location.pathname === '/ask'
+  const isHomeView = location.pathname === '/'
+
+  // Home view: fetch snapshot data for the Knowledge Snapshot panel
+  const [homeSnapshot, setHomeSnapshot] = useState<KnowledgeSnapshot | null>(null)
+  const [homePipeline, setHomePipeline] = useState<PipelineStatus | null>(null)
+
+  useEffect(() => {
+    if (!isHomeView) return
+    import('../../services/supabase').then(({ fetchKnowledgeSnapshot, fetchPipelineStatus }) => {
+      fetchKnowledgeSnapshot().then(setHomeSnapshot).catch(() => {})
+      fetchPipelineStatus().then(setHomePipeline).catch(() => {})
+    })
+  }, [isHomeView])
 
   // ── Resizable width ────────────────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadWidth)
@@ -242,6 +257,63 @@ export function RightPanel() {
         </div>
       )
     }
+    if (rightPanelContent?.type === 'crossConnection') {
+      const { sourceNode, targetNode, relation_type, sourceTitles } = rightPanelContent.data
+      return (
+        <div className="flex flex-col gap-4">
+          <button
+            type="button"
+            onClick={clearRightPanel}
+            className="font-body font-semibold cursor-pointer text-left"
+            style={{
+              fontSize: 11,
+              color: 'var(--color-text-secondary)',
+              background: 'none',
+              border: 'none',
+              padding: '0 0 8px 0',
+              borderBottom: '1px solid var(--border-subtle)',
+            }}
+          >
+            ← Back
+          </button>
+
+          {/* Node A */}
+          <div className="bg-bg-content border border-border-subtle rounded-[10px] p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Dot type={sourceNode.entity_type} size={7} />
+              <span className="text-[12px] font-[600] text-text-primary">{sourceNode.label}</span>
+            </div>
+            <span className="text-[10px] text-text-secondary">{sourceNode.entity_type}</span>
+          </div>
+
+          {/* Relation */}
+          <div className="flex justify-center">
+            <span className="text-[10px] font-[600] text-accent-500 bg-accent-50 px-[8px] py-[3px] rounded">
+              {relation_type.replace(/_/g, ' ')}
+            </span>
+          </div>
+
+          {/* Node B */}
+          <div className="bg-bg-content border border-border-subtle rounded-[10px] p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Dot type={targetNode.entity_type} size={7} />
+              <span className="text-[12px] font-[600] text-text-primary">{targetNode.label}</span>
+            </div>
+            <span className="text-[10px] text-text-secondary">{targetNode.entity_type}</span>
+          </div>
+
+          {/* Source Attribution */}
+          <div className="border-t border-border-subtle pt-3 mt-1">
+            <div className="text-[10px] uppercase tracking-[0.06em] font-[700] text-text-secondary font-display mb-2">
+              Sources
+            </div>
+            {sourceTitles.map((title, i) => (
+              <p key={i} className="text-[11px] text-text-body mb-1">{title}</p>
+            ))}
+          </div>
+        </div>
+      )
+    }
     if (isAskView) {
       return (
         <div className="flex flex-col gap-3">
@@ -254,13 +326,37 @@ export function RightPanel() {
         </div>
       )
     }
+    if (isHomeView) {
+      return (
+        <KnowledgeSnapshotPanel
+          snapshot={homeSnapshot}
+          pipeline={homePipeline}
+          onAnchorClick={(anchorId) => {
+            // Fetch node and show in panel — for now, use a lightweight approach
+            supabase
+              .from('knowledge_nodes')
+              .select('*')
+              .eq('id', anchorId)
+              .maybeSingle()
+              .then(({ data }) => {
+                if (data) setRightPanelContent({ type: 'node', data: data as KnowledgeNode })
+              })
+          }}
+        />
+      )
+    }
     return <QuickAccess />
   }
 
   const panelTitle = () => {
     if (rightPanelContent?.type === 'mcp-access') return 'API & MCP Access'
     if (rightPanelContent?.type === 'ask_context') return 'Context'
-    if (!rightPanelContent) return isAskView ? 'Context' : 'Quick Access'
+    if (rightPanelContent?.type === 'crossConnection') return 'Cross-Connection'
+    if (!rightPanelContent) {
+      if (isAskView) return 'Context'
+      if (isHomeView) return 'Knowledge Snapshot'
+      return 'Quick Access'
+    }
     if (rightPanelContent.type === 'node') return 'Entity Detail'
     if (rightPanelContent.type === 'source') return 'Source Detail'
     return 'Detail'

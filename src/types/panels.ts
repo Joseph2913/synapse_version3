@@ -1,5 +1,6 @@
 import type { KnowledgeNode, KnowledgeSource } from './database'
 import type { RAGResponseContext } from './rag'
+import type { CrossConnectionEdge } from '../services/supabase'
 
 export type RightPanelContent =
   | { type: 'node'; data: KnowledgeNode }
@@ -7,6 +8,7 @@ export type RightPanelContent =
   | { type: 'feed'; data: FeedItem }
   | { type: 'ask_context'; data: RAGResponseContext }
   | { type: 'mcp-access'; data: null }
+  | { type: 'crossConnection'; data: CrossConnectionEdge }
   | null
 
 export interface FeedItem {

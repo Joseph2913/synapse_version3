@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Search } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useSettings } from '../../hooks/useSettings'
 import { supabase } from '../../services/supabase'
-import { Kbd } from '../ui/Kbd'
 
 const VIEW_TITLES: Record<string, string> = {
   '/': 'Home',
@@ -12,6 +10,7 @@ const VIEW_TITLES: Record<string, string> = {
   '/ask': 'Ask',
   '/ingest': 'Ingest',
   '/orient': 'Orient',
+  '/sources': 'Sources',
   '/signals': 'Signals',
   '/skills': 'Signals',
   '/anchors': 'Signals',
@@ -22,7 +21,7 @@ interface TopBarProps {
   onOpenCommandPalette: () => void
 }
 
-export function TopBar({ onOpenSettings, onOpenCommandPalette }: TopBarProps) {
+export function TopBar({ onOpenSettings }: TopBarProps) {
   const location = useLocation()
   const { user } = useAuth()
   const { profile } = useSettings()
@@ -49,7 +48,7 @@ export function TopBar({ onOpenSettings, onOpenCommandPalette }: TopBarProps) {
 
   return (
     <header
-      className="flex items-center shrink-0"
+      className="flex items-center justify-between shrink-0"
       style={{
         height: 52,
         background: 'var(--color-accent-50)',
@@ -58,47 +57,13 @@ export function TopBar({ onOpenSettings, onOpenCommandPalette }: TopBarProps) {
         paddingRight: 24,
       }}
     >
-      {/* View title — left side, next to Synapse logo */}
+      {/* View title */}
       <span
         className="font-display font-bold text-text-primary shrink-0"
-        style={{ fontSize: 15, letterSpacing: '-0.01em', marginRight: 24 }}
+        style={{ fontSize: 15, letterSpacing: '-0.01em' }}
       >
         {viewTitle}
       </span>
-
-      {/* Search bar — centered */}
-      <div className="flex-1 flex justify-center">
-        <button
-          type="button"
-          onClick={onOpenCommandPalette}
-          className="flex items-center gap-2 cursor-pointer font-body"
-          style={{
-            width: '100%',
-            maxWidth: 420,
-            padding: '7px 12px',
-            fontSize: 13,
-            background: 'rgba(255,255,255,0.7)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 10,
-            color: 'var(--color-text-placeholder)',
-            transition: 'border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.borderColor = 'rgba(214,58,0,0.2)'
-            e.currentTarget.style.background = 'rgba(255,255,255,0.9)'
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.borderColor = 'var(--border-subtle)'
-            e.currentTarget.style.background = 'rgba(255,255,255,0.7)'
-          }}
-        >
-          <Search size={14} style={{ flexShrink: 0, color: 'var(--color-text-secondary)' }} />
-          <span className="flex-1" style={{ textAlign: 'left' }}>
-            Search graph…
-          </span>
-          <Kbd>⌘K</Kbd>
-        </button>
-      </div>
 
       {/* Right side — metadata + avatar */}
       <div className="flex items-center gap-4 shrink-0">

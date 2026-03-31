@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Home, Compass, MessageSquare, Zap, Navigation, Radio, Search, Settings, type LucideIcon } from 'lucide-react'
+import { Home, Compass, MessageSquare, Zap, Navigation, Database, Radio, Search, Settings, type LucideIcon } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { Kbd } from '../ui/Kbd'
 import { SynapseLogo } from '../shared/SynapseLogo'
@@ -11,6 +11,7 @@ const NAV_ITEMS: Array<{ id: string; label: string; path: string; icon: LucideIc
   { id: 'ask', label: 'Ask', path: '/ask', icon: MessageSquare },
   { id: 'ingest', label: 'Ingest', path: '/ingest', icon: Zap },
   { id: 'orient', label: 'Orient', path: '/orient', icon: Navigation },
+  { id: 'sources', label: 'Sources', path: '/sources', icon: Database },
   { id: 'signals', label: 'Signals', path: '/signals', icon: Radio },
 ]
 

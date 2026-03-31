@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { AppShell } from '../components/layout/AppShell'
 import { HomeView } from '../views/HomeView'
@@ -7,6 +8,8 @@ import { IngestView } from '../views/IngestView'
 import { OrientView } from '../views/OrientView'
 import { SignalsView } from '../views/SignalsView'
 import OnboardingDemoPage from '../views/OnboardingDemoPage'
+
+const SourcesView = lazy(() => import('../views/SourcesView'))
 
 const router = createBrowserRouter([
   // Standalone pages — no auth, no providers
@@ -20,7 +23,8 @@ const router = createBrowserRouter([
       { path: '/ingest', element: <IngestView /> },
       { path: '/capture', element: <Navigate to="/ingest" replace /> },
       { path: '/automate', element: <Navigate to="/ingest" replace /> },
-      { path: '/pipeline', element: <Navigate to="/ingest" replace /> },
+      { path: '/sources', element: <Suspense fallback={null}><SourcesView /></Suspense> },
+      { path: '/pipeline', element: <Navigate to="/sources" replace /> },
       { path: '/orient', element: <OrientView /> },
       { path: '/signals', element: <SignalsView /> },
       { path: '/skills', element: <Navigate to="/signals?mode=skills" replace /> },
