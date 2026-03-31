@@ -320,7 +320,7 @@ ${systemDirective ? `CONTEXT DIRECTIVE:\n${systemDirective}\n\n` : ''}${response
 3. SPECIFICITY — Include specific names, dates, quotes, decisions, questions raised, action items, and any numbers or metrics mentioned in the source material.
 4. MEETINGS & SESSIONS — When asked about a meeting or session: name who attended, who facilitated, what topics were covered (with detail on each), what questions were raised, what was decided, and any follow-up actions.
 5. RELATIONSHIPS — Use the entity relationship paths to explain HOW concepts connect to each other.
-6. FORMATTING — Write in clear flowing prose. Use **bold** for people's names, key terms, product names, and important facts. Use natural paragraph breaks for readability.
+6. FORMATTING — Write in clear flowing prose. Use **bold** for people's names, key terms, product names, and important facts. Use natural paragraph breaks for readability. IMPORTANT: Never use literal double-quote characters (") inside your answer text — they break JSON. Use single quotes or **bold** instead. Write the **S** tier, not the "S" tier. Write the **My Artifacts** page, not the "My Artifacts" page.
 7. "LATEST" QUERIES — When asked about "the latest", "most recent", or "newest", use the dates in chunk headers and the matched documents list to identify the correct content.
 8. HONESTY — Only state you lack information if the context is genuinely empty. If partial context exists, use it and note what is and isn't covered.
 9. INLINE CITATIONS — Use [N] numbered references inline in your answer text (e.g. "The project launched in Q3 [1] and expanded later [2]"). Every factual claim should have a citation. Cite source chunks with their chunk number. Ensure every [N] in the answer has a matching entry in the citations array.${isMultiSource ? `
@@ -389,12 +389,55 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
   try {
     parsed = JSON.parse(cleaned) as Record<string, unknown>
   } catch {
-    // JSON might be truncated or contain syntax issues. Try multiple fix-up strategies:
-    let fixAttempt = cleaned
-      // Fix 1: Remove trailing commas
-      .replace(/,\s*$/, '')
+    // JSON might contain unescaped quotes or be truncated. Try multiple fix-up strategies:
 
-    // Fix 2: Count braces to close any that are left open
+    // Fix 1: Escape unescaped double quotes inside JSON string values.
+    // Gemini sometimes writes "the "S" tier" instead of "the \"S\" tier".
+    // Walk through character by character: when inside a string, if we hit a "
+    // that would close the string, check if the next non-space char is a valid
+    // JSON structural character (,}]:). If not, it's an unescaped interior quote.
+    let fixAttempt = ''
+    {
+      let inStr = false
+      let esc = false
+      for (let idx = 0; idx < cleaned.length; idx++) {
+        const ch = cleaned[idx]!
+        if (esc) { fixAttempt += ch; esc = false; continue }
+        if (ch === '\\' && inStr) { fixAttempt += ch; esc = true; continue }
+
+        if (ch === '"') {
+          if (!inStr) {
+            // Opening a string
+            inStr = true
+            fixAttempt += ch
+          } else {
+            // Potentially closing a string — check what follows
+            // Find next non-whitespace character
+            let nextIdx = idx + 1
+            while (nextIdx < cleaned.length && (cleaned[nextIdx] === ' ' || cleaned[nextIdx] === '\n' || cleaned[nextIdx] === '\r' || cleaned[nextIdx] === '\t')) {
+              nextIdx++
+            }
+            const nextCh = nextIdx < cleaned.length ? cleaned[nextIdx] : ''
+
+            if (nextCh === ',' || nextCh === '}' || nextCh === ']' || nextCh === ':' || nextCh === '') {
+              // Valid string close — this quote ends the string
+              inStr = false
+              fixAttempt += ch
+            } else {
+              // This is an unescaped quote inside the string — escape it
+              fixAttempt += '\\"'
+            }
+          }
+        } else {
+          fixAttempt += ch
+        }
+      }
+    }
+
+    // Fix 2: Remove trailing commas
+    fixAttempt = fixAttempt.replace(/,\s*$/, '')
+
+    // Fix 3: Count braces to close any that are left open
     let braceCount = 0
     let bracketCount = 0
     let inString = false
@@ -414,15 +457,14 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
     while (bracketCount > 0) { fixAttempt += ']'; bracketCount-- }
     while (braceCount > 0) { fixAttempt += '}'; braceCount-- }
 
-    // Fix 3: Remove trailing comma before closing brace/bracket
+    // Fix 4: Remove trailing comma before closing brace/bracket
     fixAttempt = fixAttempt.replace(/,\s*([}\]])/g, '$1')
 
     try {
       parsed = JSON.parse(fixAttempt) as Record<string, unknown>
-      console.debug('[gemini] Parsed RAG response after fix-up (truncated JSON)')
+      console.debug('[gemini] Parsed RAG response after fix-up')
     } catch {
-      // Fix 4: Try sanitising literal newlines inside string values
-      // Gemini sometimes outputs actual newlines instead of \n inside JSON strings
+      // Fix 5: Try sanitising literal newlines inside string values
       try {
         const sanitised = fixAttempt.replace(
           /"(?:[^"\\]|\\.)*"/g,
