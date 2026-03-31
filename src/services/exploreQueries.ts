@@ -1,185 +1,75 @@
 import { supabase } from './supabase'
 import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections } from '../types/explore'
 
-// ─── fetchClusterData ─────────────────────────────────────────────────────────
+// ─── fetchClusterData (via Supabase RPC) ──────────────────────────────────────
+// Cluster summaries are computed server-side in Postgres (get_cluster_summaries).
+// See: supabase/migrations/20260331_get_cluster_summaries.sql
+// See: docs/PERFORMANCE-PATTERNS.md
+//
+// To modify cluster logic (membership, cross-cluster edges, inherited counts),
+// update the Postgres function — NOT this file.
 
 export interface ClusterDataResult {
   clusters: ClusterData[]
   clusteredNodeIds: Set<string>
 }
 
+/** Raw shape returned by the get_cluster_summaries RPC */
+interface RpcClusterRow {
+  anchor: {
+    id: string
+    label: string
+    entityType: string
+    description: string | null
+    entityCount: number
+    parentAnchorId: string | null
+    isSubAnchor: boolean
+  }
+  entityCount: number
+  directEntityCount: number
+  inheritedEntityCount: number
+  typeDistribution: TypeDistributionEntry[]
+  position: { cx: number; cy: number; r: number }
+  crossClusterEdges: CrossClusterEdge[]
+  subAnchorIds: string[]
+}
+
 export async function fetchClusterData(userId: string): Promise<ClusterDataResult> {
-  // 1. Fetch anchors
-  const { data: anchors, error: ancErr } = await supabase
-    .from('knowledge_nodes')
-    .select('id, label, entity_type, description, parent_anchor_id')
-    .eq('user_id', userId)
-    .eq('is_anchor', true)
-    .eq('is_merged', false)
-    .order('label')
-
-  if (ancErr) throw new Error(ancErr.message)
-  if (!anchors?.length) return { clusters: [], clusteredNodeIds: new Set() }
-
-  // 2. Fetch all non-anchor nodes (paginated to avoid Supabase 1000-row default limit)
-  const allNodes: Array<{ id: string; entity_type: string; source_id: string | null }> = []
-  {
-    let offset = 0
-    const PAGE = 1000
-    while (true) {
-      const { data, error } = await supabase
-        .from('knowledge_nodes')
-        .select('id, entity_type, source_id')
-        .eq('user_id', userId)
-        .eq('is_anchor', false)
-        .eq('is_merged', false)
-        .range(offset, offset + PAGE - 1)
-      if (error) throw new Error(error.message)
-      if (!data || data.length === 0) break
-      allNodes.push(...(data as Array<{ id: string; entity_type: string; source_id: string | null }>))
-      if (data.length < PAGE) break
-      offset += PAGE
-    }
-  }
-
-  // 3. Fetch all edges (paginated — graphs can exceed 1000 edges)
-  const allEdges: Array<{ source_node_id: string; target_node_id: string; is_inherited: boolean }> = []
-  {
-    let offset = 0
-    const PAGE = 1000
-    while (true) {
-      const { data, error } = await supabase
-        .from('knowledge_edges')
-        .select('source_node_id, target_node_id, is_inherited')
-        .eq('user_id', userId)
-        .range(offset, offset + PAGE - 1)
-      if (error) throw new Error(error.message)
-      if (!data || data.length === 0) break
-      allEdges.push(...(data as Array<{ source_node_id: string; target_node_id: string; is_inherited: boolean }>))
-      if (data.length < PAGE) break
-      offset += PAGE
-    }
-  }
-
-  // Compute cluster membership: node belongs to anchor's cluster
-  // if it has a direct edge to/from that anchor
-  const anchorIds = new Set(anchors.map(a => a.id))
-  const nodeClusterMap = new Map<string, Set<string>>()
-
-  for (const edge of allEdges) {
-    const src = edge.source_node_id as string
-    const tgt = edge.target_node_id as string
-    if (anchorIds.has(src) && !anchorIds.has(tgt)) {
-      if (!nodeClusterMap.has(tgt)) nodeClusterMap.set(tgt, new Set())
-      nodeClusterMap.get(tgt)!.add(src)
-    }
-    if (anchorIds.has(tgt) && !anchorIds.has(src)) {
-      if (!nodeClusterMap.has(src)) nodeClusterMap.set(src, new Set())
-      nodeClusterMap.get(src)!.add(tgt)
-    }
-  }
-
-  // Collect all clustered node IDs
-  const allClusteredNodeIds = new Set<string>()
-  for (const [nid] of nodeClusterMap) {
-    allClusteredNodeIds.add(nid)
-  }
-
-  // Build sub-anchor map: parent_anchor_id → sub-anchor IDs
-  const subAnchorMap = new Map<string, string[]>()
-  for (const anchor of anchors ?? []) {
-    const a = anchor as { id: string; parent_anchor_id: string | null }
-    if (a.parent_anchor_id) {
-      const existing = subAnchorMap.get(a.parent_anchor_id) ?? []
-      existing.push(a.id)
-      subAnchorMap.set(a.parent_anchor_id, existing)
-    }
-  }
-
-  const clusters = anchors.map(anchor => {
-    const a = anchor as { id: string; label: string; entity_type: string; description: string | null; parent_anchor_id: string | null }
-    const clusterNodeIds = [...nodeClusterMap.entries()]
-      .filter(([, set]) => set.has(a.id))
-      .map(([nid]) => nid)
-    const clusterNodes = (allNodes).filter(n => clusterNodeIds.includes((n as { id: string }).id))
-
-    // Type distribution
-    const typeCounts: Record<string, number> = {}
-    for (const n of clusterNodes) {
-      const entityType = (n as { entity_type: string }).entity_type
-      typeCounts[entityType] = (typeCounts[entityType] || 0) + 1
-    }
-    const total = clusterNodes.length || 1
-    const typeDistribution: TypeDistributionEntry[] = Object.entries(typeCounts)
-      .map(([entityType, count]) => ({ entityType, count, percentage: count / total }))
-      .sort((a, b) => b.count - a.count)
-
-    // Cross-cluster edges
-    const crossClusterEdges: CrossClusterEdge[] = []
-    for (const other of anchors) {
-      const o = other as { id: string }
-      if (o.id === a.id) continue
-      const otherIds = new Set(
-        [...nodeClusterMap.entries()]
-          .filter(([, s]) => s.has(o.id))
-          .map(([nid]) => nid)
-      )
-      const shared = clusterNodeIds.filter(id => otherIds.has(id))
-      const crossEdges = (allEdges).filter(e => {
-        const src = e.source_node_id as string
-        const tgt = e.target_node_id as string
-        return (
-          (clusterNodeIds.includes(src) && otherIds.has(tgt)) ||
-          (clusterNodeIds.includes(tgt) && otherIds.has(src))
-        )
-      })
-      const weight = shared.length + crossEdges.length
-      if (weight > 0) {
-        crossClusterEdges.push({
-          targetClusterId: o.id,
-          sharedEntityCount: shared.length,
-          crossEdgeCount: crossEdges.length,
-          totalWeight: weight,
-        })
-      }
-    }
-
-    // PRD-23: Count inherited entities for this anchor
-    const inheritedNodeIds = new Set<string>()
-    for (const edge of allEdges) {
-      if (edge.is_inherited && edge.source_node_id === a.id) {
-        inheritedNodeIds.add(edge.target_node_id)
-      }
-    }
-    // Remove direct entities from inherited count (avoid double-counting)
-    for (const directId of clusterNodeIds) {
-      inheritedNodeIds.delete(directId)
-    }
-
-    const directEntityCount    = clusterNodes.length
-    const inheritedEntityCount = inheritedNodeIds.size
-
-    return {
-      anchor: {
-        id: a.id,
-        label: a.label,
-        entityType: a.entity_type,
-        description: a.description,
-        entityCount: directEntityCount + inheritedEntityCount,
-        parentAnchorId: a.parent_anchor_id ?? null,
-        isSubAnchor: !!a.parent_anchor_id,
-      },
-      entityCount: directEntityCount + inheritedEntityCount,
-      directEntityCount,
-      inheritedEntityCount,
-      typeDistribution,
-      position: { cx: 0, cy: 0, r: 0 }, // Computed by useClusterLayout
-      crossClusterEdges,
-      subAnchorIds: subAnchorMap.get(a.id) ?? [],
-    }
+  const { data, error } = await supabase.rpc('get_cluster_summaries', {
+    p_user_id: userId,
   })
 
-  return { clusters, clusteredNodeIds: allClusteredNodeIds }
+  if (error) throw new Error(error.message)
+
+  const result = data as { clusters: RpcClusterRow[]; clusteredNodeIds: string[] } | null
+
+  if (!result || !result.clusters || result.clusters.length === 0) {
+    return { clusters: [], clusteredNodeIds: new Set() }
+  }
+
+  // Map RPC result to ClusterData[] — the shape already matches, just ensure types
+  const clusters: ClusterData[] = result.clusters.map((row) => ({
+    anchor: {
+      id: row.anchor.id,
+      label: row.anchor.label,
+      entityType: row.anchor.entityType,
+      description: row.anchor.description,
+      entityCount: row.anchor.entityCount,
+      parentAnchorId: row.anchor.parentAnchorId,
+      isSubAnchor: row.anchor.isSubAnchor,
+    },
+    entityCount: row.entityCount,
+    directEntityCount: row.directEntityCount,
+    inheritedEntityCount: row.inheritedEntityCount,
+    typeDistribution: row.typeDistribution ?? [],
+    position: { cx: 0, cy: 0, r: 0 }, // Computed by useClusterLayout
+    crossClusterEdges: row.crossClusterEdges ?? [],
+    subAnchorIds: row.subAnchorIds ?? [],
+  }))
+
+  const clusteredNodeIds = new Set<string>(result.clusteredNodeIds ?? [])
+
+  return { clusters, clusteredNodeIds }
 }
 
 // ─── fetchGraphStats ──────────────────────────────────────────────────────────

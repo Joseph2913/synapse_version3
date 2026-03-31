@@ -104,6 +104,20 @@ synapse-v2/
 - **Environment variables** use `VITE_` prefix for client-side access
 - **CRITICAL — Migration safety:** After ANY database table or column rename, `grep -r "old_name" --include="*.ts"` the entire codebase before deploying. Supabase PostgREST silently returns empty results (no error) when querying a non-existent table with RLS enabled — inserts vanish without a trace. The highest-risk files are `api/` serverless functions (independently bundled, no shared imports, stale references won't cause build errors) and `src/services/supabase.ts` (centralises most table references). Always verify the affected pipeline produces expected output after deploy — absence of errors does not mean success.
 
+### Server-Side Computation (RPC Functions)
+- **CRITICAL: Never download large datasets to the browser just to aggregate them.** If a view needs summary/aggregate data computed from >1000 rows, that computation MUST happen in a Supabase RPC (Postgres function), not in client-side TypeScript.
+- **Explore cluster data uses `get_cluster_summaries` RPC** — cluster membership, entity counts, type distributions, cross-cluster edges, and inherited entity counts are all computed server-side in Postgres. The browser receives only the final summary objects (~187 cluster records), NOT the raw nodes and edges (~5,000+ nodes, ~6,000+ edges).
+- **To modify cluster logic** (e.g. how entities are assigned to anchors, how cross-cluster connections are calculated, how inherited entities are counted): update the **Postgres function** in the Supabase SQL editor or migration files — NOT `src/services/exploreQueries.ts`. The TypeScript side only calls `supabase.rpc()` and maps the result to `ClusterData[]`.
+- **When to create a new RPC function:** Any time you find yourself writing paginated loops to download all rows of a table and then reducing/grouping them in JS. The database already has the data indexed — let it do the work.
+- **RPC function conventions:** Name with `get_` prefix (e.g. `get_cluster_summaries`, `get_source_graph_data`). Always accept `p_user_id UUID` as first parameter for RLS-compatible filtering. Return `SETOF json` or a typed composite for structured results. Include `SECURITY DEFINER` only if the function needs to bypass RLS — prefer `SECURITY INVOKER` (default).
+- **Consult `docs/PERFORMANCE-PATTERNS.md`** for the full decision record, examples, and guidelines on when to use RPC vs client-side computation.
+
+### Data Caching & View Persistence
+- **Explore data is cached in `ExploreDataProvider`** (React context) so it persists across route navigations. Navigating away from `/explore` and back does NOT trigger a refetch — the cached data is served immediately.
+- **Stale-while-revalidate pattern:** When returning to a view with cached data, show the cache instantly and refresh in the background only if the data is stale (based on a configurable `staleTime`).
+- **Cache invalidation:** The cache is invalidated (refetched) when anchors are confirmed/changed (`synapse:anchor-confirmed` event), after new ingestion completes, or when the user explicitly triggers a refresh.
+- **General rule:** Any view that fetches data on mount and takes >500ms to load should use a provider-level cache with stale-while-revalidate, not local `useState` that is destroyed on unmount.
+
 ### Vercel Serverless Functions
 - **CRITICAL: No shared local imports in `api/` files.** Each serverless function is bundled independently. All helpers must be defined inline within each file
 - **Verify every import resolves** — a single bad import crashes the entire function silently with `FUNCTION_INVOCATION_FAILED`
@@ -212,6 +226,7 @@ Before making decisions, consult these files:
 | `docs/DATA-MODEL.md` | Before writing ANY Supabase query or modifying database interactions |
 | `docs/LEGACY-PATTERNS.md` | Before implementing extraction, search, transcript processing, or cross-connections |
 | `docs/PROJECT-REFERENCE.md` | For strategic context — product vision, Knowledge Value Modes, ingestion pipeline details, debugging history |
+| `docs/PERFORMANCE-PATTERNS.md` | Before writing data-fetching logic — RPC vs client-side rules, caching strategy, view persistence patterns |
 
 ---
 
@@ -253,7 +268,7 @@ Neutral: part_of, relates_to, mentions, connected_to, owns, associated_with
 ## Testing Expectations
 
 - Test with empty database state (new user, no nodes)
-- Test with populated state (847+ nodes, 1200+ edges)
+- Test with populated state (5000+ nodes, 6000+ edges, 187 anchors)
 - Test all views at 1280px, 1440px, and 1920px widths
 - Verify RLS — one user cannot see another user's data
 - All Supabase queries must handle errors gracefully (no unhandled promise rejections)

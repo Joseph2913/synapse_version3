@@ -1,54 +1,33 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { useAuth } from './useAuth'
-import { fetchClusterData, fetchGraphStats, fetchUnclusteredNodes } from '../services/exploreQueries'
-import type { ClusterData } from '../types/explore'
-import type { GraphStats, UnclusteredEntity } from '../services/exploreQueries'
+import { useContext, useEffect } from 'react'
+import { ExploreDataContext } from '../app/providers/ExploreDataProvider'
+import type { ExploreDataContextValue } from '../app/providers/ExploreDataProvider'
 
-export interface ExploreData {
-  clusters: ClusterData[]
-  stats: GraphStats
-  unclustered: UnclusteredEntity[]
-}
+export type { ExploreData } from '../app/providers/ExploreDataProvider'
 
-export function useExploreData(): {
-  data: ExploreData | null
-  loading: boolean
-  error: Error | null
-  refetch: () => void
-} {
-  const { user } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<Error | null>(null)
-  const [data, setData] = useState<ExploreData | null>(null)
-  const fetchCount = useRef(0)
+/**
+ * Hook to access cached explore data from ExploreDataProvider.
+ *
+ * Data persists across route navigations (provider lives above the router).
+ * On first access, triggers a fetch. On subsequent accesses, returns cached data
+ * and triggers a background refresh if the cache is stale (>5 min).
+ */
+export function useExploreData(): ExploreDataContextValue {
+  const ctx = useContext(ExploreDataContext)
+  if (!ctx) {
+    throw new Error('useExploreData must be used within ExploreDataProvider')
+  }
 
-  const load = useCallback(async () => {
-    if (!user) return
-    setLoading(true)
-    setError(null)
-    const id = ++fetchCount.current
-    try {
-      const [clusterResult, stats] = await Promise.all([
-        fetchClusterData(user.id),
-        fetchGraphStats(user.id),
-      ])
-      if (id !== fetchCount.current) return
-
-      const unclustered = await fetchUnclusteredNodes(user.id, clusterResult.clusteredNodeIds)
-      if (id !== fetchCount.current) return
-
-      setData({ clusters: clusterResult.clusters, stats, unclustered })
-    } catch (err) {
-      if (id !== fetchCount.current) return
-      setError(err instanceof Error ? err : new Error(String(err)))
-    } finally {
-      if (id === fetchCount.current) setLoading(false)
-    }
-  }, [user])
-
+  // Tell the provider to ensure data is available/fresh when this hook mounts
+  // (i.e. when the Explore view is visited)
+  const { ensureFresh } = ctx as ExploreDataContextValue & { ensureFresh: () => void }
   useEffect(() => {
-    load()
-  }, [load])
+    ensureFresh()
+  }, [ensureFresh])
 
-  return { data, loading, error, refetch: load }
+  return {
+    data: ctx.data,
+    loading: ctx.loading,
+    error: ctx.error,
+    refetch: ctx.refetch,
+  }
 }

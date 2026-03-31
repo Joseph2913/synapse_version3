@@ -64,7 +64,7 @@ export function ExploreView() {
       .catch(err => console.warn('[ExploreView] Failed to fetch suggested candidates:', err))
   }, [user])
 
-  // Event listeners for anchor changes
+  // Event listener for suggestion changes (anchor-confirmed is handled by ExploreDataProvider)
   useEffect(() => {
     const onSuggestionsChanged = () => {
       if (!user) return
@@ -72,17 +72,11 @@ export function ExploreView() {
         .then(setSuggestedCandidates)
         .catch(() => {})
     }
-    const onAnchorConfirmed = () => {
-      refetch()
-      setTimeout(() => refetch(), 35000)
-    }
     window.addEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
-    window.addEventListener('synapse:anchor-confirmed', onAnchorConfirmed)
     return () => {
       window.removeEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
-      window.removeEventListener('synapse:anchor-confirmed', onAnchorConfirmed)
     }
-  }, [user, refetch])
+  }, [user])
 
   // Source graph data (managed by SourceGraphView, stored here for toolbar)
   const [sourceGraphAnchors, setSourceGraphAnchors] = useState<SourceGraphAnchor[]>([])

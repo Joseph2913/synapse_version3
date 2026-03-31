@@ -604,12 +604,12 @@ export async function generateRAGResponse(
   ]
 
   // Build generation config (PRD-C §2.3)
-  // NOTE: thinkingConfig is NOT compatible with responseMimeType: 'application/json' in Gemini 2.5 Flash.
-  // Thinking budgets are disabled for now until Google adds JSON + thinking support.
+  // NOTE: Do NOT use responseMimeType: 'application/json' with Gemini 2.5 Flash.
+  // In JSON mode, internal thinking tokens count against maxOutputTokens,
+  // causing severe truncation. Instead, we ask for JSON in the prompt and parse it ourselves.
   const generationConfig: Record<string, unknown> = {
     temperature: temperatureOverride ?? 0.3,
     maxOutputTokens: maxOutputTokens ?? 32768,
-    responseMimeType: 'application/json',
   }
 
   const response = await fetchWithRetry(

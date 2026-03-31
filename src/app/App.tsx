@@ -2,6 +2,7 @@ import { AuthProvider } from './providers/AuthProvider'
 import { SettingsProvider } from './providers/SettingsProvider'
 import { GraphProvider } from './providers/GraphProvider'
 import { ProcessingProvider } from './providers/ProcessingProvider'
+import { ExploreDataProvider } from './providers/ExploreDataProvider'
 import { Router } from './Router'
 import { LoginPage } from '../components/auth/LoginPage'
 import { useAuth } from '../hooks/useAuth'
@@ -49,7 +50,9 @@ export default function App() {
         <SettingsProvider>
           <GraphProvider>
             <ProcessingProvider>
-              <Router />
+              <ExploreDataProvider>
+                <Router />
+              </ExploreDataProvider>
             </ProcessingProvider>
           </GraphProvider>
         </SettingsProvider>

@@ -21,294 +21,80 @@ import type {
 // ─── Level 1: Anchor Landscape ───────────────────────────────────────────────
 
 export async function fetchAnchorLevelData(userId: string): Promise<AnchorLevelData> {
-  // Fetch anchors, all sourced nodes, sources, and total node count in parallel
-  const [anchorsRes, nodesRes, sourcesRes, totalNodeCountRes] = await Promise.all([
-    supabase
-      .from('knowledge_nodes')
-      .select('id, label, entity_type, description, confidence, is_anchor, created_at')
-      .eq('user_id', userId)
-      .eq('is_anchor', true),
-    supabase
-      .from('knowledge_nodes')
-      .select('id, source_id, entity_type, is_anchor')
-      .eq('user_id', userId)
-      .not('source_id', 'is', null),
-    supabase
-      .from('knowledge_sources')
-      .select('id, created_at')
-      .eq('user_id', userId),
-    supabase
-      .from('knowledge_nodes')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId),
-  ])
+  // Server-side computation via Postgres RPC.
+  // See: supabase/migrations/20260331_get_anchor_graph.sql
+  // To modify anchor graph logic, update the Postgres function — NOT this file.
+  const { data, error } = await supabase.rpc('get_anchor_graph', { p_user_id: userId })
+  if (error) throw new Error(error.message)
 
-  if (anchorsRes.error) throw new Error(anchorsRes.error.message)
-  if (nodesRes.error) throw new Error(nodesRes.error.message)
-  if (sourcesRes.error) throw new Error(sourcesRes.error.message)
+  const result = data as {
+    anchors: Array<{
+      id: string; kind: string; label: string; entityType: string
+      entityCount: number; sourceCount: number; connectionCount: number
+      description: string | null; confidence: number | null
+      anchorStatus: string; lastActivity: string | null; isQuiet: boolean
+    }>
+    edges: AnchorEdge[]
+    stats: { anchorCount: number; sourceCount: number; entityCount: number }
+  } | null
 
-  const anchorsRaw = anchorsRes.data ?? []
-  const allNodes = nodesRes.data ?? []
-  const allSources = sourcesRes.data ?? []
-  const totalNodeCount = totalNodeCountRes.count ?? allNodes.length
+  if (!result) return { anchors: [], edges: [], stats: { anchorCount: 0, sourceCount: 0, entityCount: 0 } }
 
-  const anchorIds = new Set(anchorsRaw.map(a => a.id))
-
-  // Fetch edges connected to any anchor
-  let edgesRaw: Array<{ source_node_id: string; target_node_id: string }> = []
-  if (anchorIds.size > 0) {
-    const orFilter = [...anchorIds]
-      .map(id => `source_node_id.eq.${id},target_node_id.eq.${id}`)
-      .join(',')
-    const { data, error } = await supabase
-      .from('knowledge_edges')
-      .select('source_node_id, target_node_id')
-      .or(orFilter)
-    if (error) throw new Error(error.message)
-    edgesRaw = data ?? []
-  }
-
-  // Build non-anchor node → source_id mapping
-  const nodeToSource: Record<string, string> = {}
-  const entityCountBySource: Record<string, number> = {}
-  for (const node of allNodes) {
-    if (node.source_id) {
-      entityCountBySource[node.source_id] = (entityCountBySource[node.source_id] ?? 0) + 1
-      if (!node.is_anchor) {
-        nodeToSource[node.id] = node.source_id
-      }
-    }
-  }
-
-  // Compute source → anchor memberships (which sources contribute to which anchors)
-  const sourceToAnchors: Record<string, Set<string>> = {}
-  const anchorToSources: Record<string, Set<string>> = {}
-  const anchorEntityCount: Record<string, number> = {}
-
-  for (const edge of edgesRaw) {
-    const { source_node_id, target_node_id } = edge
-
-    // Non-anchor node connected to anchor → trace to source
-    if (anchorIds.has(source_node_id) && nodeToSource[target_node_id]) {
-      const sourceId = nodeToSource[target_node_id]
-      if (!sourceToAnchors[sourceId]) sourceToAnchors[sourceId] = new Set()
-      sourceToAnchors[sourceId].add(source_node_id)
-      if (!anchorToSources[source_node_id]) anchorToSources[source_node_id] = new Set()
-      anchorToSources[source_node_id].add(sourceId)
-      anchorEntityCount[source_node_id] = (anchorEntityCount[source_node_id] ?? 0) + 1
-    }
-    if (anchorIds.has(target_node_id) && nodeToSource[source_node_id]) {
-      const sourceId = nodeToSource[source_node_id]
-      if (!sourceToAnchors[sourceId]) sourceToAnchors[sourceId] = new Set()
-      sourceToAnchors[sourceId].add(target_node_id)
-      if (!anchorToSources[target_node_id]) anchorToSources[target_node_id] = new Set()
-      anchorToSources[target_node_id].add(sourceId)
-      anchorEntityCount[target_node_id] = (anchorEntityCount[target_node_id] ?? 0) + 1
-    }
-  }
-
-  // Compute most recent source date per anchor (for activity tracking)
-  const sourceCreatedMap = new Map(allSources.map(s => [s.id, s.created_at]))
-  const anchorLastActivity: Record<string, string> = {}
-  for (const [anchorId, sourceIds] of Object.entries(anchorToSources)) {
-    let latest = ''
-    for (const sid of sourceIds) {
-      const created = sourceCreatedMap.get(sid) ?? ''
-      if (created > latest) latest = created
-    }
-    anchorLastActivity[anchorId] = latest
-  }
-
-  const now = Date.now()
-  const QUIET_THRESHOLD_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
-
-  // Build anchor nodes
-  const anchors: AnchorGraphNode[] = anchorsRaw.map(a => {
-    const lastAct = anchorLastActivity[a.id] ?? null
-    const isQuiet = lastAct ? (now - new Date(lastAct).getTime()) > QUIET_THRESHOLD_MS : true
-    return {
-      id: a.id,
-      kind: 'anchor' as const,
-      label: a.label,
-      entityType: a.entity_type,
-      color: getEntityColor(a.entity_type),
-      entityCount: anchorEntityCount[a.id] ?? 0,
-      sourceCount: anchorToSources[a.id]?.size ?? 0,
-      connectionCount: 0, // computed below from inter-anchor edges
-      description: a.description,
-      confidence: a.confidence,
-      anchorStatus: 'manual' as const, // DB column would override when available
-      lastActivity: lastAct,
-      isQuiet,
-    }
-  })
-
-  // Compute inter-anchor edges (anchors sharing sources or having bridge entities)
-  const anchorEdges: AnchorEdge[] = []
-  const anchorList = anchors.map(a => a.id)
-  const anchorConnectionCounts: Record<string, number> = {}
-
-  for (let i = 0; i < anchorList.length; i++) {
-    for (let j = i + 1; j < anchorList.length; j++) {
-      const a1 = anchorList[i]!
-      const a2 = anchorList[j]!
-      const sources1 = anchorToSources[a1] ?? new Set()
-      const sources2 = anchorToSources[a2] ?? new Set()
-      const sharedSources = [...sources1].filter(s => sources2.has(s))
-
-      // Count bridge entities (non-anchor nodes connected to both anchors)
-      let bridgeEntities = 0
-      const nodesConnectedToA1 = new Set<string>()
-      const nodesConnectedToA2 = new Set<string>()
-      for (const edge of edgesRaw) {
-        if (edge.source_node_id === a1) nodesConnectedToA1.add(edge.target_node_id)
-        if (edge.target_node_id === a1) nodesConnectedToA1.add(edge.source_node_id)
-        if (edge.source_node_id === a2) nodesConnectedToA2.add(edge.target_node_id)
-        if (edge.target_node_id === a2) nodesConnectedToA2.add(edge.source_node_id)
-      }
-      for (const nid of nodesConnectedToA1) {
-        if (nodesConnectedToA2.has(nid) && !anchorIds.has(nid)) bridgeEntities++
-      }
-
-      if (sharedSources.length > 0 || bridgeEntities > 0) {
-        const strength = Math.min(1, (sharedSources.length * 0.3 + bridgeEntities * 0.1))
-        anchorEdges.push({
-          fromAnchorId: a1,
-          toAnchorId: a2,
-          bridgeEntityCount: bridgeEntities,
-          sharedSourceCount: sharedSources.length,
-          strength,
-        })
-        anchorConnectionCounts[a1] = (anchorConnectionCounts[a1] ?? 0) + 1
-        anchorConnectionCounts[a2] = (anchorConnectionCounts[a2] ?? 0) + 1
-      }
-    }
-  }
-
-  // Update connectionCount on anchors
-  for (const anchor of anchors) {
-    anchor.connectionCount = anchorConnectionCounts[anchor.id] ?? 0
-  }
+  // Add client-side color (UI concern — not in database)
+  const anchors: AnchorGraphNode[] = (result.anchors ?? []).map(a => ({
+    ...a,
+    kind: 'anchor' as const,
+    color: getEntityColor(a.entityType),
+    anchorStatus: (a.anchorStatus ?? 'manual') as AnchorGraphNode['anchorStatus'],
+  }))
 
   return {
     anchors,
-    edges: anchorEdges,
-    stats: {
-      anchorCount: anchors.length,
-      sourceCount: allSources.length,
-      entityCount: totalNodeCount,
-    },
+    edges: result.edges ?? [],
+    stats: result.stats ?? { anchorCount: 0, sourceCount: 0, entityCount: 0 },
   }
 }
 
 // ─── All Sources (full DB view) ──────────────────────────────────────────────
 
 export async function fetchAllSourcesLevelData(userId: string): Promise<AllSourcesLevelData> {
-  // Fetch all sources and all non-anchor entities in parallel
-  const [sourcesRes, entitiesRes] = await Promise.all([
-    supabase
-      .from('knowledge_sources')
-      .select('id, title, source_type, metadata, created_at')
-      .eq('user_id', userId),
-    supabase
-      .from('knowledge_nodes')
-      .select('id, label, source_id, entity_type')
-      .eq('user_id', userId)
-      .eq('is_anchor', false)
-      .not('source_id', 'is', null),
-  ])
+  // Server-side computation via Postgres RPC.
+  // See: supabase/migrations/20260331_get_all_sources_graph.sql
+  // To modify sources graph logic, update the Postgres function — NOT this file.
+  const { data, error } = await supabase.rpc('get_all_sources_graph', { p_user_id: userId })
+  if (error) throw new Error(error.message)
 
-  if (sourcesRes.error) throw new Error(sourcesRes.error.message)
-  if (entitiesRes.error) throw new Error(entitiesRes.error.message)
+  const result = data as {
+    sources: Array<{
+      id: string; kind: string; label: string; sourceType: string
+      entityCount: number; anchorRelevance: number
+      typeDistribution: TypeDistSegment[]; bridgeAnchorIds: string[]
+      createdAt: string; metadata: Record<string, unknown>
+    }>
+    edges: SourceEdge[]
+    stats: { sourceCount: number; entityCount: number; connectionCount: number }
+  } | null
 
-  const allSources = sourcesRes.data ?? []
-  const allEntities = entitiesRes.data ?? []
+  if (!result) return { sources: [], edges: [], stats: { sourceCount: 0, entityCount: 0, connectionCount: 0 } }
 
-  // Entity counts per source + type distribution
-  const totalEntitiesBySource: Record<string, number> = {}
-  const typesBySource: Record<string, Record<string, number>> = {}
-  for (const entity of allEntities) {
-    if (entity.source_id) {
-      totalEntitiesBySource[entity.source_id] = (totalEntitiesBySource[entity.source_id] ?? 0) + 1
-      if (!typesBySource[entity.source_id]) typesBySource[entity.source_id] = {}
-      const bucket = typesBySource[entity.source_id]!
-      bucket[entity.entity_type] = (bucket[entity.entity_type] ?? 0) + 1
-    }
-  }
-
-  // Build source nodes
-  const sourceIds = new Set(allSources.map(s => s.id))
-  const sources: SourceGraphNode[] = allSources.map(s => {
-    const cfg = getSourceConfig(s.source_type)
-    const totalEntities = totalEntitiesBySource[s.id] ?? 0
-    const types = typesBySource[s.id] ?? {}
-    const typeDistribution: TypeDistSegment[] = Object.entries(types)
-      .map(([entityType, count]) => ({ entityType, count, fraction: totalEntities > 0 ? count / totalEntities : 0 }))
-      .sort((a, b) => b.count - a.count)
-
+  // Add client-side color/icon (UI concern — not in database)
+  const sources: SourceGraphNode[] = (result.sources ?? []).map(s => {
+    const cfg = getSourceConfig(s.sourceType)
     return {
-      id: s.id,
+      ...s,
       kind: 'source' as const,
-      label: s.title ?? 'Untitled',
-      sourceType: s.source_type ?? 'Document',
       color: cfg.color,
       icon: cfg.icon,
-      entityCount: totalEntities,
-      anchorRelevance: 1,
-      typeDistribution,
-      bridgeAnchorIds: [],
-      createdAt: s.created_at,
+      typeDistribution: s.typeDistribution ?? [],
+      bridgeAnchorIds: s.bridgeAnchorIds ?? [],
       metadata: s.metadata ?? {},
-    }
-  })
-
-  // Compute source-to-source edges via shared entity labels
-  const labelToSources: Record<string, Set<string>> = {}
-  for (const entity of allEntities) {
-    if (entity.source_id && entity.label) {
-      const key = `${entity.entity_type}::${entity.label.toLowerCase().trim()}`
-      if (!labelToSources[key]) labelToSources[key] = new Set()
-      labelToSources[key]!.add(entity.source_id)
-    }
-  }
-
-  const pairCounts: Record<string, number> = {}
-  for (const sourcesInLabel of Object.values(labelToSources)) {
-    if (sourcesInLabel.size < 2) continue
-    const arr = [...sourcesInLabel].filter(s => sourceIds.has(s))
-    if (arr.length < 2) continue
-    for (let i = 0; i < arr.length; i++) {
-      for (let j = i + 1; j < arr.length; j++) {
-        const key = [arr[i], arr[j]].sort().join('::')
-        pairCounts[key] = (pairCounts[key] ?? 0) + 1
-      }
-    }
-  }
-
-  // Top 80 strongest edges
-  const sortedPairs = Object.entries(pairCounts)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 80)
-
-  const maxShared = sortedPairs.length > 0 ? sortedPairs[0]![1] : 1
-  const edges: SourceEdge[] = sortedPairs.map(([key, count]) => {
-    const parts = key.split('::')
-    return {
-      fromSourceId: parts[0] ?? '',
-      toSourceId: parts[1] ?? '',
-      sharedEntityCount: count,
-      strength: count / maxShared,
     }
   })
 
   return {
     sources,
-    edges,
-    stats: {
-      sourceCount: sources.length,
-      entityCount: allEntities.length,
-      connectionCount: edges.length,
-    },
+    edges: result.edges ?? [],
+    stats: result.stats ?? { sourceCount: 0, entityCount: 0, connectionCount: 0 },
   }
 }
 
