@@ -389,13 +389,12 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
   try {
     parsed = JSON.parse(cleaned) as Record<string, unknown>
   } catch {
-    // JSON might be truncated (maxOutputTokens hit). Try to fix common issues:
-    // 1. Missing closing braces/brackets
-    // 2. Trailing comma before closing
+    // JSON might be truncated or contain syntax issues. Try multiple fix-up strategies:
     let fixAttempt = cleaned
-      .replace(/,\s*$/, '')  // trailing comma
+      // Fix 1: Remove trailing commas
+      .replace(/,\s*$/, '')
 
-    // Count braces to see if we need to close them
+    // Fix 2: Count braces to close any that are left open
     let braceCount = 0
     let bracketCount = 0
     let inString = false
@@ -411,33 +410,43 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
       if (ch === ']') bracketCount--
     }
 
-    // If we're inside a string, close it
     if (inString) fixAttempt += '"'
-    // Close any open brackets/braces
     while (bracketCount > 0) { fixAttempt += ']'; bracketCount-- }
     while (braceCount > 0) { fixAttempt += '}'; braceCount-- }
 
-    // Remove trailing comma before closing brace/bracket
+    // Fix 3: Remove trailing comma before closing brace/bracket
     fixAttempt = fixAttempt.replace(/,\s*([}\]])/g, '$1')
 
     try {
       parsed = JSON.parse(fixAttempt) as Record<string, unknown>
       console.debug('[gemini] Parsed RAG response after fix-up (truncated JSON)')
-    } catch (e2) {
-      console.warn('[gemini] JSON parse failed even after fix-up:', (e2 as Error).message)
-      console.debug('[gemini] First 300 chars:', cleaned.slice(0, 300))
+    } catch {
+      // Fix 4: Try sanitising literal newlines inside string values
+      // Gemini sometimes outputs actual newlines instead of \n inside JSON strings
+      try {
+        const sanitised = fixAttempt.replace(
+          /"(?:[^"\\]|\\.)*"/g,
+          match => match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')
+        )
+        parsed = JSON.parse(sanitised) as Record<string, unknown>
+        console.debug('[gemini] Parsed RAG response after newline sanitisation')
+      } catch (e3) {
+        console.warn('[gemini] JSON parse failed even after all fix-ups:', (e3 as Error).message)
+        console.debug('[gemini] First 500 chars:', cleaned.slice(0, 500))
 
-      // Last resort: regex extract the answer field
-      const answerMatch = cleaned.match(/"answer"\s*:\s*"((?:[^"\\]|\\.)*)/)
-      if (answerMatch?.[1]) {
-        const rawAnswer = answerMatch[1]
-          .replace(/\\n/g, '\n')
-          .replace(/\\"/g, '"')
-          .replace(/\\\\/g, '\\')
-        return { answer: rawAnswer, citations: [] }
+        // Last resort: regex extract the answer field
+        const answerMatch = cleaned.match(/"answer"\s*:\s*"((?:[^"\\]|\\.)*)/)
+        if (answerMatch?.[1]) {
+          const rawAnswer = answerMatch[1]
+            .replace(/\\n/g, '\n')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\')
+          return { answer: rawAnswer, citations: [] }
+        }
+
+        // Final fallback: return full raw text (do NOT truncate)
+        return { answer: cleaned, citations: [] }
       }
-
-      return { answer: cleaned, citations: [] }
     }
   }
 
@@ -604,12 +613,13 @@ export async function generateRAGResponse(
   ]
 
   // Build generation config (PRD-C §2.3)
-  // NOTE: Do NOT use responseMimeType: 'application/json' with Gemini 2.5 Flash.
-  // In JSON mode, internal thinking tokens count against maxOutputTokens,
-  // causing severe truncation. Instead, we ask for JSON in the prompt and parse it ourselves.
+  // JSON mode is required — without it, Gemini 2.5 Flash sometimes returns plain prose
+  // instead of JSON, especially for single-source queries. Diagnostic confirmed thinking
+  // tokens only use ~13% of the budget, so JSON mode does not cause truncation.
   const generationConfig: Record<string, unknown> = {
     temperature: temperatureOverride ?? 0.3,
     maxOutputTokens: maxOutputTokens ?? 32768,
+    responseMimeType: 'application/json',
   }
 
   const response = await fetchWithRetry(

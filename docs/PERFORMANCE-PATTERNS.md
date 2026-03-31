@@ -50,6 +50,12 @@ Move all aggregation logic into a **Postgres function** called via `supabase.rpc
 | Function | Purpose | Called From |
 |---|---|---|
 | `get_cluster_summaries(p_user_id)` | Computes anchor cluster summaries for Explore landscape view — entity counts, type distributions, cross-cluster edges, inherited entities | `src/services/exploreQueries.ts` → `fetchClusterData()` |
+| `get_anchor_graph(p_user_id)` | Computes anchor-level graph for Graph Tab — entity/source counts per anchor, inter-anchor edges (bridge entities + shared sources), activity status | `src/services/graphQueries.ts` → `fetchAnchorLevelData()` |
+| `get_all_sources_graph(p_user_id)` | Computes source-level graph — entity counts and type distributions per source, top 80 source-to-source edges via shared entity labels | `src/services/graphQueries.ts` → `fetchAllSourcesLevelData()` |
+| `get_anchor_candidates(p_user_id)` | Fetches all anchor candidates with pre-computed connection counts, anchor connections, source diversity, and live signal inputs — replaces 15-25 separate queries | `src/services/anchorCandidates.ts` → `fetchAllCandidatesViaRpc()` |
+| `get_explore_source_graph(p_user_id)` | Computes Explore Sources tab data — source nodes with entity counts/tags, source-to-source edges via cross-source entity connections. No anchors. | `src/services/exploreQueries.ts` → `fetchSourceGraph()` |
+| `get_home_dashboard(p_user_id)` | Returns all Home dashboard data in one call — stats (totals + 7d deltas), recent sources with entity counts, recent anchors with connection counts, recent skills, cross-connections, pipeline status, knowledge snapshot. Replaces 12-15 separate queries | `src/app/providers/HomeDashboardProvider.tsx` via `useHomeDashboard()` |
+| `get_activity_feed(p_user_id, p_limit, p_offset)` | Returns paginated activity feed with pre-assembled FeedItems — source metadata, entities, within-source connections, cross-source connections with resolved node/source titles. Replaces 6-10 sequential batched queries | `src/services/feedQueries.ts` → `fetchActivityFeed()` |
 
 > **Update this table when adding new RPC functions.**
 

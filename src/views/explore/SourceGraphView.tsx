@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Upload } from 'lucide-react'
 import { getSourceConfig, SOURCE_TYPE_CONFIG, DEFAULT_SOURCE_CONFIG } from '../../config/sourceTypes'
-import { useSourceLayout, dotRadius, ANCHOR_RADIUS } from '../../hooks/useSourceLayout'
+import { useSourceLayout, dotRadius } from '../../hooks/useSourceLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchSourceGraph } from '../../services/exploreQueries'
 import { SourceDetailCard } from '../../components/explore/SourceDetailCard'
 import type {
   SourceNode,
   SourceEdge,
-  SourceGraphAnchor,
   ExploreFilters,
 } from '../../types/explore'
 
@@ -32,14 +31,11 @@ interface LiveNode {
   floatAmpY: number
 }
 
-// Anchor color constant
-const ANCHOR_COLOR = '#b45309'
-
 interface SourceGraphViewProps {
   filters: ExploreFilters
   selectedSourceId: string | null
   onSelectSource: (source: SourceNode | null) => void
-  onSourcesLoaded?: (sources: SourceNode[], edges: SourceEdge[], anchors: SourceGraphAnchor[]) => void
+  onSourcesLoaded?: (sources: SourceNode[], edges: SourceEdge[]) => void
   showEdges?: boolean
 }
 
@@ -64,16 +60,14 @@ export function SourceGraphView({
   // Data
   const [sources, setSources] = useState<SourceNode[]>([])
   const [edges, setEdges] = useState<SourceEdge[]>([])
-  const [anchors, setAnchors] = useState<SourceGraphAnchor[]>([])
   const [loading, setLoading] = useState(true)
 
   // Interaction
   const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null)
-  const [hoveredAnchorId, setHoveredAnchorId] = useState<string | null>(null)
   const [exploringSourceId, setExploringSourceId] = useState<string | null>(null)
 
   // Static layout
-  const layoutPositions = useSourceLayout(sources, edges, size.width, size.height, anchors)
+  const layoutPositions = useSourceLayout(sources, edges, size.width, size.height)
 
   // Live floating positions
   const liveNodesRef = useRef<LiveNode[]>([])
@@ -86,9 +80,6 @@ export function SourceGraphView({
   // Edge refs
   const edgesRef = useRef(edges)
   useEffect(() => { edgesRef.current = edges }, [edges])
-  const anchorsRef = useRef(anchors)
-  useEffect(() => { anchorsRef.current = anchors }, [anchors])
-
   // Weighted connectivity map: nodeId → Map<connectedNodeId, weight 0-1>
   // Weight determines how strongly a connected node follows during drag
   const connectivityRef = useRef(new Map<string, Map<string, number>>())
@@ -109,21 +100,16 @@ export function SourceGraphView({
     for (const e of edges) {
       addLink(e.fromSourceId, e.toSourceId, Math.min(e.totalWeight / maxWeight, 1))
     }
-    // Anchor-to-source: strong connection (0.8)
-    for (const a of anchors) {
-      for (const srcId of a.connectedSourceIds) addLink(a.id, srcId, 0.8)
-    }
     connectivityRef.current = map
-  }, [edges, anchors])
+  }, [edges])
 
   // Node radii — standardized sizing
   const nodeRadii = useMemo(() => {
     const maxEntityCount = Math.max(...sources.map(s => s.entityCount), 1)
     const radii = new Map<string, number>()
     for (const s of sources) radii.set(s.id, dotRadius(s.entityCount, maxEntityCount))
-    for (const a of anchors) radii.set(a.id, ANCHOR_RADIUS)
     return radii
-  }, [sources, anchors])
+  }, [sources])
 
   // Initialize live nodes
   useEffect(() => {
@@ -177,7 +163,7 @@ export function SourceGraphView({
               for (const [connId, weight] of connections) {
                 const connNode = nodeMap.get(connId)
                 if (!connNode) continue
-                // Subtle nudge — matching anchor/neighborhood views
+                // Subtle nudge — matching neighborhood views
                 const strength = 0.0005 + weight * 0.004
                 connNode.vx += moveDx * strength
                 connNode.vy += moveDy * strength
@@ -204,7 +190,7 @@ export function SourceGraphView({
           if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
         }
 
-        // Damping — matching anchor/neighborhood views
+        // Damping — matching neighborhood views
         n.vx *= 0.97
         n.vy *= 0.97
         n.x += n.vx
@@ -279,8 +265,7 @@ export function SourceGraphView({
         if (cancelled) return
         setSources(data.sources)
         setEdges(data.edges)
-        setAnchors(data.anchors)
-        onSourcesLoaded?.(data.sources, data.edges, data.anchors)
+        onSourcesLoaded?.(data.sources, data.edges)
       })
       .catch(err => console.warn('SourceGraphView fetch error:', err))
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -502,7 +487,7 @@ export function SourceGraphView({
   // ─── Legend items ──────────────────────────────────────────────────────────
   const legendItems = useMemo(() => {
     const sourceTypeSet = new Set(sources.map(s => s.sourceType))
-    const items: { color: string; label: string; dashed?: boolean }[] = []
+    const items: { color: string; label: string }[] = []
     for (const [type, cfg] of Object.entries(SOURCE_TYPE_CONFIG)) {
       if (sourceTypeSet.has(type)) items.push({ color: cfg.color, label: cfg.label })
     }
@@ -510,11 +495,8 @@ export function SourceGraphView({
     if (sources.some(s => !SOURCE_TYPE_CONFIG[s.sourceType])) {
       items.push({ color: DEFAULT_SOURCE_CONFIG.color, label: 'Other' })
     }
-    if (anchors.length > 0) {
-      items.push({ color: ANCHOR_COLOR, label: 'Anchor', dashed: true })
-    }
     return items
-  }, [sources, anchors])
+  }, [sources])
 
   // Loading
   if (loading) {
@@ -584,31 +566,7 @@ export function SourceGraphView({
               )
             })}
 
-            {/* 2. Source-to-anchor edges — thin dashed */}
-            {showEdges && anchors.map(anchor => {
-              const anchorPos = livePositions.get(anchor.id)
-              if (!anchorPos) return null
-              return anchor.connectedSourceIds.map(srcId => {
-                const srcPos = livePositions.get(srcId)
-                if (!srcPos) return null
-                const isAnchorActive = hoveredAnchorId === anchor.id || filters.sourceAnchorFilter === anchor.id
-                const isSourceActive = activeSourceId === srcId
-                const isActive = isAnchorActive || isSourceActive
-                return (
-                  <line
-                    key={`a-${anchor.id}-${srcId}`}
-                    x1={anchorPos.x} y1={anchorPos.y} x2={srcPos.x} y2={srcPos.y}
-                    stroke={ANCHOR_COLOR}
-                    strokeWidth={isActive ? 1 : 0.4}
-                    strokeOpacity={isActive ? 0.45 : (activeSourceId && !isSourceActive) ? 0.02 : 0.08}
-                    strokeDasharray={isActive ? '4,2' : '2,3'}
-                    style={{ transition: 'stroke-opacity 0.15s ease' }}
-                  />
-                )
-              })
-            })}
-
-            {/* 3. Source circles — standardized rendering matching anchor/entity views */}
+            {/* 2. Source circles — standardized rendering */}
             {sources.map(source => {
               const pos = livePositions.get(source.id)
               if (!pos) return null
@@ -646,7 +604,7 @@ export function SourceGraphView({
                         <circle r={r + 4} fill="none" stroke={`${cfg.color}35`} strokeWidth={2} />
                       )}
 
-                      {/* Translucent filled circle — matching anchor/entity pattern */}
+                      {/* Translucent filled circle */}
                       <circle
                         r={r}
                         fill={`${cfg.color}22`}
@@ -698,66 +656,6 @@ export function SourceGraphView({
               )
             })}
 
-            {/* 4. Anchor nodes — standardized rendering */}
-            {anchors.map(anchor => {
-              const pos = livePositions.get(anchor.id)
-              if (!pos) return null
-              const isActive = hoveredAnchorId === anchor.id || filters.sourceAnchorFilter === anchor.id
-              const r = ANCHOR_RADIUS
-              const scale = isActive ? 1.08 : 1
-              const label = anchor.label.length > 20 ? anchor.label.slice(0, 19) + '…' : anchor.label
-
-              return (
-                <g
-                  key={`anchor-${anchor.id}`}
-                  onMouseDown={e => handleNodeMouseDown(e, anchor.id)}
-                  onMouseEnter={() => { if (!dragRef.current) setHoveredAnchorId(anchor.id) }}
-                  onMouseLeave={() => setHoveredAnchorId(null)}
-                  style={{ cursor: dragRef.current?.id === anchor.id ? 'grabbing' : 'pointer' }}
-                >
-                  <g transform={`translate(${pos.x}, ${pos.y})`}>
-                    <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
-                      {/* Hover glow */}
-                      {isActive && (
-                        <circle r={r + 4} fill="none" stroke={`${ANCHOR_COLOR}35`} strokeWidth={2} />
-                      )}
-                      {/* Translucent filled circle */}
-                      <circle
-                        r={r}
-                        fill={`${ANCHOR_COLOR}22`}
-                        stroke={ANCHOR_COLOR}
-                        strokeWidth={2}
-                      />
-                      {/* Small diamond inside */}
-                      <text
-                        y={0.5}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        style={{ fontSize: 5, fill: ANCHOR_COLOR, opacity: 0.6, pointerEvents: 'none', userSelect: 'none', fontWeight: 700 }}
-                      >
-                        ◆
-                      </text>
-                    </g>
-                    {/* Label below — always visible */}
-                    <text
-                      y={r + 12}
-                      textAnchor="middle"
-                      style={{
-                        fontFamily: 'var(--font-display)',
-                        fontSize: 9,
-                        fontWeight: 600,
-                        fill: isActive ? ANCHOR_COLOR : 'var(--color-text-secondary)',
-                        pointerEvents: 'none',
-                        userSelect: 'none',
-                        transition: 'fill 0.15s ease',
-                      }}
-                    >
-                      {label}
-                    </text>
-                  </g>
-                </g>
-              )
-            })}
           </g>
         </svg>
       )}
@@ -874,9 +772,6 @@ export function SourceGraphView({
         </span>
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
           <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{filteredEdges.length}</strong> connections
-        </span>
-        <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
-          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{anchors.length}</strong> anchors
         </span>
       </div>
 

@@ -2,9 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useAuth } from './useAuth'
 import { useSettings } from './useSettings'
 import {
-  fetchCandidatesWithNodes,
-  fetchSuggestedCount,
-  fetchAnchorHealthSummary,
+  fetchAllCandidatesViaRpc,
   confirmAnchorCandidate,
   dismissAnchorCandidate,
   archiveAnchorCandidate,
@@ -38,190 +36,107 @@ export function useAnchorCandidates() {
   const fetchAll = useCallback(async () => {
     if (!user) return
     setLoading(true)
+    setHealthLoading(true)
     setError(null)
     try {
-      const [suggestedData, confirmedData, archivedData, count] = await Promise.all([
-        fetchCandidatesWithNodes(user.id, ['suggested']),
-        fetchCandidatesWithNodes(user.id, ['confirmed', 'dormant']),
-        fetchCandidatesWithNodes(user.id, ['archived']),
-        fetchSuggestedCount(user.id),
-      ])
+      // Single RPC call replaces 15-25 separate queries.
+      // See: supabase/migrations/20260331_get_anchor_candidates.sql
+      const rpcResult = await fetchAllCandidatesViaRpc(user.id)
 
-      // Legacy fallback: if anchor_candidates returned nothing, directly query
-      // knowledge_nodes where is_anchor = true and synthesize candidate objects
-      // with real edge counts and source data.
-      let finalConfirmed = confirmedData
-      if (confirmedData.length === 0) {
+      let finalConfirmed = rpcResult.confirmed
+
+      // Legacy fallback: if no candidate rows exist but anchor nodes do,
+      // synthesize candidate objects from knowledge_nodes directly.
+      if (finalConfirmed.length === 0 && rpcResult.suggested.length === 0) {
         const { data: anchorNodes } = await supabase
           .from('knowledge_nodes')
-          .select('id, user_id, label, entity_type, description, confidence, is_anchor, parent_anchor_id, source_id, source_type, created_at')
+          .select('id, user_id, label, entity_type, description, confidence, is_anchor, parent_anchor_id, created_at')
           .eq('user_id', user.id)
           .eq('is_anchor', true)
           .order('created_at', { ascending: false })
 
         if (anchorNodes && anchorNodes.length > 0) {
           console.log(`[useAnchorCandidates] Legacy fallback: found ${anchorNodes.length} anchor nodes without candidate rows`)
-          const nodeIds = anchorNodes.map(n => n.id as string)
-          const anchorIdSet = new Set(nodeIds)
           const now = new Date().toISOString()
-
-          // Fetch real edge counts in bulk
-          const [outRes, inRes] = await Promise.all([
-            supabase.from('knowledge_edges').select('source_node_id, target_node_id').in('source_node_id', nodeIds),
-            supabase.from('knowledge_edges').select('source_node_id, target_node_id').in('target_node_id', nodeIds),
-          ])
-          const edgeCounts: Record<string, number> = {}
-          const anchorConnectionCounts: Record<string, number> = {}
-          for (const id of nodeIds) { edgeCounts[id] = 0; anchorConnectionCounts[id] = 0 }
-          for (const e of outRes.data ?? []) {
-            edgeCounts[e.source_node_id] = (edgeCounts[e.source_node_id] ?? 0) + 1
-            if (anchorIdSet.has(e.target_node_id)) anchorConnectionCounts[e.source_node_id] = (anchorConnectionCounts[e.source_node_id] ?? 0) + 1
-          }
-          for (const e of inRes.data ?? []) {
-            edgeCounts[e.target_node_id] = (edgeCounts[e.target_node_id] ?? 0) + 1
-            if (anchorIdSet.has(e.source_node_id)) anchorConnectionCounts[e.target_node_id] = (anchorConnectionCounts[e.target_node_id] ?? 0) + 1
-          }
-
-          // Fetch source counts: count distinct source_id values among connected nodes
-          const allNeighbourIds = new Set<string>()
-          for (const e of outRes.data ?? []) allNeighbourIds.add(e.target_node_id)
-          for (const e of inRes.data ?? []) allNeighbourIds.add(e.source_node_id)
-          const neighbourList = Array.from(allNeighbourIds)
-          const neighbourSourceMap = new Map<string, { source_id: string | null; source_type: string | null }>()
-          if (neighbourList.length > 0) {
-            const { data: nbNodes } = await supabase
-              .from('knowledge_nodes')
-              .select('id, source_id, source_type')
-              .in('id', neighbourList)
-            for (const nb of nbNodes ?? []) {
-              neighbourSourceMap.set(nb.id as string, { source_id: nb.source_id as string | null, source_type: nb.source_type as string | null })
-            }
-          }
-
-          // Build source counts per anchor
-          const sourceCountsMap: Record<string, number> = {}
-          const sourceTypesMap: Record<string, number> = {}
-          for (const id of nodeIds) {
-            const srcIds = new Set<string>()
-            const srcTypes = new Set<string>()
-            const selfNode = anchorNodes.find(n => n.id === id)
-            if (selfNode?.source_id) srcIds.add(selfNode.source_id as string)
-            if (selfNode?.source_type) srcTypes.add(selfNode.source_type as string)
-            // Add neighbour sources
-            for (const e of outRes.data ?? []) {
-              if (e.source_node_id === id) {
-                const nb = neighbourSourceMap.get(e.target_node_id)
-                if (nb?.source_id) srcIds.add(nb.source_id)
-                if (nb?.source_type) srcTypes.add(nb.source_type)
-              }
-            }
-            for (const e of inRes.data ?? []) {
-              if (e.target_node_id === id) {
-                const nb = neighbourSourceMap.get(e.source_node_id)
-                if (nb?.source_id) srcIds.add(nb.source_id)
-                if (nb?.source_type) srcTypes.add(nb.source_type)
-              }
-            }
-            sourceCountsMap[id] = srcIds.size
-            sourceTypesMap[id] = srcTypes.size
-          }
-
-          // Compute basic signal scores from real data
           finalConfirmed = anchorNodes.map(n => {
             const nid = n.id as string
-            const totalEdges = edgeCounts[nid] ?? 0
-            const srcCount = sourceCountsMap[nid] ?? 0
-            const srcTypes = sourceTypesMap[nid] ?? 0
-            const createdMs = new Date(n.created_at as string).getTime()
-            const daysActive = Math.floor((Date.now() - createdMs) / 86400000)
-
-            // Compute signal scores (same algorithm as PRD-18)
-            const centralityScore = Math.min(totalEdges / 50, 1.0) * 0.6 + 0 * 0.4
-            const diversityScore = (Math.min(srcCount / 8, 1.0) * 0.65) + (Math.min(srcTypes / 3, 1.0) * 0.35)
-            const velocityScore = Math.min(daysActive / 30, 1.0) * 0.45 + 0.183 // baseline acceleration
-            const richnessScore = 0 // would need relation_type query, skip for fallback
-            const compositeScore = Math.min(
-              centralityScore * 0.35 + diversityScore * 0.25 + velocityScore * 0.20 + richnessScore * 0.15,
-              1.0
-            )
-
             return {
-              id:                  `legacy-${nid}`,
-              userId:              n.user_id as string,
-              nodeId:              nid,
-              compositeScore:      Math.round(compositeScore * 10000) / 10000,
-              centralityScore:     Math.round(centralityScore * 10000) / 10000,
-              diversityScore:      Math.round(diversityScore * 10000) / 10000,
-              velocityScore:       Math.round(velocityScore * 10000) / 10000,
-              richnessScore:       0,
-              behaviouralScore:    0,
-              mentionCount:        totalEdges,
-              sourceCount:         srcCount,
-              uniqueSourceTypes:   srcTypes,
-              daysActive,
-              recentVelocity:      0,
-              velocityDirection:   'stable' as const,
-              status:              'confirmed' as const,
-              scoringProfile:      'balanced' as const,
-              reasoningText:       null,
-              firstScoredAt:       n.created_at as string,
-              lastScoredAt:        now,
-              suggestedAt:         null,
-              reviewedAt:          null,
-              dormantSince:        null,
-              dismissCount:        0,
-              resurface_after:     null,
-              thresholdAtScoring:  null,
-              totalEdges:          totalEdges,
-              createdAt:           n.created_at as string,
-              updatedAt:           now,
+              id: `legacy-${nid}`, userId: n.user_id as string, nodeId: nid,
+              compositeScore: 0, centralityScore: 0, diversityScore: 0,
+              velocityScore: 0, richnessScore: 0, behaviouralScore: 0,
+              mentionCount: 0, sourceCount: 0, uniqueSourceTypes: 0,
+              daysActive: 0, recentVelocity: 0, velocityDirection: 'stable' as const,
+              status: 'confirmed' as const, scoringProfile: 'balanced' as const,
+              reasoningText: null, firstScoredAt: n.created_at as string,
+              lastScoredAt: now, suggestedAt: null, reviewedAt: null,
+              dormantSince: null, dismissCount: 0, resurface_after: null,
+              thresholdAtScoring: null, totalEdges: 0,
+              createdAt: n.created_at as string, updatedAt: now,
               suggestedParentAnchorId: null,
               node: {
-                id:               nid,
-                label:            n.label as string,
-                entity_type:      n.entity_type as EntityType,
-                description:      (n.description ?? null) as string | null,
-                quote:            null,
-                user_tags:        null,
-                confidence:       (n.confidence ?? null) as number | null,
-                is_anchor:        true,
+                id: nid, label: n.label as string,
+                entity_type: n.entity_type as EntityType,
+                description: (n.description ?? null) as string | null,
+                quote: null, user_tags: null,
+                confidence: (n.confidence ?? null) as number | null,
+                is_anchor: true,
                 parent_anchor_id: (n.parent_anchor_id as string | null) ?? null,
-                created_at:       n.created_at as string,
+                created_at: n.created_at as string,
               },
-              connectionCount:     totalEdges,
-              anchorConnections:   anchorConnectionCounts[nid] ?? 0,
+              connectionCount: 0, anchorConnections: 0,
             } satisfies AnchorCandidateWithNode
           })
         }
       }
 
-      setSuggested(suggestedData)
+      setSuggested(rpcResult.suggested)
       setConfirmed(finalConfirmed)
-      setArchived(archivedData)
-      setSuggestedCount(count)
+      setArchived(rpcResult.archived)
+      setSuggestedCount(rpcResult.suggestedCount)
+
+      // Compute health summary from the data we already have (no extra queries)
+      const allConfirmed = finalConfirmed
+      const dormant = allConfirmed.filter(c => c.status === 'dormant')
+      const active = allConfirmed.filter(c => c.status === 'confirmed')
+      const totalNodes = allConfirmed.reduce((sum, c) => sum + c.connectionCount, 0)
+      const avgNodes = allConfirmed.length > 0 ? Math.round((totalNodes / allConfirmed.length) * 10) / 10 : 0
+      const sorted = [...allConfirmed].sort((a, b) => b.connectionCount - a.connectionCount)
+      const topAnchor = sorted[0]
+      const stale: AnchorHealthSummary['staleAnchors'] = []
+      for (const c of allConfirmed) {
+        if (!c.node) continue
+        if (c.anchorConnections === 0 && c.connectionCount > 0) {
+          stale.push({ candidateId: c.id, nodeId: c.node.id, label: c.node.label, issue: 'isolated', detail: 'Not connected to any other anchors' })
+        } else if (c.connectionCount < 3) {
+          stale.push({ candidateId: c.id, nodeId: c.node.id, label: c.node.label, issue: 'low_nodes', detail: `Only ${c.connectionCount} node${c.connectionCount === 1 ? '' : 's'} connected` })
+        } else if (c.status === 'dormant') {
+          const dormantDays = c.dormantSince ? Math.floor((Date.now() - new Date(c.dormantSince).getTime()) / 86400000) : 0
+          stale.push({ candidateId: c.id, nodeId: c.node.id, label: c.node.label, issue: 'dormant', detail: `No new content in ${dormantDays} days` })
+        } else if (c.sourceCount === 1) {
+          stale.push({ candidateId: c.id, nodeId: c.node.id, label: c.node.label, issue: 'single_source', detail: 'Only referenced in one source' })
+        }
+      }
+      setHealth({
+        totalConfirmed: active.length,
+        totalSuggested: rpcResult.suggested.length,
+        totalDormant: dormant.length,
+        avgNodesPerAnchor: avgNodes,
+        mostConnectedAnchor: topAnchor?.node ? { label: topAnchor.node.label, nodeCount: topAnchor.connectionCount } : null,
+        isolatedAnchors: allConfirmed.filter(c => c.anchorConnections === 0).length,
+        staleAnchors: stale.slice(0, 8),
+      })
     } catch (err) {
       setError('Failed to load anchor candidates')
       console.error('[useAnchorCandidates]', err)
     } finally {
       setLoading(false)
-    }
-  }, [user])
-
-  const fetchHealth = useCallback(async () => {
-    if (!user) return
-    setHealthLoading(true)
-    try {
-      const summary = await fetchAnchorHealthSummary(user.id)
-      setHealth(summary)
-    } finally {
       setHealthLoading(false)
     }
   }, [user])
 
   useEffect(() => {
     fetchAll()
-    fetchHealth()
-  }, [fetchAll, fetchHealth])
+  }, [fetchAll])
 
   const sortedConfirmed = useMemo(() => {
     const arr = [...confirmed]
@@ -284,11 +199,11 @@ export function useAnchorCandidates() {
       setConfirmed(prev => prev.filter(c => c.id !== candidateId))
     } else {
       await refreshAnchors()
-      fetchHealth()
+      fetchAll()
       window.dispatchEvent(new CustomEvent('synapse:anchor-suggestions-changed'))
       window.dispatchEvent(new CustomEvent('synapse:anchor-confirmed', { detail: { nodeId } }))
     }
-  }, [suggested, refreshAnchors, fetchHealth])
+  }, [suggested, refreshAnchors, fetchAll])
 
   const dismiss = useCallback(async (candidateId: string, dismissCount: number) => {
     const candidate = suggested.find(c => c.id === candidateId)
@@ -326,18 +241,18 @@ export function useAnchorCandidates() {
       setConfirmed(prev => [...prev, candidate])
     } else {
       await refreshAnchors()
-      fetchHealth()
+      fetchAll()
     }
-  }, [confirmed, refreshAnchors, fetchHealth])
+  }, [confirmed, refreshAnchors, fetchAll])
 
   const createManual = useCallback(async (nodeId: string) => {
     if (!user) return
     const success = await createManualAnchor(user.id, nodeId)
     if (success) {
-      await Promise.all([fetchAll(), fetchHealth(), refreshAnchors()])
+      await Promise.all([fetchAll(), refreshAnchors()])
       window.dispatchEvent(new CustomEvent('synapse:anchor-suggestions-changed'))
     }
-  }, [user, fetchAll, fetchHealth, refreshAnchors])
+  }, [user, fetchAll, refreshAnchors])
 
   const restore = useCallback(async (candidateId: string, nodeId: string) => {
     // Re-confirm: set status back to confirmed and is_anchor = true
@@ -357,9 +272,9 @@ export function useAnchorCandidates() {
       return
     }
 
-    await Promise.all([fetchAll(), fetchHealth(), refreshAnchors()])
+    await Promise.all([fetchAll(), fetchAll(), refreshAnchors()])
     window.dispatchEvent(new CustomEvent('synapse:anchor-confirmed'))
-  }, [fetchAll, fetchHealth, refreshAnchors])
+  }, [fetchAll, refreshAnchors])
 
   return {
     suggested, confirmed, archived, health, suggestedCount,

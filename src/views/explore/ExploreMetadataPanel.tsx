@@ -13,7 +13,6 @@ import type {
   EntityNode,
   SourceNode,
   SourceEdge,
-  SourceGraphAnchor,
   SourceConnectionType,
   ExploreFilters,
 } from '../../types/explore'
@@ -42,7 +41,6 @@ interface ExploreMetadataPanelProps {
   // Source data
   allSources: SourceNode[]
   sourceEdges: SourceEdge[]
-  sourceGraphAnchors?: SourceGraphAnchor[]
   // Selection
   selectedEntityId: string | null
   selectedSourceId: string | null
@@ -65,7 +63,6 @@ export function ExploreMetadataPanel({
   neighborhoodEdges,
   allSources,
   sourceEdges,
-  sourceGraphAnchors,
   selectedEntityId,
   selectedSourceId,
   onSelectEntity,
@@ -117,7 +114,6 @@ export function ExploreMetadataPanel({
       <SourceListPanel
         sources={allSources}
         sourceEdges={sourceEdges}
-        sourceGraphAnchors={sourceGraphAnchors}
         selectedSourceId={selectedSourceId}
         onSelectSource={onSelectSource}
         filters={filters}
@@ -652,14 +648,12 @@ function ConnectionDetailPanel({
 function SourceListPanel({
   sources,
   sourceEdges,
-  sourceGraphAnchors,
   selectedSourceId,
   onSelectSource,
   filters,
 }: {
   sources: SourceNode[]
   sourceEdges: SourceEdge[]
-  sourceGraphAnchors?: SourceGraphAnchor[]
   selectedSourceId: string | null
   onSelectSource: (source: SourceNode | null) => void
   filters?: ExploreFilters
@@ -738,11 +732,8 @@ function SourceListPanel({
       .sort((a, b) => b.edge.totalWeight - a.edge.totalWeight)
   }, [selectedSourceId, filteredEdges, filteredSources])
 
-  // Anchor names for selected source
-  const sourceAnchors = useMemo(() => {
-    if (!selectedSource || !sourceGraphAnchors) return []
-    return sourceGraphAnchors.filter(a => selectedSource.anchorIds.includes(a.id))
-  }, [selectedSource, sourceGraphAnchors])
+  // Anchors removed from source graph view
+  const sourceAnchors: { id: string; label: string; entityType: string }[] = []
 
   // Fetch shared entities when expanding a connection
   const handleToggleConnection = useCallback(async (otherId: string) => {

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, Anchor as AnchorIcon, X } from 'lucide-react'
 import { getEntityColor } from '../../config/entityTypes'
-import type { ExploreViewMode, ExploreFilters, ClusterData, SourceConnectionType, SourceGraphAnchor } from '../../types/explore'
+import type { ExploreViewMode, ExploreFilters, ClusterData, SourceConnectionType } from '../../types/explore'
 
 // Connection-type metadata for sources view
 const CONN_TYPE_META: { type: SourceConnectionType; color: string; label: string }[] = [
@@ -30,8 +30,6 @@ interface ExploreToolbarProps {
   visibleEdgeTypes?: Set<string>
   onToggleNeighborhoodEdgeType?: (type: string) => void
   // Sources view filters
-  sourceGraphAnchors?: SourceGraphAnchor[]
-  onSetSourceAnchorFilter?: (anchorId: string | null) => void
   onToggleConnType?: (type: SourceConnectionType) => void
   // Clear all
   onClearAllFilters?: () => void
@@ -76,8 +74,6 @@ export function ExploreToolbar({
   onClearAnchor,
   visibleEdgeTypes,
   onToggleNeighborhoodEdgeType,
-  sourceGraphAnchors,
-  onSetSourceAnchorFilter,
   onToggleConnType,
   onClearAllFilters,
   suggestedCount,
@@ -107,8 +103,7 @@ export function ExploreToolbar({
 
   // Derive active filter states
   const anchorsActiveCluster = clusters.find(c => c.anchor.id === filters.activeAnchorId)
-  const sourcesActiveAnchor = sourceGraphAnchors?.find(a => a.id === filters.sourceAnchorFilter)
-  const isAnchorFilterActive = viewMode === 'anchors' ? !!anchorsActiveCluster : !!sourcesActiveAnchor
+  const isAnchorFilterActive = viewMode === 'anchors' ? !!anchorsActiveCluster : false
 
   const isConnTypeFilterActive = viewMode === 'sources'
     ? filters.connTypes.size > 0
@@ -156,10 +151,7 @@ export function ExploreToolbar({
             style={isAnchorFilterActive ? PILL_ACTIVE : PILL_BASE}
           >
             <AnchorIcon size={13} style={{ flexShrink: 0 }} />
-            {viewMode === 'anchors'
-              ? (anchorsActiveCluster ? anchorsActiveCluster.anchor.label : 'Anchors')
-              : (sourcesActiveAnchor ? sourcesActiveAnchor.label : 'Anchors')
-            }
+            {anchorsActiveCluster ? anchorsActiveCluster.anchor.label : 'Anchors'}
             <ChevronDown size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
           </button>
 
@@ -207,43 +199,7 @@ export function ExploreToolbar({
                     </button>
                   ))}
                 </>
-              ) : (
-                <>
-                  {sourcesActiveAnchor && (
-                    <button
-                      type="button"
-                      onClick={() => { onSetSourceAnchorFilter?.(null); setAnchorOpen(false) }}
-                      className="w-full font-body"
-                      style={{ padding: '7px 10px', fontSize: 11, color: 'var(--color-text-secondary)', background: 'none', border: 'none', borderRadius: 6, textAlign: 'left', cursor: 'pointer' }}
-                    >
-                      All anchors
-                    </button>
-                  )}
-                  {(sourceGraphAnchors ?? []).map(a => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      onClick={() => {
-                        onSetSourceAnchorFilter?.(filters.sourceAnchorFilter === a.id ? null : a.id)
-                        setAnchorOpen(false)
-                      }}
-                      className="flex items-center gap-2 w-full font-body"
-                      style={{
-                        padding: '7px 10px', fontSize: 11,
-                        fontWeight: filters.sourceAnchorFilter === a.id ? 600 : 400,
-                        color: filters.sourceAnchorFilter === a.id ? 'var(--color-text-primary)' : 'var(--color-text-body)',
-                        background: filters.sourceAnchorFilter === a.id ? 'var(--color-bg-active)' : 'none',
-                        border: 'none', borderRadius: 6, textAlign: 'left', cursor: 'pointer',
-                        transition: 'background 0.1s ease',
-                      }}
-                    >
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: getEntityColor(a.entityType), flexShrink: 0 }} />
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.label}</span>
-                      <span style={{ fontSize: 9, color: 'var(--color-text-secondary)', flexShrink: 0 }}>{a.connectedSourceIds.length}</span>
-                    </button>
-                  ))}
-                </>
-              )}
+              ) : null}
             </div>
           )}
         </div>

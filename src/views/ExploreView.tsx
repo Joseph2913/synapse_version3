@@ -7,7 +7,7 @@ import { SourceGraphView } from './explore/SourceGraphView'
 
 import { useExploreData } from '../hooks/useExploreData'
 import { useExploreFilters } from '../hooks/useExploreFilters'
-import type { ClusterData, EntityNode, SourceNode, SourceEdge, SourceGraphAnchor } from '../types/explore'
+import type { ClusterData, EntityNode, SourceNode, SourceEdge } from '../types/explore'
 import type { EntityEdge } from '../services/exploreQueries'
 import { useAuth } from '../hooks/useAuth'
 import { fetchCandidatesWithNodes } from '../services/anchorCandidates'
@@ -78,8 +78,7 @@ export function ExploreView() {
     }
   }, [user])
 
-  // Source graph data (managed by SourceGraphView, stored here for toolbar)
-  const [sourceGraphAnchors, setSourceGraphAnchors] = useState<SourceGraphAnchor[]>([])
+  // Source graph data
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
 
   // Neighborhood edge-type visibility (lifted so toolbar can control it)
@@ -192,8 +191,8 @@ export function ExploreView() {
     setSelectedSourceId(source?.id ?? null)
   }, [])
 
-  const handleSourcesLoaded = useCallback((_sources: SourceNode[], _edges: SourceEdge[], anchors: SourceGraphAnchor[]) => {
-    setSourceGraphAnchors(anchors)
+  const handleSourcesLoaded = useCallback((_sources: SourceNode[], _edges: SourceEdge[]) => {
+    // Sources loaded — no further processing needed
   }, [])
 
   const handleEntitiesLoaded = useCallback((_entities: EntityNode[]) => {
@@ -227,7 +226,6 @@ export function ExploreView() {
     onClearAnchor: returnToLandscape,
     visibleEdgeTypes,
     onToggleNeighborhoodEdgeType: toggleNeighborhoodEdgeType,
-    sourceGraphAnchors,
     onSetSourceAnchorFilter: setSourceAnchorFilter,
     onToggleConnType: toggleConnType,
     onClearAllFilters: clearAllFilters,

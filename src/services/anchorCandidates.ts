@@ -46,9 +46,112 @@ function mapRow(row: AnchorCandidateRow): AnchorCandidate {
   }
 }
 
-// ─── Fetch: candidates with joined node data ──────────────────────────────────
-// Primary query for the Anchors page. Returns candidates filtered by status,
-// joined with the knowledge_nodes row and connection count stats.
+// ─── Fetch: ALL candidates via RPC (optimised for Signals/Anchors page) ──────
+// Single database call that returns all candidates with pre-computed stats.
+// See: supabase/migrations/20260331_get_anchor_candidates.sql
+// See: docs/PERFORMANCE-PATTERNS.md
+
+export interface AllCandidatesRpcResult {
+  suggested: AnchorCandidateWithNode[]
+  confirmed: AnchorCandidateWithNode[]
+  archived: AnchorCandidateWithNode[]
+  suggestedCount: number
+}
+
+export async function fetchAllCandidatesViaRpc(
+  userId: string
+): Promise<AllCandidatesRpcResult> {
+  const { data, error } = await supabase.rpc('get_anchor_candidates', { p_user_id: userId })
+
+  if (error) {
+    console.error('[anchorCandidates] RPC error:', error.message)
+    return { suggested: [], confirmed: [], archived: [], suggestedCount: 0 }
+  }
+
+  const result = data as {
+    candidates: Array<Record<string, unknown>>
+    suggestedCount: number
+  } | null
+
+  if (!result?.candidates) return { suggested: [], confirmed: [], archived: [], suggestedCount: 0 }
+
+  // Map RPC rows to AnchorCandidateWithNode, applying live score overrides
+  const all: AnchorCandidateWithNode[] = result.candidates.map(row => {
+    const r = row as Record<string, unknown>
+    const totalEdges = (r.connectionCount as number) ?? 0
+    const srcCount = (r.sourceCount as number) ?? 0
+    const srcTypes = (r.uniqueSourceTypes as number) ?? 0
+    const nbTypeCount = (r.liveNeighborTypeCount as number) ?? 0
+    const relTypeCount = (r.liveRelTypeCount as number) ?? 0
+    const nodeCreatedAt = (r.node as Record<string, unknown> | null)?.created_at as string | undefined
+    const createdMs = nodeCreatedAt ? new Date(nodeCreatedAt).getTime() : Date.now()
+    const daysActive = Math.floor((Date.now() - createdMs) / 86400000)
+
+    // Live signal scores (same algorithm as PRD-18)
+    const degreeScore = Math.min(totalEdges / 50, 1.0)
+    const diversityFactor = Math.min(nbTypeCount / 8, 1.0)
+    const liveCentrality = (degreeScore * 0.6) + (diversityFactor * 0.4)
+    const liveDiversity = (Math.min(srcCount / 8, 1.0) * 0.65) + (Math.min(srcTypes / 3, 1.0) * 0.35)
+    const liveVelocity = (Math.min(daysActive / 30, 1.0) * 0.45) + 0.183
+    const liveRichness = Math.min(relTypeCount / 6, 1.0)
+    const liveComposite = Math.min(
+      liveCentrality * 0.35 + liveDiversity * 0.25 + liveVelocity * 0.20 + liveRichness * 0.15, 1.0
+    )
+
+    // Use stored scores unless they're all zero (unscored)
+    const storedCentrality = r.centralityScore as number
+    const storedDiversity = r.diversityScore as number
+    const storedVelocity = r.velocityScore as number
+    const useStored = storedCentrality !== 0 || storedDiversity !== 0 || storedVelocity !== 0
+
+    return {
+      id: r.id as string,
+      userId: r.userId as string,
+      nodeId: (r.nodeId as string) ?? null,
+      compositeScore: useStored ? (r.compositeScore as number) : Math.round(liveComposite * 10000) / 10000,
+      centralityScore: useStored ? storedCentrality : Math.round(liveCentrality * 10000) / 10000,
+      diversityScore: useStored ? storedDiversity : Math.round(liveDiversity * 10000) / 10000,
+      velocityScore: useStored ? storedVelocity : Math.round(liveVelocity * 10000) / 10000,
+      richnessScore: useStored ? (r.richnessScore as number) : Math.round(liveRichness * 10000) / 10000,
+      behaviouralScore: (r.behaviouralScore as number) ?? 0,
+      mentionCount: (r.mentionCount as number) ?? 0,
+      sourceCount: srcCount,
+      uniqueSourceTypes: srcTypes,
+      daysActive: (r.daysActive as number) ?? 0,
+      recentVelocity: (r.recentVelocity as number) ?? 0,
+      velocityDirection: (r.velocityDirection as 'rising' | 'stable' | 'falling') ?? 'stable',
+      status: r.status as AnchorCandidateStatus,
+      scoringProfile: ((r.scoringProfile as string) ?? 'balanced') as AnchorCandidate['scoringProfile'],
+      reasoningText: (r.reasoningText as string) ?? null,
+      firstScoredAt: (r.firstScoredAt as string) ?? '',
+      lastScoredAt: (r.lastScoredAt as string) ?? '',
+      suggestedAt: (r.suggestedAt as string) ?? null,
+      reviewedAt: (r.reviewedAt as string) ?? null,
+      dormantSince: (r.dormantSince as string) ?? null,
+      dismissCount: (r.dismissCount as number) ?? 0,
+      resurface_after: (r.resurface_after as string) ?? null,
+      thresholdAtScoring: (r.thresholdAtScoring as number) ?? null,
+      totalEdges: totalEdges,
+      createdAt: (r.createdAt as string) ?? '',
+      updatedAt: (r.updatedAt as string) ?? '',
+      suggestedParentAnchorId: (r.suggestedParentAnchorId as string) ?? null,
+      node: r.node as AnchorCandidateWithNode['node'],
+      connectionCount: totalEdges,
+      anchorConnections: (r.anchorConnections as number) ?? 0,
+    }
+  })
+
+  return {
+    suggested: all.filter(c => c.status === 'suggested'),
+    confirmed: all.filter(c => c.status === 'confirmed' || c.status === 'dormant'),
+    archived: all.filter(c => c.status === 'archived'),
+    suggestedCount: result.suggestedCount ?? 0,
+  }
+}
+
+// ─── Fetch: candidates with joined node data (legacy per-status query) ───────
+// Used by ExploreView for ghost clusters and other targeted queries.
+// For the Anchors/Signals page, use fetchAllCandidatesViaRpc() instead.
 
 export async function fetchCandidatesWithNodes(
   userId: string,

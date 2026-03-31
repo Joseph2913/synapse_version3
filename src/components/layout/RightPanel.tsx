@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Anchor, Clock } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
@@ -11,8 +11,8 @@ import { SourceDetail } from '../panels/SourceDetail'
 import { AskRightPanel } from '../ask/AskRightPanel'
 import { McpAccessPanel } from '../automate/McpAccessPanel'
 import { KnowledgeSnapshotPanel } from '../home/KnowledgeSnapshotPanel'
+import { HomeDashboardContext } from '../../app/providers/HomeDashboardProvider'
 import type { KnowledgeNode } from '../../types/database'
-import type { KnowledgeSnapshot, PipelineStatus } from '../../services/supabase'
 
 const MIN_WIDTH = 240
 const MAX_WIDTH = 560
@@ -140,17 +140,10 @@ export function RightPanel() {
   const isAskView = location.pathname === '/ask'
   const isHomeView = location.pathname === '/'
 
-  // Home view: fetch snapshot data for the Knowledge Snapshot panel
-  const [homeSnapshot, setHomeSnapshot] = useState<KnowledgeSnapshot | null>(null)
-  const [homePipeline, setHomePipeline] = useState<PipelineStatus | null>(null)
-
-  useEffect(() => {
-    if (!isHomeView) return
-    import('../../services/supabase').then(({ fetchKnowledgeSnapshot, fetchPipelineStatus }) => {
-      fetchKnowledgeSnapshot().then(setHomeSnapshot).catch(() => {})
-      fetchPipelineStatus().then(setHomePipeline).catch(() => {})
-    })
-  }, [isHomeView])
+  // Home view: snapshot + pipeline from cached dashboard provider
+  const dashboardCtx = useContext(HomeDashboardContext)
+  const homeSnapshot = dashboardCtx?.snapshot ?? null
+  const homePipeline = dashboardCtx?.pipelineStatus ?? null
 
   // ── Resizable width ────────────────────────────────────────────────────
   const [panelWidth, setPanelWidth] = useState(loadWidth)

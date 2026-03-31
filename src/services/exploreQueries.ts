@@ -322,224 +322,44 @@ export async function fetchEntityEdges(
     }))
 }
 
-// ─── fetchSourceGraph ────────────────────────────────────────────────────────
+// ─── fetchSourceGraph (via Supabase RPC) ────────────────────────────────────
+// Source graph computed server-side. No anchor data — sources and their
+// entity-based cross-connections only.
+// See: supabase/migrations/20260331_get_explore_source_graph.sql
+// See: docs/PERFORMANCE-PATTERNS.md
 
 export interface SourceGraphResult {
   sources: import('../types/explore').SourceNode[]
   edges: import('../types/explore').SourceEdge[]
-  anchors: import('../types/explore').SourceGraphAnchor[]
 }
 
-const PAGE_SIZE = 1000
-
 export async function fetchSourceGraph(userId: string): Promise<SourceGraphResult> {
-  // 1. Fetch all sources
-  const { data: sources, error: srcErr } = await supabase
-    .from('knowledge_sources')
-    .select('id, title, source_type, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
+  const { data, error } = await supabase.rpc('get_explore_source_graph', { p_user_id: userId })
+  if (error) throw new Error(error.message)
 
-  if (srcErr) throw new Error(srcErr.message)
+  const result = data as {
+    sources: Array<{
+      id: string; title: string; sourceType: string
+      entityIds: string[]; entityCount: number
+      createdAt: string; tags: string[]
+    }>
+    edges: import('../types/explore').SourceEdge[]
+  } | null
 
-  // 2. Fetch ALL nodes with source_id, tags, is_anchor (paginated)
-  type NodeRow = { id: string; source_id: string; tags: string[] | null; is_anchor: boolean; label: string; entity_type: string }
-  const nodes: NodeRow[] = []
-  let nodeOffset = 0
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data: batch, error: nodeErr } = await supabase
-      .from('knowledge_nodes')
-      .select('id, source_id, tags, is_anchor, label, entity_type')
-      .eq('user_id', userId)
-      .not('source_id', 'is', null)
-      .range(nodeOffset, nodeOffset + PAGE_SIZE - 1)
-    if (nodeErr) throw new Error(nodeErr.message)
-    if (!batch || batch.length === 0) break
-    for (const n of batch) nodes.push(n as NodeRow)
-    if (batch.length < PAGE_SIZE) break
-    nodeOffset += PAGE_SIZE
-  }
+  if (!result) return { sources: [], edges: [] }
 
-  // 3. Build lookups
-  const nodeToSource = new Map<string, string>()
-  const sourceEntityIds = new Map<string, string[]>()
-  const sourceTags = new Map<string, Set<string>>()
+  const sources: import('../types/explore').SourceNode[] = (result.sources ?? []).map(s => ({
+    id: s.id,
+    title: s.title,
+    sourceType: s.sourceType,
+    entityIds: s.entityIds ?? [],
+    entityCount: s.entityCount ?? 0,
+    createdAt: s.createdAt,
+    tags: s.tags ?? [],
+    anchorIds: [], // anchors removed from source graph view
+  }))
 
-  for (const n of nodes) {
-    if (!n.source_id) continue
-    nodeToSource.set(n.id, n.source_id)
-
-    // Entity IDs per source
-    if (!sourceEntityIds.has(n.source_id)) sourceEntityIds.set(n.source_id, [])
-    sourceEntityIds.get(n.source_id)!.push(n.id)
-
-    // Tags per source (union of all entity tags)
-    if (n.tags && n.tags.length > 0) {
-      if (!sourceTags.has(n.source_id)) sourceTags.set(n.source_id, new Set())
-      for (const tag of n.tags) sourceTags.get(n.source_id)!.add(tag)
-    }
-  }
-
-  // 4. Identify anchors and build anchor → source mapping via edges
-  const anchorNodes = nodes.filter(n => n.is_anchor)
-  const anchorIds = new Set(anchorNodes.map(a => a.id))
-
-  // 5. Fetch ALL edges (paginated)
-  type EdgeRow = { source_node_id: string; target_node_id: string }
-  const allEdges: EdgeRow[] = []
-  let edgeOffset = 0
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data: batch, error: edgeErr } = await supabase
-      .from('knowledge_edges')
-      .select('source_node_id, target_node_id')
-      .eq('user_id', userId)
-      .range(edgeOffset, edgeOffset + PAGE_SIZE - 1)
-    if (edgeErr) throw new Error(edgeErr.message)
-    if (!batch || batch.length === 0) break
-    for (const e of batch) allEdges.push(e as EdgeRow)
-    if (batch.length < PAGE_SIZE) break
-    edgeOffset += PAGE_SIZE
-  }
-
-  // 6. Build anchor → connected source IDs, and source → connected anchor IDs
-  const anchorToSources = new Map<string, Set<string>>()
-  const sourceToAnchors = new Map<string, Set<string>>()
-
-  for (const e of allEdges) {
-    // Check if either end is an anchor
-    const aId = anchorIds.has(e.source_node_id) ? e.source_node_id
-              : anchorIds.has(e.target_node_id) ? e.target_node_id
-              : null
-    if (!aId) continue
-
-    const otherId = aId === e.source_node_id ? e.target_node_id : e.source_node_id
-    const otherSource = nodeToSource.get(otherId)
-    if (!otherSource) continue
-
-    if (!anchorToSources.has(aId)) anchorToSources.set(aId, new Set())
-    anchorToSources.get(aId)!.add(otherSource)
-
-    if (!sourceToAnchors.has(otherSource)) sourceToAnchors.set(otherSource, new Set())
-    sourceToAnchors.get(otherSource)!.add(aId)
-  }
-
-  // Build SourceGraphAnchor array
-  const graphAnchors: import('../types/explore').SourceGraphAnchor[] = anchorNodes
-    .filter(a => anchorToSources.has(a.id))
-    .map(a => ({
-      id: a.id,
-      label: a.label,
-      entityType: a.entity_type,
-      connectedSourceIds: Array.from(anchorToSources.get(a.id)!),
-    }))
-
-  // 7. Build SourceNode array (with tags and anchorIds)
-  const sourceNodes: import('../types/explore').SourceNode[] = (sources ?? []).map(s => {
-    const src = s as { id: string; title: string | null; source_type: string | null; created_at: string }
-    const entityIds = sourceEntityIds.get(src.id) ?? []
-    const tags = sourceTags.get(src.id)
-    const anchIds = sourceToAnchors.get(src.id)
-    return {
-      id: src.id,
-      title: src.title || 'Untitled',
-      sourceType: src.source_type || 'Note',
-      entityIds,
-      entityCount: entityIds.length,
-      createdAt: src.created_at,
-      tags: tags ? Array.from(tags) : [],
-      anchorIds: anchIds ? Array.from(anchIds) : [],
-    }
-  })
-
-  // 8. Compute source-source edges with connection type breakdown
-  // Use a combined key → { entity count, shared tags, common anchors }
-  type PairData = {
-    entityCount: number
-    sharedTags: Set<string>
-    commonAnchors: Set<string>
-  }
-  const pairMap = new Map<string, PairData>()
-
-  const getOrCreatePair = (a: string, b: string): PairData => {
-    const key = a < b ? `${a}::${b}` : `${b}::${a}`
-    if (!pairMap.has(key)) pairMap.set(key, { entityCount: 0, sharedTags: new Set(), commonAnchors: new Set() })
-    return pairMap.get(key)!
-  }
-
-  // 8a. Entity edges (cross-source)
-  for (const e of allEdges) {
-    const srcA = nodeToSource.get(e.source_node_id)
-    const srcB = nodeToSource.get(e.target_node_id)
-    if (!srcA || !srcB || srcA === srcB) continue
-    getOrCreatePair(srcA, srcB).entityCount++
-  }
-
-  // 8b. Shared tags between sources
-  const sourceIds = sourceNodes.map(s => s.id)
-  for (let i = 0; i < sourceIds.length; i++) {
-    const tagsA = sourceTags.get(sourceIds[i]!)
-    if (!tagsA || tagsA.size === 0) continue
-    for (let j = i + 1; j < sourceIds.length; j++) {
-      const tagsB = sourceTags.get(sourceIds[j]!)
-      if (!tagsB || tagsB.size === 0) continue
-      for (const tag of tagsA) {
-        if (tagsB.has(tag)) {
-          getOrCreatePair(sourceIds[i]!, sourceIds[j]!).sharedTags.add(tag)
-        }
-      }
-    }
-  }
-
-  // 8c. Common anchors between sources
-  for (let i = 0; i < sourceIds.length; i++) {
-    const anchA = sourceToAnchors.get(sourceIds[i]!)
-    if (!anchA || anchA.size === 0) continue
-    for (let j = i + 1; j < sourceIds.length; j++) {
-      const anchB = sourceToAnchors.get(sourceIds[j]!)
-      if (!anchB || anchB.size === 0) continue
-      for (const aId of anchA) {
-        if (anchB.has(aId)) {
-          getOrCreatePair(sourceIds[i]!, sourceIds[j]!).commonAnchors.add(aId)
-        }
-      }
-    }
-  }
-
-  // Build anchor label lookup for edge labels
-  const anchorLabelMap = new Map(anchorNodes.map(a => [a.id, a.label]))
-
-  // 9. Convert pair map to SourceEdge[]
-  const sourceEdges: import('../types/explore').SourceEdge[] = []
-  for (const [key, data] of pairMap) {
-    const [fromId, toId] = key.split('::')
-    const connections: import('../types/explore').SourceEdge['connections'] = []
-
-    if (data.entityCount > 0) {
-      connections.push({ type: 'entity', count: data.entityCount, labels: [] })
-    }
-    // Tag connections omitted — too noisy for source graph
-    if (data.commonAnchors.size > 0) {
-      connections.push({
-        type: 'anchor',
-        count: data.commonAnchors.size,
-        labels: Array.from(data.commonAnchors).map(id => anchorLabelMap.get(id) || id),
-      })
-    }
-
-    if (connections.length > 0) {
-      const totalWeight = data.entityCount + data.commonAnchors.size * 3
-      sourceEdges.push({
-        fromSourceId: fromId!,
-        toSourceId: toId!,
-        totalWeight,
-        connections,
-      })
-    }
-  }
-
-  return { sources: sourceNodes, edges: sourceEdges, anchors: graphAnchors }
+  return { sources, edges: result.edges ?? [] }
 }
 
 // ─── fetchSourceEntities ─────────────────────────────────────────────────────
