@@ -608,7 +608,7 @@ export async function generateRAGResponse(
   // Thinking budgets are disabled for now until Google adds JSON + thinking support.
   const generationConfig: Record<string, unknown> = {
     temperature: temperatureOverride ?? 0.3,
-    maxOutputTokens: maxOutputTokens ?? 16384,
+    maxOutputTokens: maxOutputTokens ?? 32768,
     responseMimeType: 'application/json',
   }
 

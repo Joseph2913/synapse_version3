@@ -115,7 +115,7 @@ export const MODEL_TIERS: ModelTier[] = [
     icon: 'Brain',
     generationConfig: {
       model: 'gemini-2.5-flash',
-      maxOutputTokens: 16384,
+      maxOutputTokens: 32768,
       temperature: 0.3,
     },
   },
