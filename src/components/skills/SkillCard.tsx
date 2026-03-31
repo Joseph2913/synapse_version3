@@ -56,6 +56,35 @@ function relativeTime(dateStr: string): string {
   return `${months}mo ago`
 }
 
+// ─── Domain Badge ────────────────────────────────────────────────────────────
+
+interface DomainBadgeProps {
+  domain: string | null
+}
+
+export function DomainBadge({ domain }: DomainBadgeProps) {
+  const color = getDomainColor(domain)
+  const label = formatDomainLabel(domain)
+  return (
+    <span
+      className="inline-flex items-center gap-1 font-body font-semibold"
+      style={{
+        background: hexToRgba(color, 0.06),
+        border: `1px solid ${hexToRgba(color, 0.16)}`,
+        color,
+        padding: '3px 9px',
+        borderRadius: 5,
+        fontSize: 11,
+        fontWeight: 600,
+        lineHeight: 1,
+      }}
+    >
+      <span style={{ width: 5, height: 5, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      {label}
+    </span>
+  )
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface SkillCardProps {

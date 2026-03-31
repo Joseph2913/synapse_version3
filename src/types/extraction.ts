@@ -112,6 +112,14 @@ export interface UseExtractionReturn {
   reset: () => void
 }
 
+// --- Skill Context Types ---
+
+export interface SkillContextItem {
+  label: string
+  domain: string
+  exposure_level: string
+}
+
 // --- History Tab Types ---
 
 export interface ExtractionSession {
