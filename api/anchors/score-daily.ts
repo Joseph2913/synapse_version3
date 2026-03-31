@@ -22,7 +22,7 @@ function verifyCronAuth(req: VercelRequest): boolean {
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.60,
+  suggestionThreshold:         0.40,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
   autoDismissAfterDays:        14,
@@ -59,10 +59,10 @@ const DAY_WEIGHTS = Array.from({ length: MOMENTUM_WINDOW_DAYS }, (_, i) =>
 const MAX_MOMENTUM = DAY_WEIGHTS.reduce((s, w) => s + w, 0) // ≈ 2.44
 
 // Minimum distinct active days to even be considered a pattern
-const MIN_ACTIVE_DAYS = 2
+const MIN_ACTIVE_DAYS = 1
 
 // Minimum momentum score (normalised 0–1) to proceed to Phase 2
-const MOMENTUM_THRESHOLD = 0.15
+const MOMENTUM_THRESHOLD = 0.06
 
 // Streak bonus: consecutive recent days multiply momentum
 // 2 consecutive = 1.1×, 3 = 1.2×, 4 = 1.3×, etc.
@@ -182,12 +182,12 @@ function scoreQualifiedNodes(
 
   return qualifiedSignals.map(signals => {
     // Centrality: structural importance
-    const degreeScore     = Math.min(signals.totalEdges / 50, 1.0)
-    const diversityFactor = Math.min(signals.uniqueNeighbourTypes / 8, 1.0)
+    const degreeScore     = Math.min(signals.totalEdges / 20, 1.0)
+    const diversityFactor = Math.min(signals.uniqueNeighbourTypes / 5, 1.0)
     const centralityScore = (degreeScore * 0.6) + (diversityFactor * 0.4)
 
     // Diversity: cross-source coverage
-    const sourceCountScore = Math.min(signals.uniqueSources / 8, 1.0)
+    const sourceCountScore = Math.min(signals.uniqueSources / 4, 1.0)
     const typeCountScore   = Math.min(signals.uniqueSourceTypes / 3, 1.0)
     const diversityScore   = (sourceCountScore * 0.65) + (typeCountScore * 0.35)
 
@@ -203,9 +203,9 @@ function scoreQualifiedNodes(
     const overlapRatio = signals.anchorNeighbourCount / Math.max(signals.totalNeighbourCount, 1)
     if (overlapRatio > 0.70) composite *= 0.75
 
-    // Momentum amplifier: scale composite by momentum (0.5–1.0 range)
+    // Momentum amplifier: scale composite by momentum (0.70–1.0 range)
     // so momentum still influences ranking among qualified nodes
-    const momentumBoost = 0.5 + (signals.momentum.momentumScore * 0.5)
+    const momentumBoost = 0.70 + (signals.momentum.momentumScore * 0.30)
     composite *= momentumBoost
 
     composite = Math.min(Math.max(composite, 0), 1.0)

@@ -24,6 +24,7 @@ import { ProcessingCard } from '../components/signals/ProcessingCard'
 import { ToggleGroup } from '../components/shared/ToggleGroup'
 import { SectionLabel } from '../components/ui/SectionLabel'
 import type { AnchorCandidateWithNode } from '../types/anchors'
+import { useProcessingItems } from '../app/providers/ProcessingProvider'
 import type { KnowledgeSkillListItem } from '../types/skills'
 
 type SignalMode = 'all' | 'anchors' | 'skills'
@@ -754,10 +755,7 @@ export function SignalsView() {
   const [isDragging, setIsDragging] = useState(false)
   const [toast, setToast] = useState<{ text: string; color: string } | null>(null)
   const [totalSourcesIngested, setTotalSourcesIngested] = useState(0)
-  const [processingItems, setProcessingItems] = useState<Array<{ id: string; type: 'skill' | 'anchor'; title?: string }>>([])
-  const removeProcessingItem = useCallback((id: string) => {
-    setProcessingItems(prev => prev.filter(item => item.id !== id))
-  }, [])
+  const { items: processingItems, add: addProcessingItem, remove: removeProcessingItem } = useProcessingItems()
 
   const containerRef = useRef<HTMLDivElement>(null)
   const dragStartX = useRef(0)
@@ -929,7 +927,7 @@ export function SignalsView() {
     if (!user?.id) throw new Error('Not authenticated.')
 
     const tempId = crypto.randomUUID()
-    setProcessingItems(prev => [...prev, { id: tempId, type: 'anchor', title: input.title }])
+    addProcessingItem({ id: tempId, type: 'anchor', title: input.title })
     setCreatePanel(null)
 
     try {
@@ -948,7 +946,7 @@ export function SignalsView() {
       removeProcessingItem(tempId)
       showToast(err instanceof Error ? err.message : 'Failed to create anchor.', '#ef4444')
     }
-  }, [refetch, removeProcessingItem, showToast, user?.id])
+  }, [addProcessingItem, refetch, removeProcessingItem, showToast, user?.id])
 
   const handleProcessSkillSource = useCallback(async (
     input: {
@@ -963,7 +961,7 @@ export function SignalsView() {
 
     // Add a processing card immediately and close the create panel
     const tempId = crypto.randomUUID()
-    setProcessingItems(prev => [...prev, { id: tempId, type: 'skill', title: input.title }])
+    addProcessingItem({ id: tempId, type: 'skill', title: input.title })
     setCreatePanel(null)
 
     // Run the full ingestion + skill extraction in the background
@@ -999,7 +997,7 @@ export function SignalsView() {
       showToast(err instanceof Error ? err.message : 'Failed to process skill source.', '#ef4444')
       throw err
     }
-  }, [refresh, removeProcessingItem, selectSkill, session?.access_token, showToast, user?.id])
+  }, [addProcessingItem, refresh, removeProcessingItem, selectSkill, session?.access_token, showToast, user?.id])
 
   const handleConfirmAsSubAnchor = useCallback(async (candidateId: string, nodeId: string, parentId: string) => {
     const success = await promoteToSubAnchor(candidateId, nodeId, parentId)

@@ -182,29 +182,26 @@ export async function createAndProcessSkillSource({
 
   const sourceId = sourceRow.id
 
-  // Step 2: Run full extraction pipeline AND skill backfill in parallel.
-  // The extraction pipeline populates nodes, edges, chunks, embeddings,
-  // cross-connections, and anchor scoring — same as the Ingest page.
-  // The skill backfill reads the full source content to generate a skill.
+  // Step 2: Run full extraction pipeline FIRST so nodes, edges, chunks,
+  // embeddings, cross-connections, and anchor scoring are all saved.
+  // The backfill endpoint needs chunks in source_chunks to pass its
+  // pre-filter, so it must run AFTER extraction completes.
 
-  const [, backfillResult] = await Promise.all([
-    // Full ingestion pipeline (reuses existing source row)
-    runHeadlessExtraction({
-      userId,
-      accessToken,
-      content: trimmedContent,
-      existingSourceId: sourceId,
-      metadata: {
-        title: trimmedTitle || `Manual skill source (${inputType})`,
-        sourceType,
-        sourceUrl,
-      },
-      onProgress,
-    }),
+  await runHeadlessExtraction({
+    userId,
+    accessToken,
+    content: trimmedContent,
+    existingSourceId: sourceId,
+    metadata: {
+      title: trimmedTitle || `Manual skill source (${inputType})`,
+      sourceType,
+      sourceUrl,
+    },
+    onProgress,
+  })
 
-    // Skill generation via backfill endpoint (reads full content from DB)
-    callSkillBackfill(accessToken, sourceId),
-  ])
+  // Step 3: Now that chunks exist, run skill backfill
+  const backfillResult = await callSkillBackfill(accessToken, sourceId)
 
   // Look up the created skill ID if one was created
   const skillName = backfillResult.skillName

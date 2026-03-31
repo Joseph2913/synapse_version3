@@ -30,7 +30,7 @@ async function resolveUserId(req: VercelRequest): Promise<string | null> {
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.60,
+  suggestionThreshold:         0.40,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
   autoDismissAfterDays:        14,
@@ -60,8 +60,8 @@ const DAY_WEIGHTS = Array.from({ length: MOMENTUM_WINDOW_DAYS }, (_, i) =>
   Math.pow(MOMENTUM_DECAY, i)
 )
 const MAX_MOMENTUM = DAY_WEIGHTS.reduce((s, w) => s + w, 0)
-const MIN_ACTIVE_DAYS = 2
-const MOMENTUM_THRESHOLD = 0.15
+const MIN_ACTIVE_DAYS = 1
+const MOMENTUM_THRESHOLD = 0.06
 const STREAK_BONUS_PER_DAY = 0.1
 const MAX_STREAK_BONUS = 1.5
 
@@ -395,11 +395,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Compute scores
-        const degreeScore     = Math.min(myAll.length / 50, 1.0)
-        const diversityFactor = Math.min(nbTypeSet.size / 8, 1.0)
+        const degreeScore     = Math.min(myAll.length / 20, 1.0)
+        const diversityFactor = Math.min(nbTypeSet.size / 5, 1.0)
         const centralityScore = (degreeScore * 0.6) + (diversityFactor * 0.4)
 
-        const sourceCountScore = Math.min(srcIdSet.size / 8, 1.0)
+        const sourceCountScore = Math.min(srcIdSet.size / 4, 1.0)
         const typeCountScore   = Math.min(srcTypeSet.size / 3, 1.0)
         const diversityScore   = (sourceCountScore * 0.65) + (typeCountScore * 0.35)
 
@@ -411,7 +411,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const overlapRatio = anchorNb / Math.max(totalNb, 1)
         if (overlapRatio > 0.70) composite *= 0.75
 
-        const momentumBoost = 0.5 + (m.momentumScore * 0.5)
+        const momentumBoost = 0.70 + (m.momentumScore * 0.30)
         composite = Math.min(Math.max(composite * momentumBoost, 0), 1.0)
 
         // Reasoning

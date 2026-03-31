@@ -171,7 +171,7 @@ export interface AnchorUserConfig {
 
 export const DEFAULT_ANCHOR_USER_CONFIG: AnchorUserConfig = {
   suggestionFrequency:         'per_extraction',
-  suggestionThreshold:         0.60,
+  suggestionThreshold:         0.40,
   autoDismissAfterDays:        14,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
@@ -183,9 +183,9 @@ export const DEFAULT_ANCHOR_USER_CONFIG: AnchorUserConfig = {
 // Maps to the Conservative / Balanced / Aggressive slider in the UI.
 
 export const THRESHOLD_PRESETS = {
-  conservative: 0.72,
-  balanced:     0.60,
-  aggressive:   0.45,
+  conservative: 0.55,
+  balanced:     0.40,
+  aggressive:   0.25,
 } as const
 
 export type ThresholdPreset = keyof typeof THRESHOLD_PRESETS

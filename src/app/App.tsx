@@ -1,6 +1,7 @@
 import { AuthProvider } from './providers/AuthProvider'
 import { SettingsProvider } from './providers/SettingsProvider'
 import { GraphProvider } from './providers/GraphProvider'
+import { ProcessingProvider } from './providers/ProcessingProvider'
 import { Router } from './Router'
 import { LoginPage } from '../components/auth/LoginPage'
 import { useAuth } from '../hooks/useAuth'
@@ -47,7 +48,9 @@ export default function App() {
       <AuthGate>
         <SettingsProvider>
           <GraphProvider>
-            <Router />
+            <ProcessingProvider>
+              <Router />
+            </ProcessingProvider>
           </GraphProvider>
         </SettingsProvider>
       </AuthGate>

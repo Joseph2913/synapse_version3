@@ -12,8 +12,8 @@ const WEIGHTS = {
   recency: 0.10,
 }
 
-const CONFIDENCE_THRESHOLD = 0.6
-const MIN_SOURCE_DIVERSITY = 3
+const CONFIDENCE_THRESHOLD = 0.35
+const MIN_SOURCE_DIVERSITY = 2
 
 // Entity types that score higher for substance
 const HIGH_SUBSTANCE_TYPES = new Set([
@@ -118,16 +118,16 @@ export async function detectAutoAnchors(
     const clusterSourceTypes = new Set(clusterSourceIds.map(sid => sourceTypeMap.get(sid) ?? 'Document'))
 
     // Score: source diversity (0-1)
-    const sourceDiversityScore = Math.min(1, clusterSourceIds.length / 8)
+    const sourceDiversityScore = Math.min(1, clusterSourceIds.length / 4)
 
     // Score: source type diversity (0-1)
-    const sourceTypeDiversityScore = Math.min(1, clusterSourceTypes.size / 4)
+    const sourceTypeDiversityScore = Math.min(1, clusterSourceTypes.size / 3)
 
     // Score: growth rate (entities added in last 14 days)
     const recentEntities = clusterEntities.filter(e =>
       now - new Date(e.created_at).getTime() < FOURTEEN_DAYS
     )
-    const growthScore = Math.min(1, recentEntities.length / 5)
+    const growthScore = Math.min(1, recentEntities.length / 3)
 
     // Score: entity type substance
     const typeDistribution: Record<string, number> = {}
