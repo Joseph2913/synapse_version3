@@ -182,6 +182,12 @@ export function AskView() {
     }
   }, [resolveSourceId])
 
+  // Source bibliography click → open SourceDetailCard in sidebar
+  const handleSourceClick = useCallback((sourceId: string) => {
+    setExploringSourceId(sourceId)
+    setSidebarOpen(true)
+  }, [])
+
   // SourceDetailCard "Chat with this source" → send message inline
   const handleSourceCardChat = useCallback((source: { id: string; title: string; summary: string | null }) => {
     const ctx = buildSourceChatContext(source)
@@ -314,6 +320,7 @@ export function AskView() {
             onCitationClick={handleCitationClick}
             onCitationHoverChange={setHighlightedCitationIndex}
             onExploreMore={handleExploreMore}
+            onSourceClick={handleSourceClick}
           />
         )}
 

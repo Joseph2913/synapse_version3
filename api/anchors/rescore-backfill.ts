@@ -42,7 +42,8 @@ function verifyCronAuth(req: VercelRequest): boolean {
 // ─── SCORING CONFIG (mirrors score-daily.ts with new lowered thresholds) ─────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
-const DEFAULT_SUGGESTION_THRESHOLD = 0.40
+const DEFAULT_SUGGESTION_THRESHOLD = 0.25
+const AUTO_CONFIRM_THRESHOLD = 0.45
 
 const SIGNAL_WEIGHTS: Record<ScoringProfile, {
   centrality: number; diversity: number; richness: number
@@ -304,13 +305,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (anchorNb >= 1) parts.push(`connects to ${anchorNb} existing anchor${anchorNb > 1 ? 's' : ''}`)
 
         const reasoningText = parts.join(', ') + '. (Retroactive backfill)'
+        const shouldAutoConfirm = composite >= AUTO_CONFIRM_THRESHOLD
         const shouldSurface = composite >= threshold
 
         if (!dryRun) {
           const existing = existingMap.get(nodeId)
 
           if (existing) {
-            // Only update score if new score is higher, and don't downgrade protected statuses
             const updatePayload: Record<string, unknown> = {
               composite_score:     composite,
               centrality_score:    centralityScore,
@@ -329,7 +330,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               threshold_at_scoring: threshold,
             }
 
-            if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
+            // Auto-confirm: upgrade pending/suggested → confirmed
+            if (shouldAutoConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
+              updatePayload.status = 'confirmed'
+              updatePayload.reviewed_at = nowStr
+              updatePayload.suggested_at = updatePayload.suggested_at ?? nowStr
+              surfaced++
+              await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', nodeId)
+            } else if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
               updatePayload.status = 'suggested'
               updatePayload.suggested_at = nowStr
               surfaced++
@@ -338,7 +346,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
             updatedCandidates++
           } else {
-            const insertStatus = shouldSurface ? 'suggested' : 'pending'
+            const insertStatus = shouldAutoConfirm ? 'confirmed' : (shouldSurface ? 'suggested' : 'pending')
             await sb.from('anchor_candidates').insert({
               user_id: userId, node_id: nodeId,
               composite_score:     composite,
@@ -357,19 +365,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               scoring_profile:     config.scoringProfile,
               reasoning_text:      reasoningText,
               threshold_at_scoring: threshold,
-              suggested_at:        insertStatus === 'suggested' ? nowStr : null,
+              suggested_at:        insertStatus !== 'pending' ? nowStr : null,
+              reviewed_at:         insertStatus === 'confirmed' ? nowStr : null,
               first_scored_at:     nowStr,
               last_scored_at:      nowStr,
             })
             newCandidates++
-            if (insertStatus === 'suggested') surfaced++
+            if (insertStatus === 'confirmed') {
+              await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', nodeId)
+              surfaced++
+            } else if (insertStatus === 'suggested') {
+              surfaced++
+            }
           }
         } else {
           // Dry run — just count what would happen
           const existing = existingMap.get(nodeId)
           if (!existing) newCandidates++
           else updatedCandidates++
-          if (shouldSurface) surfaced++
+          if (shouldAutoConfirm || shouldSurface) surfaced++
         }
 
         scored++

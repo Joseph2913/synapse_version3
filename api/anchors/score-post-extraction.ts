@@ -29,8 +29,10 @@ async function resolveUserId(req: VercelRequest): Promise<string | null> {
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
+const AUTO_CONFIRM_THRESHOLD = 0.45
+
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.40,
+  suggestionThreshold:         0.25,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
   autoDismissAfterDays:        14,
@@ -462,8 +464,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (isDupCandidate) { scored++; continue }
 
+        const shouldAutoConfirm = composite >= AUTO_CONFIRM_THRESHOLD
         const shouldSurface = composite >= (config.suggestionThreshold as number)
         const existing = existingMap.get(m.nodeId)
+        const daysActive = nodeRow?.created_at
+          ? Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000) : 0
 
         if (existing) {
           const updatePayload: Record<string, unknown> = {
@@ -471,39 +476,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             diversity_score: diversityScore, velocity_score: m.momentumScore,
             richness_score: richnessScore, mention_count: m.edgeCount7d,
             source_count: srcIdSet.size, unique_source_types: srcTypeSet.size,
-            days_active: nodeRow?.created_at
-              ? Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000) : 0,
+            days_active: daysActive,
             recent_velocity: m.momentumScore,
             velocity_direction: m.consecutiveStreak >= 2 ? 'rising' : 'stable',
             scoring_profile: config.scoringProfile, reasoning_text: parts.join(', ') + '.',
             last_scored_at: nowStr, threshold_at_scoring: config.suggestionThreshold,
           }
-          if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
+          // Auto-confirm: upgrade pending/suggested → confirmed
+          if (shouldAutoConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
+            updatePayload.status = 'confirmed'
+            updatePayload.reviewed_at = nowStr
+            updatePayload.suggested_at = updatePayload.suggested_at ?? nowStr
+            surfaced++
+            await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', m.nodeId)
+          } else if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
             updatePayload.status = 'suggested'
             updatePayload.suggested_at = nowStr
             surfaced++
           }
           await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
         } else {
-          const insertStatus = shouldSurface ? 'suggested' : 'pending'
+          const insertStatus = shouldAutoConfirm ? 'confirmed' : (shouldSurface ? 'suggested' : 'pending')
           await sb.from('anchor_candidates').insert({
             user_id: userId, node_id: m.nodeId,
             composite_score: composite, centrality_score: centralityScore,
             diversity_score: diversityScore, velocity_score: m.momentumScore,
             richness_score: richnessScore, behavioural_score: 0,
             mention_count: m.edgeCount7d, source_count: srcIdSet.size,
-            unique_source_types: srcTypeSet.size,
-            days_active: nodeRow?.created_at
-              ? Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000) : 0,
+            unique_source_types: srcTypeSet.size, days_active: daysActive,
             recent_velocity: m.momentumScore,
             velocity_direction: m.consecutiveStreak >= 2 ? 'rising' : 'stable',
             status: insertStatus, scoring_profile: config.scoringProfile,
             reasoning_text: parts.join(', ') + '.',
             threshold_at_scoring: config.suggestionThreshold,
-            suggested_at: insertStatus === 'suggested' ? nowStr : null,
+            suggested_at: insertStatus !== 'pending' ? nowStr : null,
+            reviewed_at: insertStatus === 'confirmed' ? nowStr : null,
             first_scored_at: nowStr, last_scored_at: nowStr,
           })
-          if (insertStatus === 'suggested') surfaced++
+          if (insertStatus === 'confirmed') {
+            await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', m.nodeId)
+            surfaced++
+          } else if (insertStatus === 'suggested') {
+            surfaced++
+          }
         }
         scored++
       }
@@ -544,6 +559,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       `scored=${scored} surfaced=${surfaced} seeds=${seedNodes.length} ` +
       `duration=${Date.now() - startTime}ms`
     )
+
+    // Fire-and-forget: spawn sub-anchors for any newly suggested candidates
+    if (surfaced > 0) {
+      try {
+        const baseUrl = req.headers['x-forwarded-host']
+          ? `https://${req.headers['x-forwarded-host']}`
+          : req.headers.host ? `https://${req.headers.host}` : null
+
+        if (baseUrl) {
+          fetch(`${baseUrl}/api/anchors/spawn-sub-anchors`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': req.headers['authorization'] ?? '',
+            },
+            body: JSON.stringify({ userId }),
+          }).catch(err => {
+            console.warn('[score-post-extraction] spawn-sub-anchors fire-and-forget failed:', err)
+          })
+        }
+      } catch { /* non-fatal */ }
+    }
 
     return res.status(200).json({
       success: true, scored, surfaced, seeds: seedNodes.length,

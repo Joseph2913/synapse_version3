@@ -37,6 +37,13 @@ export const DEFAULT_QUERY_CONFIG: QueryConfig = {
 
 // ─── Chat Messages ────────────────────────────────────────────────────────────
 
+export interface SourceReference {
+  index: number            // 1-based source number shown in bibliography
+  sourceId: string
+  title: string
+  sourceType: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -48,6 +55,10 @@ export interface ChatMessage {
     question: string
     label: string
   }
+  /** Unique sources used in this response, numbered for the bibliography */
+  sourcesUsed?: SourceReference[]
+  /** Maps chunk index (from AI) → source index (in sourcesUsed) */
+  chunkToSourceIndex?: Record<number, number>
 }
 
 // ─── Citations ────────────────────────────────────────────────────────────────

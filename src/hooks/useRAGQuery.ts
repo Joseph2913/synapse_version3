@@ -4,7 +4,7 @@ import { useGraphContext } from './useGraphContext'
 import { queryGraph, buildRAGResponseContext } from '../services/rag'
 import { routedQuery } from '../services/ragRouter'
 import { createChatSession, appendMessages, fetchSession } from '../services/chatHistory'
-import type { ChatMessage, RAGPipelineStep, RAGResponseContext, RAGStepEvent, QueryConfig } from '../types/rag'
+import type { ChatMessage, RAGPipelineStep, RAGResponseContext, RAGStepEvent, QueryConfig, SourceReference } from '../types/rag'
 import { DEFAULT_QUERY_CONFIG } from '../types/rag'
 import type { ChatEntryContext } from '../types/chatRouting'
 
@@ -118,6 +118,26 @@ export function useRAGQuery(): UseRAGQueryReturn {
       const pipelineDurationMs = Date.now() - startTime
       const ctx = buildRAGResponseContext(response)
 
+      // Build source bibliography: deduplicate chunks by source_id, assign indices
+      const sourceOrderMap = new Map<string, number>() // source_id → 1-based index
+      const sourcesUsed: SourceReference[] = []
+      const chunkToSourceIndex: Record<number, number> = {}
+
+      for (let i = 0; i < response.sourceChunks.length; i++) {
+        const chunk = response.sourceChunks[i]!
+        if (!sourceOrderMap.has(chunk.source_id)) {
+          const idx = sourcesUsed.length + 1
+          sourceOrderMap.set(chunk.source_id, idx)
+          sourcesUsed.push({
+            index: idx,
+            sourceId: chunk.source_id,
+            title: chunk.sourceTitle,
+            sourceType: chunk.sourceType,
+          })
+        }
+        chunkToSourceIndex[i + 1] = sourceOrderMap.get(chunk.source_id)!
+      }
+
       const assistantMessage: ChatMessage = {
         id: generateId(),
         role: 'assistant',
@@ -126,6 +146,8 @@ export function useRAGQuery(): UseRAGQueryReturn {
         timestamp: new Date(),
         pipelineDurationMs,
         followUp: response.followUp,
+        sourcesUsed: sourcesUsed.length > 0 ? sourcesUsed : undefined,
+        chunkToSourceIndex: Object.keys(chunkToSourceIndex).length > 0 ? chunkToSourceIndex : undefined,
       }
 
       setMessages(prev => [...prev, assistantMessage])

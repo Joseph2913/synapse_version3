@@ -13,6 +13,7 @@ interface ChatMessageListProps {
   onFollowUpClick?: (question: string) => void
   onCitationHoverChange?: (index: number | null) => void
   onExploreMore?: (citation: InlineCitation) => void
+  onSourceClick?: (sourceId: string) => void
 }
 
 export function ChatMessageList({
@@ -24,6 +25,7 @@ export function ChatMessageList({
   onFollowUpClick,
   onCitationHoverChange,
   onExploreMore,
+  onSourceClick,
 }: ChatMessageListProps) {
   return (
     <div
@@ -49,6 +51,7 @@ export function ChatMessageList({
               onFollowUpClick={onFollowUpClick}
               onCitationHoverChange={onCitationHoverChange}
               onExploreMore={onExploreMore}
+              onSourceClick={onSourceClick}
               isLatest={isLatestAssistant}
             />
           )

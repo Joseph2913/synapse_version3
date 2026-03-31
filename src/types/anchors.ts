@@ -171,7 +171,7 @@ export interface AnchorUserConfig {
 
 export const DEFAULT_ANCHOR_USER_CONFIG: AnchorUserConfig = {
   suggestionFrequency:         'per_extraction',
-  suggestionThreshold:         0.40,
+  suggestionThreshold:         0.25,
   autoDismissAfterDays:        14,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
@@ -183,10 +183,14 @@ export const DEFAULT_ANCHOR_USER_CONFIG: AnchorUserConfig = {
 // Maps to the Conservative / Balanced / Aggressive slider in the UI.
 
 export const THRESHOLD_PRESETS = {
-  conservative: 0.55,
-  balanced:     0.40,
-  aggressive:   0.25,
+  conservative: 0.40,
+  balanced:     0.25,
+  aggressive:   0.15,
 } as const
+
+// Auto-confirm threshold: nodes scoring at or above this are automatically
+// confirmed as anchors (is_anchor = true) without user review.
+export const AUTO_CONFIRM_THRESHOLD = 0.45
 
 export type ThresholdPreset = keyof typeof THRESHOLD_PRESETS
 

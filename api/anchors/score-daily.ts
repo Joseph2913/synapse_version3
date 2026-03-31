@@ -21,8 +21,10 @@ function verifyCronAuth(req: VercelRequest): boolean {
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
+const AUTO_CONFIRM_THRESHOLD = 0.45
+
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.40,
+  suggestionThreshold:         0.25,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
   autoDismissAfterDays:        14,
@@ -626,12 +628,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // ── Query 5: Bulk upsert all results ──────────────────────────────────
       const nowStr = new Date().toISOString()
       let surfaced = 0
+      let autoConfirmed = 0
       const protectedStatuses = ['confirmed', 'dismissed', 'archived', 'dormant']
 
       for (const candidate of scored) {
         const nodeId = candidate.signals.nodeId
         const existing = existingMap.get(nodeId)
+        const shouldAutoConfirm = candidate.compositeScore >= AUTO_CONFIRM_THRESHOLD
         const shouldSurface = candidate.compositeScore >= (config.suggestionThreshold as number)
+
+        // Determine target status
+        let targetStatus: string
+        if (shouldAutoConfirm) targetStatus = 'confirmed'
+        else if (shouldSurface) targetStatus = 'suggested'
+        else targetStatus = 'pending'
 
         if (existing) {
           const updatePayload: Record<string, unknown> = {
@@ -653,7 +663,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             threshold_at_scoring: config.suggestionThreshold,
           }
 
-          if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
+          // Auto-confirm: upgrade pending/suggested → confirmed
+          if (shouldAutoConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
+            updatePayload.status = 'confirmed'
+            updatePayload.reviewed_at = nowStr
+            updatePayload.suggested_at = updatePayload.suggested_at ?? nowStr
+            autoConfirmed++
+            // Set is_anchor on the node
+            await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', nodeId)
+          } else if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
             updatePayload.status = 'suggested'
             updatePayload.suggested_at = nowStr
             surfaced++
@@ -661,7 +679,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
         } else {
-          const insertStatus = shouldSurface ? 'suggested' : 'pending'
+          const insertStatus = shouldAutoConfirm ? 'confirmed' : (shouldSurface ? 'suggested' : 'pending')
           await sb.from('anchor_candidates').insert({
             user_id: userId, node_id: nodeId,
             composite_score:     candidate.compositeScore,
@@ -680,11 +698,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             scoring_profile:     config.scoringProfile,
             reasoning_text:      candidate.reasoningText,
             threshold_at_scoring: config.suggestionThreshold,
-            suggested_at:        insertStatus === 'suggested' ? nowStr : null,
+            suggested_at:        insertStatus !== 'pending' ? nowStr : null,
+            reviewed_at:         insertStatus === 'confirmed' ? nowStr : null,
             first_scored_at:     nowStr,
             last_scored_at:      nowStr,
           })
-          if (insertStatus === 'suggested') surfaced++
+          if (insertStatus === 'confirmed') {
+            autoConfirmed++
+            await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', nodeId)
+          } else if (insertStatus === 'suggested') {
+            surfaced++
+          }
         }
       }
 
@@ -693,11 +717,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         qualifiedForPhase2: nonAnchorMomentum.length,
         scored: scored.length,
         surfaced,
+        autoConfirmed,
         lifecycle,
       }
       console.log(
         `[score-daily] userId=${userId} momentum_candidates=${nodeEdgeMap.size} ` +
-        `qualified=${nonAnchorMomentum.length} scored=${scored.length} surfaced=${surfaced}`
+        `qualified=${nonAnchorMomentum.length} scored=${scored.length} surfaced=${surfaced} auto_confirmed=${autoConfirmed}`
       )
     }
 

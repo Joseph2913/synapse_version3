@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { Sparkles } from 'lucide-react'
 import { CitationTooltip } from './CitationTooltip'
+import { getSourceConfig } from '../../config/sourceTypes'
 import type { ChatMessage as ChatMessageType, InlineCitation } from '../../types/rag'
 
 interface ChatMessageProps {
@@ -9,6 +10,7 @@ interface ChatMessageProps {
   onFollowUpClick?: (question: string) => void
   onCitationHoverChange?: (index: number | null) => void
   onExploreMore?: (citation: InlineCitation) => void
+  onSourceClick?: (sourceId: string) => void
   isLatest?: boolean
 }
 
@@ -17,15 +19,17 @@ interface HoveredCitation {
   rect: DOMRect
 }
 
-/** Render a single citation badge */
+/** Render a single citation badge — shows source index if mapping available */
 function CitationBadge({
   citIndex,
+  displayIndex,
   citation,
   onCitationClick,
   onCitationHover,
   onCitationLeave,
 }: {
-  citIndex: number
+  citIndex: number        // original chunk index (used for click handler)
+  displayIndex: number    // source index to display (mapped from chunk)
   citation: InlineCitation
   onCitationClick?: (index: number) => void
   onCitationHover?: (citation: InlineCitation, rect: DOMRect) => void
@@ -50,7 +54,7 @@ function CitationBadge({
         transition: 'background 0.15s ease, border-color 0.15s ease',
       }}
     >
-      {citIndex}
+      {displayIndex}
     </span>
   )
 }
@@ -60,7 +64,8 @@ function parseContent(
   citations: InlineCitation[],
   onCitationClick?: (index: number) => void,
   onCitationHover?: (citation: InlineCitation, rect: DOMRect) => void,
-  onCitationLeave?: () => void
+  onCitationLeave?: () => void,
+  chunkToSourceIndex?: Record<number, number>,
 ): React.ReactNode[] {
   // Match both single [5] and grouped [5, 15, 19] citation patterns
   const parts = content.split(/(\[\d+(?:\s*,\s*\d+)*\])/g)
@@ -71,14 +76,22 @@ function parseContent(
       const indices = match[1]!.split(/\s*,\s*/).map(s => parseInt(s, 10))
 
       // Render each number as its own clickable badge
+      // Deduplicate source indices within a single group to avoid repeated badges
+      const seenSourceIndices = new Set<number>()
       const badges: React.ReactNode[] = []
       indices.forEach((citIndex, idx) => {
+        const displayIdx = chunkToSourceIndex?.[citIndex] ?? citIndex
+        // Skip if we already showed this source index in this group
+        if (seenSourceIndices.has(displayIdx)) return
+        seenSourceIndices.add(displayIdx)
+
         const citation = citations.find(c => c.index === citIndex)
         if (citation) {
           badges.push(
             <CitationBadge
               key={`${i}-cit-${citIndex}`}
               citIndex={citIndex}
+              displayIndex={displayIdx}
               citation={citation}
               onCitationClick={onCitationClick}
               onCitationHover={onCitationHover}
@@ -105,7 +118,7 @@ function parseContent(
                 transition: 'background 0.15s ease, border-color 0.15s ease',
               }}
             >
-              {citIndex}
+              {displayIdx}
             </span>
           )
         }
@@ -151,7 +164,7 @@ function parseContent(
   })
 }
 
-export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitationHoverChange, onExploreMore, isLatest }: ChatMessageProps) {
+export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitationHoverChange, onExploreMore, onSourceClick, isLatest }: ChatMessageProps) {
   const [expanded, setExpanded] = useState(false)
   const [hoveredCitation, setHoveredCitation] = useState<HoveredCitation | null>(null)
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -292,7 +305,7 @@ export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitat
         >
           {isUser
             ? parseContent(displayContent, [])
-            : parseContent(displayContent, citations, onCitationClick, handleCitationHover, handleCitationLeave)
+            : parseContent(displayContent, citations, onCitationClick, handleCitationHover, handleCitationLeave, message.chunkToSourceIndex)
           }
           {shouldTruncate && (
             <button
@@ -345,6 +358,108 @@ export function ChatMessage({ message, onCitationClick, onFollowUpClick, onCitat
           >
             {message.followUp.label} →
           </button>
+        )}
+
+        {/* Sources bibliography — unique sources used in this response */}
+        {!isUser && message.sourcesUsed && message.sourcesUsed.length > 0 && (
+          <div
+            style={{
+              marginTop: 12,
+              paddingTop: 10,
+              borderTop: '1px solid var(--border-subtle)',
+            }}
+          >
+            <span
+              className="font-display font-bold uppercase"
+              style={{
+                fontSize: 9,
+                letterSpacing: '0.07em',
+                color: 'var(--color-text-secondary)',
+                display: 'block',
+                marginBottom: 6,
+              }}
+            >
+              Sources
+            </span>
+            <div className="flex flex-col" style={{ gap: 3 }}>
+              {message.sourcesUsed.map(source => {
+                const cfg = getSourceConfig(source.sourceType)
+                return (
+                  <button
+                    key={source.sourceId}
+                    type="button"
+                    onClick={() => onSourceClick?.(source.sourceId)}
+                    className="flex items-center font-body cursor-pointer text-left"
+                    style={{
+                      gap: 8,
+                      padding: '5px 8px',
+                      borderRadius: 6,
+                      background: 'transparent',
+                      border: '1px solid transparent',
+                      transition: 'background 0.12s ease, border-color 0.12s ease',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = 'var(--color-bg-inset)'
+                      e.currentTarget.style.borderColor = 'var(--border-subtle)'
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = 'transparent'
+                      e.currentTarget.style.borderColor = 'transparent'
+                    }}
+                  >
+                    {/* Source number badge */}
+                    <span
+                      className="font-body font-bold shrink-0"
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 5,
+                        background: 'rgba(214,58,0,0.08)',
+                        color: 'var(--color-accent-500)',
+                        fontSize: 10,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {source.index}
+                    </span>
+                    {/* Source icon */}
+                    <span style={{ fontSize: 12, flexShrink: 0 }}>{cfg.icon}</span>
+                    {/* Source title */}
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 500,
+                        color: 'var(--color-text-body)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {source.title}
+                    </span>
+                    {/* Type label */}
+                    <span
+                      className="shrink-0"
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 600,
+                        color: cfg.color,
+                        background: `${cfg.color}10`,
+                        border: `1px solid ${cfg.color}20`,
+                        borderRadius: 3,
+                        padding: '1px 5px',
+                        marginLeft: 'auto',
+                      }}
+                    >
+                      {source.sourceType}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         )}
       </div>
 
