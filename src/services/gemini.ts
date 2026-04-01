@@ -364,8 +364,14 @@ ${nodesText}
 
 RELATIONSHIP PATHS — how entities connect:
 ${pathsText}
-
-Reminder: The source chunks contain actual words from the user's documents. They are more authoritative than entity summaries. Extract maximum detail from them.`
+${context.anchors && context.anchors.length > 0 ? `
+ANCHOR TOPICS — the user's most important knowledge themes:
+${context.anchors.map(a => `  • ${a.label} [${a.entityType}]${a.description ? ': ' + a.description : ''} (${a.connectionCount} connections)`).join('\n')}
+` : ''}${context.skills && context.skills.length > 0 ? `
+USER SKILLS — capabilities the user is developing:
+${context.skills.map(s => `  • ${s.name}${s.domain ? ' (' + s.domain + ')' : ''}: ${s.description} [${s.sourceCount} sources, confidence: ${(s.confidence * 100).toFixed(0)}%]`).join('\n')}
+` : ''}
+Reminder: The source chunks contain actual words from the user's documents. They are more authoritative than entity summaries. Extract maximum detail from them. Use anchor topics and skills to make connections that are personally relevant to the user.`
 }
 
 function parseRAGResponse(responseText: string): RAGGenerationResult {
@@ -428,6 +434,13 @@ function parseRAGResponse(responseText: string): RAGGenerationResult {
               fixAttempt += '\\"'
             }
           }
+        } else if (inStr && ch === '\n') {
+          // Literal newline inside a JSON string — escape it
+          fixAttempt += '\\n'
+        } else if (inStr && ch === '\r') {
+          fixAttempt += '\\r'
+        } else if (inStr && ch === '\t') {
+          fixAttempt += '\\t'
         } else {
           fixAttempt += ch
         }

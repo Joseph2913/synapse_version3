@@ -122,10 +122,27 @@ export interface RelationshipPath {
 
 // ─── RAG Context ──────────────────────────────────────────────────────────────
 
+export interface SkillSummary {
+  name: string
+  domain: string | null
+  description: string
+  confidence: number
+  sourceCount: number
+}
+
+export interface AnchorSummary {
+  label: string
+  entityType: string
+  description: string | null
+  connectionCount: number
+}
+
 export interface RAGContext {
   sourceChunks: EnrichedChunk[]
   nodeSummaries: NodeSummary[]
   relationshipPaths: RelationshipPath[]
+  skills?: SkillSummary[]
+  anchors?: AnchorSummary[]
 }
 
 export interface RAGResponseContext {

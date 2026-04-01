@@ -170,6 +170,13 @@ function validateResponse(raw, chunks, scenarioName) {
             if (',}]:'.includes(nc) || nc === '') { inStr = false; fixed += ch }
             else { fixed += '\\"' }
           }
+        } else if (inStr && ch === '\n') {
+          // Literal newline inside a JSON string — escape it
+          fixed += '\\n'
+        } else if (inStr && ch === '\r') {
+          fixed += '\\r'
+        } else if (inStr && ch === '\t') {
+          fixed += '\\t'
         } else { fixed += ch }
       }
     }

@@ -91,6 +91,8 @@ export function useRAGQuery(): UseRAGQueryReturn {
         setActiveEntryContext(entryContext)
       }
 
+      // Determine if this is a follow-up (no new entryContext, but we have a stored one)
+      const isFollowUp = !entryContext && activeContextRef.current !== null
       const currentContext = entryContext ?? activeContextRef.current
 
       const stepHandler = (event: RAGStepEvent) => {
@@ -108,10 +110,26 @@ export function useRAGQuery(): UseRAGQueryReturn {
         }
       }
 
-      // Route through entry-point-specific pipeline when context is available
-      const response = currentContext
-        ? await routedQuery(text, user.id, conversationHistory, currentContext, stepHandler, controller.signal)
-        : await queryGraph(text, user.id, conversationHistory, queryConfig, stepHandler, controller.signal)
+      // Routing logic:
+      // - First message with entry context → use specialised pipeline (scoped to source/entity)
+      // - Follow-up messages → use full graph search so the AI can find cross-connections,
+      //   but inject a system directive that keeps the original context as primary focus
+      let response: import('../services/rag').RAGResponse
+
+      if (currentContext && !isFollowUp) {
+        // First message: use the specialised pipeline (source chat, entity explore, etc.)
+        response = await routedQuery(text, user.id, conversationHistory, currentContext, stepHandler, controller.signal)
+      } else if (isFollowUp && currentContext) {
+        // Follow-up: use queryGraph (full graph access) with a contextual hint
+        const followUpConfig: QueryConfig = {
+          ...queryConfig,
+          systemDirective: `The user started this conversation focused on: "${currentContext.displayLabel ?? 'a specific topic'}". ${currentContext.systemDirective ? 'Original context: ' + currentContext.systemDirective : ''} For this follow-up question, search across the ENTIRE knowledge graph — all sources, entities, and connections — while keeping the original topic as the primary reference point. Draw connections between the original focus and other sources, entities, anchors, and skills in the graph.`,
+        }
+        response = await queryGraph(text, user.id, conversationHistory, followUpConfig, stepHandler, controller.signal)
+      } else {
+        // No context at all: standard query
+        response = await queryGraph(text, user.id, conversationHistory, queryConfig, stepHandler, controller.signal)
+      }
 
       if (controller.signal.aborted) return
 

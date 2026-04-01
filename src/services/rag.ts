@@ -3,6 +3,7 @@ import { classifyQuery, mapIntentToMindset } from './queryClassifier'
 import type { QueryClassification } from './queryClassifier'
 import { getResponseFormatForClassification } from '../config/responseFormats'
 import {
+  supabase,
   keywordSearchChunks,
   fetchChunksForSources,
   keywordSearchNodes,
@@ -26,6 +27,8 @@ import type {
   KeywordNodeResult,
   KeywordSourceResult,
   QueryConfig,
+  SkillSummary,
+  AnchorSummary,
 } from '../types/rag'
 import { QUERY_MINDSETS, MODEL_TIERS, DEFAULT_MINDSET_ID, DEFAULT_MODEL_TIER_ID } from '../config/queryMindsets'
 import { TOOL_MODES, DEFAULT_TOOL_MODE_ID } from '../config/toolModes'
@@ -157,6 +160,58 @@ function buildRelationshipPaths(
     })
   }
   return paths
+}
+
+/** Fetch user's skills for RAG context — lightweight summaries only */
+async function fetchSkillsForRAG(userId: string): Promise<SkillSummary[]> {
+  const { data } = await supabase
+    .from('knowledge_skills')
+    .select('name, domain, description, confidence, source_count')
+    .eq('user_id', userId)
+    .order('confidence', { ascending: false })
+    .limit(20)
+  return (data ?? []).map(s => ({
+    name: s.name,
+    domain: s.domain,
+    description: s.description,
+    confidence: s.confidence,
+    sourceCount: s.source_count,
+  }))
+}
+
+/** Fetch user's anchor entities for RAG context */
+async function fetchAnchorsForRAG(userId: string): Promise<AnchorSummary[]> {
+  // Get anchor nodes
+  const { data: anchorNodes } = await supabase
+    .from('knowledge_nodes')
+    .select('id, label, entity_type, description')
+    .eq('user_id', userId)
+    .eq('is_anchor', true)
+    .eq('is_merged', false)
+    .order('confidence', { ascending: false })
+    .limit(25)
+  if (!anchorNodes || anchorNodes.length === 0) return []
+
+  // Get edge counts per anchor (how connected each is)
+  const anchorIds = anchorNodes.map(n => n.id)
+  const { data: edgeCounts } = await supabase
+    .from('knowledge_edges')
+    .select('source_node_id, target_node_id')
+    .eq('user_id', userId)
+    .or(`source_node_id.in.(${anchorIds.join(',')}),target_node_id.in.(${anchorIds.join(',')})`)
+
+  const countMap = new Map<string, number>()
+  for (const e of edgeCounts ?? []) {
+    if (anchorIds.includes(e.source_node_id)) countMap.set(e.source_node_id, (countMap.get(e.source_node_id) ?? 0) + 1)
+    if (anchorIds.includes(e.target_node_id)) countMap.set(e.target_node_id, (countMap.get(e.target_node_id) ?? 0) + 1)
+  }
+
+  return anchorNodes.map(n => ({
+    label: n.label,
+    entityType: n.entity_type,
+    description: n.description,
+    connectionCount: countMap.get(n.id) ?? 0,
+  }))
 }
 
 async function enrichChunks(chunks: SemanticChunkResult[]): Promise<EnrichedChunk[]> {
@@ -449,10 +504,18 @@ export async function queryGraph(
 
   const sourceContextNote = formatSourceContext(allSources)
 
+  // Fetch skills and anchors in parallel for richer context
+  const [skills, anchors] = await Promise.all([
+    fetchSkillsForRAG(userId).catch(() => [] as SkillSummary[]),
+    fetchAnchorsForRAG(userId).catch(() => [] as AnchorSummary[]),
+  ])
+
   const context: RAGContext = {
     sourceChunks: enrichedChunks,
     nodeSummaries: allNodeSummaries,
     relationshipPaths: buildRelationshipPaths(graphNodes, graphEdges).slice(0, toolModeConfig.maxRelPaths),
+    skills: skills.length > 0 ? skills : undefined,
+    anchors: anchors.length > 0 ? anchors : undefined,
   }
   onStepChange?.({ step: 'context_assembly', status: 'done', contextChunks: enrichedChunks.length, contextNodes: allNodeSummaries.length, relationshipPaths: context.relationshipPaths.length })
 
