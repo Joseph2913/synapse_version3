@@ -9,9 +9,9 @@ import type { FullGraphData, FullGraphNode } from '../../services/graphQueries'
 
 const MIN_ZOOM = 0.05
 const MAX_ZOOM = 4.0
-const LABEL_ZOOM_THRESHOLD = 0.4  // labels appear when zoomed in past this
-const NODE_BASE_RADIUS = 4
-const ANCHOR_RADIUS = 7
+const LABEL_ZOOM_THRESHOLD = 0.15  // labels appear earlier since we have fewer nodes
+const NODE_BASE_RADIUS = 10
+const ANCHOR_RADIUS = 16
 const EDGE_COLOR = 'rgba(0,0,0,0.06)'
 const EDGE_HIGHLIGHT_COLOR = 'rgba(214,58,0,0.25)'
 
@@ -52,13 +52,45 @@ export function FullGraphView() {
     return () => ro.disconnect()
   }, [])
 
-  // Center camera when size is first available
+  // Auto-center camera on actual node positions
   useEffect(() => {
-    if (size.width > 0 && size.height > 0 && graphData) {
-      const cam = { zoom: 0.25, panX: size.width / 2 - 2000 * 0.25, panY: size.height / 2 - 1500 * 0.25 }
+    if (size.width <= 0 || size.height <= 0 || !graphData) return
+
+    // Find bounding box of positioned nodes
+    const positioned = graphData.nodes.filter(n => n.graphX != null && n.graphY != null)
+    if (positioned.length === 0) {
+      // No positioned nodes — default center
+      const cam = { zoom: 0.5, panX: size.width / 2, panY: size.height / 2 }
       cameraRef.current = cam
       setCamera(cam)
+      return
     }
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const n of positioned) {
+      if (n.graphX! < minX) minX = n.graphX!
+      if (n.graphY! < minY) minY = n.graphY!
+      if (n.graphX! > maxX) maxX = n.graphX!
+      if (n.graphY! > maxY) maxY = n.graphY!
+    }
+
+    const graphWidth = maxX - minX || 100
+    const graphHeight = maxY - minY || 100
+    const centerX = (minX + maxX) / 2
+    const centerY = (minY + maxY) / 2
+
+    // Zoom to fit all nodes with some padding
+    const pad = 100
+    const zoomX = size.width / (graphWidth + pad * 2)
+    const zoomY = size.height / (graphHeight + pad * 2)
+    const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(zoomX, zoomY)))
+
+    const panX = size.width / 2 - centerX * zoom
+    const panY = size.height / 2 - centerY * zoom
+
+    const cam = { zoom, panX, panY }
+    cameraRef.current = cam
+    setCamera(cam)
   }, [size.width, size.height, graphData])
 
   // ─── Data fetching ─────────────────────────────────────────────────────────
@@ -335,10 +367,30 @@ export function FullGraphView() {
   }, [size])
 
   const resetZoom = useCallback(() => {
-    const cam = { zoom: 0.25, panX: size.width / 2 - 2000 * 0.25, panY: size.height / 2 - 1500 * 0.25 }
+    if (!graphData) return
+    const positioned = graphData.nodes.filter(n => n.graphX != null && n.graphY != null)
+    if (positioned.length === 0) return
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const n of positioned) {
+      if (n.graphX! < minX) minX = n.graphX!
+      if (n.graphY! < minY) minY = n.graphY!
+      if (n.graphX! > maxX) maxX = n.graphX!
+      if (n.graphY! > maxY) maxY = n.graphY!
+    }
+    const graphWidth = maxX - minX || 100
+    const graphHeight = maxY - minY || 100
+    const centerX = (minX + maxX) / 2
+    const centerY = (minY + maxY) / 2
+    const pad = 100
+    const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(
+      size.width / (graphWidth + pad * 2),
+      size.height / (graphHeight + pad * 2)
+    )))
+    const cam = { zoom, panX: size.width / 2 - centerX * zoom, panY: size.height / 2 - centerY * zoom }
     cameraRef.current = cam
     setCamera(cam)
-  }, [size])
+  }, [size, graphData])
 
   // ─── Recompute layout ──────────────────────────────────────────────────────
   const handleRecompute = useCallback(async () => {
