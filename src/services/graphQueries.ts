@@ -10,6 +10,8 @@ import type {
   SourceGraphNode,
   SourceEdge,
   GhostAnchorNode,
+  GravityAnchor,
+  AnchorLink,
   EntityLevelData,
   EntityGraphNode,
   IntraSourceEdge,
@@ -69,13 +71,19 @@ export async function fetchAllSourcesLevelData(userId: string): Promise<AllSourc
       id: string; kind: string; label: string; sourceType: string
       entityCount: number; anchorRelevance: number
       typeDistribution: TypeDistSegment[]; bridgeAnchorIds: string[]
+      anchorLinks?: AnchorLink[]
       createdAt: string; metadata: Record<string, unknown>
     }>
     edges: SourceEdge[]
+    gravityAnchors?: Array<{ id: string; label: string; entityType: string; connectionCount: number }>
     stats: { sourceCount: number; entityCount: number; connectionCount: number }
   } | null
 
-  if (!result) return { sources: [], edges: [], stats: { sourceCount: 0, entityCount: 0, connectionCount: 0 } }
+  if (!result) return { sources: [], edges: [], gravityAnchors: [], stats: { sourceCount: 0, entityCount: 0, connectionCount: 0 } }
+
+  // Debug: check what the RPC returned
+  console.log('[AllSourcesGraph] RPC returned gravityAnchors:', result.gravityAnchors?.length ?? 'MISSING', result.gravityAnchors)
+  console.log('[AllSourcesGraph] First source anchorLinks:', result.sources?.[0]?.anchorLinks)
 
   // Add client-side color/icon (UI concern — not in database)
   const sources: SourceGraphNode[] = (result.sources ?? []).map(s => {
@@ -87,13 +95,21 @@ export async function fetchAllSourcesLevelData(userId: string): Promise<AllSourc
       icon: cfg.icon,
       typeDistribution: s.typeDistribution ?? [],
       bridgeAnchorIds: s.bridgeAnchorIds ?? [],
+      anchorLinks: s.anchorLinks ?? [],
       metadata: s.metadata ?? {},
     }
   })
 
+  // Add entity type colors to gravity anchors
+  const gravityAnchors: GravityAnchor[] = (result.gravityAnchors ?? []).map(a => ({
+    ...a,
+    color: getEntityColor(a.entityType),
+  }))
+
   return {
     sources,
     edges: result.edges ?? [],
+    gravityAnchors,
     stats: result.stats ?? { sourceCount: 0, entityCount: 0, connectionCount: 0 },
   }
 }
@@ -536,5 +552,69 @@ export async function fetchEntityLevelData(
       edgeCount: intraEdges.length,
       bridgeCount,
     },
+  }
+}
+
+// ─── Full Graph (all nodes + edges with pre-computed positions) ─────────────
+// See: supabase/migrations/20260401_get_full_graph.sql
+// See: api/graph/compute-layout.ts for position computation
+
+export interface FullGraphNode {
+  id: string
+  label: string
+  entityType: string
+  graphX: number | null
+  graphY: number | null
+  isAnchor: boolean
+  sourceId: string | null
+  confidence: number | null
+  createdAt: string
+}
+
+export interface FullGraphEdge {
+  sourceNodeId: string
+  targetNodeId: string
+  relationType: string | null
+  weight: number
+}
+
+export interface FullGraphData {
+  nodes: FullGraphNode[]
+  edges: FullGraphEdge[]
+  stats: { totalNodes: number; totalEdges: number; positionedNodes: number }
+}
+
+export async function fetchFullGraph(userId: string): Promise<FullGraphData> {
+  const { data, error } = await supabase.rpc('get_full_graph', { p_user_id: userId })
+  if (error) throw new Error(error.message)
+
+  const result = data as {
+    nodes: FullGraphNode[]
+    edges: FullGraphEdge[]
+    stats: { totalNodes: number; totalEdges: number; positionedNodes: number }
+  } | null
+
+  if (!result) return { nodes: [], edges: [], stats: { totalNodes: 0, totalEdges: 0, positionedNodes: 0 } }
+
+  return {
+    nodes: result.nodes ?? [],
+    edges: result.edges ?? [],
+    stats: result.stats ?? { totalNodes: 0, totalEdges: 0, positionedNodes: 0 },
+  }
+}
+
+export async function triggerLayoutComputation(accessToken: string, userId: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/graph/compute-layout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ userId }),
+    })
+    return res.ok
+  } catch {
+    return false
   }
 }

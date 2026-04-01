@@ -56,15 +56,78 @@ function buildAnchorNodes(data: AnchorLevelData, cw: number, ch: number): Simula
 }
 
 function buildAllSourceNodes(data: AllSourcesLevelData, cw: number, ch: number): SimulationNode[] {
-  return data.sources.map((s, i) => {
-    const angle = i * GOLDEN_ANGLE
-    const spread = 0.15 + (i / Math.max(data.sources.length, 1)) * 0.3
+  const cx = cw * 0.5
+  const cy = ch * 0.5
+  const gravityAnchors = data.gravityAnchors ?? []
+  const anchorCount = gravityAnchors.length
+  console.log('[GraphSim] buildAllSourceNodes: gravityAnchors count =', anchorCount, gravityAnchors.map(a => a.label))
+
+  // Build anchor position map for initial source placement
+  const anchorPositions = new Map<string, { x: number; y: number }>()
+  const anchorRadius_val = Math.min(cw, ch) * 0.35
+
+  // Place gravity anchor nodes evenly around a circle
+  const anchorNodes: SimulationNode[] = gravityAnchors.map((a, i) => {
+    const angle = (i / Math.max(anchorCount, 1)) * Math.PI * 2 - Math.PI / 2
+    const ax = cx + Math.cos(angle) * anchorRadius_val
+    const ay = cy + Math.sin(angle) * anchorRadius_val
+    anchorPositions.set(a.id, { x: ax, y: ay })
+    return {
+      id: a.id,
+      kind: 'anchor' as const,
+      x: ax,
+      y: ay,
+      vx: 0, vy: 0,
+      radius: 16,
+      label: a.label,
+      color: a.color,
+      entityType: a.entityType,
+      connectionCount: a.connectionCount,
+      fixed: true,
+    }
+  })
+
+  // Place source nodes — biased toward their anchor(s) or in outer spiral
+  const sourceNodes: SimulationNode[] = data.sources.map((s, i) => {
     const r = sourceRadius(s.entityCount)
+    const links = s.anchorLinks ?? []
+    let x: number, y: number
+
+    if (links.length > 0 && anchorCount > 0) {
+      // Weighted centroid of connected anchors
+      let wx = 0, wy = 0, totalWeight = 0
+      for (const link of links) {
+        const pos = anchorPositions.get(link.anchorId)
+        if (!pos) continue
+        wx += pos.x * link.strength
+        wy += pos.y * link.strength
+        totalWeight += link.strength
+      }
+      if (totalWeight > 0) {
+        // Place near centroid with jitter to avoid stacking
+        const jitterAngle = i * GOLDEN_ANGLE
+        const jitterDist = 30 + Math.random() * 60
+        x = wx / totalWeight + Math.cos(jitterAngle) * jitterDist
+        y = wy / totalWeight + Math.sin(jitterAngle) * jitterDist
+      } else {
+        // Fallback: spiral
+        const angle = i * GOLDEN_ANGLE
+        const spread = 0.15 + (i / Math.max(data.sources.length, 1)) * 0.3
+        x = cx + Math.cos(angle) * cw * spread
+        y = cy + Math.sin(angle) * ch * spread
+      }
+    } else {
+      // Unclustered sources: place in outer ring
+      const angle = i * GOLDEN_ANGLE
+      const outerDist = anchorRadius_val * 1.3 + Math.random() * 40
+      x = cx + Math.cos(angle) * outerDist
+      y = cy + Math.sin(angle) * outerDist
+    }
+
     return {
       id: s.id,
       kind: 'source' as const,
-      x: cw * 0.5 + Math.cos(angle) * cw * spread,
-      y: ch * 0.5 + Math.sin(angle) * ch * spread,
+      x, y,
       vx: 0, vy: 0,
       radius: r,
       label: s.label,
@@ -75,10 +138,13 @@ function buildAllSourceNodes(data: AllSourcesLevelData, cw: number, ch: number):
       anchorRelevance: s.anchorRelevance,
       typeDistribution: s.typeDistribution,
       bridgeAnchorIds: s.bridgeAnchorIds,
+      anchorLinks: links,
       createdAt: s.createdAt,
       metadata: s.metadata,
     }
   })
+
+  return [...anchorNodes, ...sourceNodes]
 }
 
 function buildSourceNodes(data: SourceLevelData, cw: number, ch: number): SimulationNode[] {
@@ -272,8 +338,9 @@ export function useGraphSimulation(
     const params = PARAMS[level]
     const n = nodes.length
 
-    // 1. Damping + random drift
+    // 1. Damping + random drift (skip fixed nodes)
     for (const node of nodes) {
+      if (node.fixed) continue
       node.vx *= params.damping
       node.vy *= params.damping
       node.vx += (Math.random() - 0.5) * 0.06
@@ -333,8 +400,28 @@ export function useGraphSimulation(
       b.vy -= fy
     }
 
-    // 4. Boundary constraints + position update
+    // 4. Gravity well forces: pull sources toward their anchor(s)
+    if (level === 'all_sources') {
+      for (const node of nodes) {
+        if (node.fixed || !node.anchorLinks?.length) continue
+        for (const link of node.anchorLinks) {
+          const anchor = nodeById.get(link.anchorId)
+          if (!anchor) continue
+          const dx = anchor.x - node.x
+          const dy = anchor.y - node.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < 1) continue
+          // Strength scales with link strength and distance
+          const pullStrength = 0.0015 * link.strength
+          node.vx += (dx / dist) * pullStrength * dist
+          node.vy += (dy / dist) * pullStrength * dist
+        }
+      }
+    }
+
+    // 5. Boundary constraints + position update
     for (const node of nodes) {
+      if (node.fixed) continue // gravity well anchors stay put
       const pad = node.radius + 10
       if (node.x < pad) node.vx += 0.3
       if (node.x > canvasWidth - pad) node.vx -= 0.3

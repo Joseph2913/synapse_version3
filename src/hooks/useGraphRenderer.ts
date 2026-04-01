@@ -164,6 +164,49 @@ function drawAnchorNode(
   ctx.fillText(`${node.sourceCount ?? 0} sources`, node.x, node.y + r + 22)
 }
 
+// ─── Gravity anchor node drawing (all_sources level landmarks) ──────────────
+
+function drawGravityAnchorNode(
+  ctx: CanvasRenderingContext2D,
+  node: SimulationNode,
+  isHovered: boolean,
+  isSelected: boolean,
+  font: string
+) {
+  const r = node.radius
+
+  // Subtle glow ring showing gravity field
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 8, 0, Math.PI * 2)
+  ctx.fillStyle = hexToRgba(node.color, 0.06)
+  ctx.fill()
+
+  // Main circle — translucent fill with solid stroke
+  const fillAlpha = isHovered ? 0.25 : 0.15
+  const strokeAlpha = isHovered ? 0.6 : isSelected ? 0.7 : 0.3
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
+  ctx.fillStyle = hexToRgba(node.color, fillAlpha)
+  ctx.fill()
+  ctx.strokeStyle = hexToRgba(node.color, strokeAlpha)
+  ctx.lineWidth = isSelected ? 2.5 : 2
+  ctx.stroke()
+
+  // Connection count centered in node
+  const countSize = Math.max(9, r * 0.45)
+  ctx.font = `700 ${countSize}px ${font}`
+  ctx.fillStyle = hexToRgba(node.color, 0.8)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(`${node.connectionCount ?? 0}`, node.x, node.y)
+
+  // Label below
+  ctx.font = `${isHovered ? 700 : 600} 10px ${font}`
+  ctx.fillStyle = isHovered ? hexToRgba(node.color, 0.95) : hexToRgba(node.color, 0.7)
+  ctx.textBaseline = 'top'
+  ctx.fillText(truncate(node.label, 22), node.x, node.y + r + 6)
+}
+
 // ─── Source node drawing ─────────────────────────────────────────────────────
 
 function drawSourceNode(
@@ -401,9 +444,10 @@ export function useGraphRenderer(
         drawEdge(ctx, from, to, edge, hoveredEdgeSet.has(idx), font)
       })
 
-      // Draw nodes (ghost first, then main, so main nodes render on top)
+      // Draw nodes in layers: ghosts → gravity anchors → main nodes
       const ghostNodes = nodes.filter(n => n.kind === 'ghost_anchor' || n.kind === 'ghost_source')
-      const mainNodes = nodes.filter(n => n.kind !== 'ghost_anchor' && n.kind !== 'ghost_source')
+      const gravityAnchors = nodes.filter(n => n.kind === 'anchor' && n.fixed)
+      const mainNodes = nodes.filter(n => !n.fixed && n.kind !== 'ghost_anchor' && n.kind !== 'ghost_source')
 
       for (const node of ghostNodes) {
         if (node.kind === 'ghost_anchor') {
@@ -411,6 +455,11 @@ export function useGraphRenderer(
         } else {
           drawGhostSource(ctx, node, node.id === hoveredId, font)
         }
+      }
+
+      // Gravity well anchor nodes (behind source nodes)
+      for (const node of gravityAnchors) {
+        drawGravityAnchorNode(ctx, node, node.id === hoveredId, node.id === selectedNodeId, font)
       }
 
       for (const node of mainNodes) {

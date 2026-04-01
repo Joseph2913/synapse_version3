@@ -54,9 +54,23 @@ export interface AnchorLevelData {
 
 // ─── All Sources (full DB view) ──────────────────────────────────────────────
 
+export interface GravityAnchor {
+  id: string
+  label: string
+  entityType: string
+  color: string
+  connectionCount: number
+}
+
+export interface AnchorLink {
+  anchorId: string
+  strength: number // 0-1 normalized
+}
+
 export interface AllSourcesLevelData {
   sources: SourceGraphNode[]
   edges: SourceEdge[]
+  gravityAnchors: GravityAnchor[]
   stats: { sourceCount: number; entityCount: number; connectionCount: number }
 }
 
@@ -79,6 +93,7 @@ export interface SourceGraphNode {
   anchorRelevance: number // 0-1, fraction of entities relevant to current anchor
   typeDistribution: TypeDistSegment[]
   bridgeAnchorIds: string[] // other anchors this source contributes to
+  anchorLinks?: AnchorLink[] // gravity well connections (all_sources level)
   createdAt: string
   metadata: Record<string, unknown>
 }
@@ -166,6 +181,8 @@ export interface SimulationNode {
   radius: number
   label: string
   color: string
+  fixed?: boolean // gravity well anchors don't move
+  anchorLinks?: AnchorLink[] // source-to-anchor gravity connections
   // Level-specific data carried through
   entityType?: string
   sourceType?: string

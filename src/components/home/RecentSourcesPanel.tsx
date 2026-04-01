@@ -9,6 +9,8 @@ interface RecentSourcesPanelProps {
   loading: boolean
   error?: string
   onSourceClick: (source: KnowledgeSource) => void
+  onExploreSource?: (source: KnowledgeSource) => void
+  onChatWithSource?: (source: KnowledgeSource) => void
   stretch?: boolean
 }
 
@@ -18,6 +20,8 @@ export function RecentSourcesPanel({
   loading,
   error,
   onSourceClick,
+  onExploreSource,
+  onChatWithSource,
   stretch,
 }: RecentSourcesPanelProps) {
   const navigate = useNavigate()
@@ -116,6 +120,8 @@ export function RecentSourcesPanel({
               source={source}
               entityCount={entityCounts[source.id] ?? 0}
               onClick={() => onSourceClick(source)}
+              onExplore={onExploreSource}
+              onChat={onChatWithSource}
               stretch={stretch}
             />
           ))}

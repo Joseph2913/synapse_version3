@@ -4,6 +4,7 @@ import { ExploreToolbar } from './explore/ExploreToolbar'
 import { LandscapeView } from './explore/LandscapeView'
 import { NeighborhoodView } from './explore/NeighborhoodView'
 import { SourceGraphView } from './explore/SourceGraphView'
+import { FullGraphView } from './explore/FullGraphView'
 
 import { useExploreData } from '../hooks/useExploreData'
 import { useExploreFilters } from '../hooks/useExploreFilters'
@@ -282,7 +283,7 @@ export function ExploreView() {
             onEdgesLoaded={handleEdgesLoaded}
           />
         </div>
-      ) : (
+      ) : viewMode === 'sources' ? (
         /* ── SOURCE GRAPH: Full-screen canvas ── */
         <div className="flex-1 overflow-hidden relative">
           <SourceGraphView
@@ -293,7 +294,10 @@ export function ExploreView() {
             showEdges={showEdges}
           />
         </div>
-      )}
+      ) : viewMode === 'graph' ? (
+        /* ── FULL GRAPH: All 5,000+ nodes with pre-computed positions ── */
+        <FullGraphView />
+      ) : null}
     </div>
   )
 }

@@ -258,6 +258,16 @@ export async function runHeadlessExtraction(
     }).catch(() => {})
   }
 
+  // Trigger graph layout recomputation (fire-and-forget)
+  fetch('/api/graph/compute-layout', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ userId }),
+  }).catch(() => {})
+
   progress('complete', 'Extraction complete!')
 
   return {

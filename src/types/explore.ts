@@ -1,6 +1,6 @@
 // src/types/explore.ts — Shared types for Explore page (PRDs 4A–4E)
 
-export type ExploreViewMode = 'anchors' | 'sources'
+export type ExploreViewMode = 'anchors' | 'sources' | 'graph'
 export type ZoomLevel = 'landscape' | 'neighborhood' | 'detail'
 
 export interface ClusterData {

@@ -9,6 +9,7 @@ import { supabase } from '../../services/supabase'
 import { RecentSourcesPanel } from './RecentSourcesPanel'
 import { SignalsToggleCard } from './SignalsToggleCard'
 import { OrientSummaryPanel } from './OrientSummaryPanel'
+import { buildSourceChatContext } from '../../config/chatEntryContexts'
 import type { KnowledgeNode, KnowledgeSkill, KnowledgeSource } from '../../types/database'
 
 // Fixed layout — no resizing on dashboard
@@ -126,6 +127,13 @@ export function HomeView() {
   // Click handlers — sources navigate to /sources page
   const handleSourceClick = (source: KnowledgeSource) => {
     navigate(`/sources?sourceId=${source.id}`)
+  }
+  const handleExploreSource = (source: KnowledgeSource) => {
+    navigate(`/sources?sourceId=${source.id}`)
+  }
+  const handleChatWithSource = (source: KnowledgeSource) => {
+    const context = buildSourceChatContext({ id: source.id, title: source.title, summary: source.summary })
+    navigate('/ask', { state: { chatContext: context } })
   }
   const handleAnchorClick = (node: KnowledgeNode) => { setRightPanelContent({ type: 'node', data: node }) }
   const handleSkillClick = (_skill: KnowledgeSkill) => { navigate('/signals?mode=skills') }
@@ -249,6 +257,8 @@ export function HomeView() {
               loading={dashboard.loading.sources}
               error={dashboard.errors.sources}
               onSourceClick={handleSourceClick}
+              onExploreSource={handleExploreSource}
+              onChatWithSource={handleChatWithSource}
               stretch
             />
           </div>

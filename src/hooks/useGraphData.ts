@@ -66,12 +66,8 @@ export function useGraphData(): {
         anchorCacheRef.current = data
         setLevelData({ level: 'anchors', data })
       } else if (navState.level === 'all_sources') {
-        if (allSourcesCacheRef.current) {
-          if (id !== fetchCount.current) return
-          setLevelData({ level: 'all_sources', data: allSourcesCacheRef.current })
-          setLoading(false)
-          return
-        }
+        // Cache temporarily disabled to pick up gravity anchor changes
+        allSourcesCacheRef.current = null
         const data = await fetchAllSourcesLevelData(user.id)
         if (id !== fetchCount.current) return
         allSourcesCacheRef.current = data
