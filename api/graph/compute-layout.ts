@@ -249,23 +249,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 3. Run layout simulation
     const positions = computeLayout(allNodes, allEdges)
 
-    // 4. Save positions back to database (batch updates)
-    const BATCH = 500
-    const entries = Array.from(positions.entries())
-    let updated = 0
+    // 4. Save positions back to database via bulk RPC (single call)
+    const positionsJson = Array.from(positions.entries()).map(([id, pos]) => ({
+      id, x: pos.x, y: pos.y,
+    }))
 
-    for (let i = 0; i < entries.length; i += BATCH) {
-      const batch = entries.slice(i, i + BATCH)
-      // Use a single RPC or individual updates
-      const promises = batch.map(([id, pos]) =>
-        sb.from('knowledge_nodes')
-          .update({ graph_x: pos.x, graph_y: pos.y })
-          .eq('id', id)
-          .eq('user_id', userId)
-      )
-      await Promise.all(promises)
-      updated += batch.length
-    }
+    const { data: saveResult, error: saveError } = await sb.rpc('bulk_update_graph_positions', {
+      p_user_id: userId,
+      p_positions: JSON.stringify(positionsJson),
+    })
+
+    if (saveError) throw new Error(`Save failed: ${saveError.message}`)
+    const updated = (saveResult as { updated: number } | null)?.updated ?? 0
 
     const durationMs = Date.now() - startMs
     console.log(`[compute-layout] Positioned ${updated} nodes in ${durationMs}ms`)
