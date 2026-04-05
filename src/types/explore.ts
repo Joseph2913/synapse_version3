@@ -1,6 +1,6 @@
 // src/types/explore.ts — Shared types for Explore page (PRDs 4A–4E)
 
-export type ExploreViewMode = 'anchors' | 'sources' | 'graph'
+export type ExploreViewMode = 'anchors' | 'sources' | 'playlists'
 export type ZoomLevel = 'landscape' | 'neighborhood' | 'detail'
 
 export interface ClusterData {
@@ -112,6 +112,40 @@ export type ExploreRightPanelContent =
   | { type: 'source'; data: SourceNode }
   | { type: 'cluster'; data: ClusterData }
   | null
+
+// ─── Playlist Graph types ────────────────────────────────────────────────────
+
+export interface PlaylistNode {
+  id: string
+  playlistName: string
+  playlistUrl: string
+  synapseCode: string | null
+  isActive: boolean
+  videoCount: number
+}
+
+export interface PlaylistEdge {
+  fromPlaylistId: string
+  toPlaylistId: string
+  connectionCount: number
+  videoPairCount: number
+}
+
+export interface PlaylistVideoNode {
+  sourceId: string
+  videoTitle: string
+  videoUrl: string
+  thumbnailUrl: string | null
+  playlistId: string
+  entityCount: number
+  publishedAt: string | null
+}
+
+export interface PlaylistVideoEdge {
+  fromSourceId: string
+  toSourceId: string
+  sharedEntityCount: number
+}
 
 // ─── Entity Browser types ─────────────────────────────────────────────────────
 

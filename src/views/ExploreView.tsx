@@ -4,7 +4,7 @@ import { ExploreToolbar } from './explore/ExploreToolbar'
 import { LandscapeView } from './explore/LandscapeView'
 import { NeighborhoodView } from './explore/NeighborhoodView'
 import { SourceGraphView } from './explore/SourceGraphView'
-import { FullGraphView } from './explore/FullGraphView'
+import { PlaylistGraphView } from './explore/PlaylistGraphView'
 
 import { useExploreData } from '../hooks/useExploreData'
 import { useExploreFilters } from '../hooks/useExploreFilters'
@@ -294,9 +294,11 @@ export function ExploreView() {
             showEdges={showEdges}
           />
         </div>
-      ) : viewMode === 'graph' ? (
-        /* ── FULL GRAPH: All 5,000+ nodes with pre-computed positions ── */
-        <FullGraphView />
+      ) : viewMode === 'playlists' ? (
+        /* ── PLAYLIST GRAPH: Cross-playlist video connections ── */
+        <div className="flex-1 overflow-hidden relative">
+          <PlaylistGraphView showEdges={showEdges} />
+        </div>
       ) : null}
     </div>
   )

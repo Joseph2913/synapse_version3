@@ -332,9 +332,9 @@ export function ExploreToolbar({
         borderRadius: 22, padding: 3,
         border: '1px solid var(--border-subtle)',
       }}>
-        {(['anchors', 'sources', 'graph'] as const).map(mode => {
+        {(['anchors', 'sources', 'playlists'] as const).map(mode => {
           const isActive = viewMode === mode
-          const labels = { anchors: 'Anchors', sources: 'Sources', graph: 'Graph' }
+          const labels = { anchors: 'Anchors', sources: 'Sources', playlists: 'Playlists' }
           return (
             <button
               key={mode}

@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections } from '../types/explore'
+import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections, PlaylistNode, PlaylistEdge, PlaylistVideoNode, PlaylistVideoEdge } from '../types/explore'
 
 // ─── fetchClusterData (via Supabase RPC) ──────────────────────────────────────
 // Cluster summaries are computed server-side in Postgres (get_cluster_summaries).
@@ -811,5 +811,38 @@ export async function fetchSourceCardDetail(
     relatedSources,
     anchorLabels,
     createdAt: s.created_at,
+  }
+}
+
+// ─── fetchPlaylistGraph (via Supabase RPC) ──────────────────────────────────
+// Playlist graph computed server-side. Returns playlists, cross-playlist edges,
+// videos, and video-to-video edges.
+// See: supabase/migrations/20260405_get_playlist_graph.sql
+
+export interface PlaylistGraphResult {
+  playlists: PlaylistNode[]
+  playlistEdges: PlaylistEdge[]
+  videos: PlaylistVideoNode[]
+  videoEdges: PlaylistVideoEdge[]
+}
+
+export async function fetchPlaylistGraph(userId: string): Promise<PlaylistGraphResult> {
+  const { data, error } = await supabase.rpc('get_playlist_graph', { p_user_id: userId })
+  if (error) throw new Error(error.message)
+
+  const result = data as {
+    playlists: PlaylistNode[]
+    playlistEdges: PlaylistEdge[]
+    videos: PlaylistVideoNode[]
+    videoEdges: PlaylistVideoEdge[]
+  } | null
+
+  if (!result) return { playlists: [], playlistEdges: [], videos: [], videoEdges: [] }
+
+  return {
+    playlists: result.playlists ?? [],
+    playlistEdges: result.playlistEdges ?? [],
+    videos: result.videos ?? [],
+    videoEdges: result.videoEdges ?? [],
   }
 }
