@@ -121,3 +121,44 @@ Data that is expensive to fetch and unlikely to change within a session is cache
 ### "I need to change cache invalidation timing"
 
 → Adjust `staleTime` in the relevant provider (e.g. `ExploreDataProvider`). For event-based invalidation, add/modify event listeners in the provider.
+
+---
+
+## 4. Bulk Database Writes from Serverless Functions
+
+### The Problem (April 2026)
+
+The `api/graph/compute-layout.ts` function computed positions for 5,183 nodes, then tried to save them by sending 5,183 individual UPDATE queries to Supabase. The function returned 200 (computation succeeded), but the save step silently failed — it ran out of time sending thousands of individual requests within Vercel's 60-second timeout. The database ended up with no positions saved despite the function reporting success.
+
+### The Rule
+
+> **When a serverless function needs to write results back to the database, NEVER use loops of individual UPDATE/INSERT calls. Always use a bulk Supabase RPC that accepts a JSON array and does a single operation.**
+
+### The Pattern
+
+1. Collect all results into a JSON array: `[{id, x, y}, {id, x, y}, ...]`
+2. Call a Supabase RPC: `supabase.rpc('bulk_update_thing', { p_user_id, p_data: JSON.stringify(array) })`
+3. The RPC uses `json_array_elements()` to join and update in one statement:
+   ```sql
+   UPDATE target_table t
+   SET col_a = (row->>'a')::type, col_b = (row->>'b')::type
+   FROM json_array_elements(p_data) AS row
+   WHERE t.id = (row->>'id')::uuid AND t.user_id = p_user_id;
+   ```
+
+### Why This Matters
+
+| Approach | 5,000 rows | Time |
+|----------|-----------|------|
+| Individual UPDATE calls | 5,000 HTTP requests to Supabase | 30-60+ seconds (timeout) |
+| Bulk RPC (single call) | 1 HTTP request, 1 SQL statement | < 1 second |
+
+### When to Apply
+
+Any time a serverless function (anything in `api/`) computes results and needs to save them back. Before writing the save step, always ask: **"What happens when this runs on 5,000 items?"** If the answer involves a loop of individual database calls, use a bulk RPC instead.
+
+### Current Bulk RPCs
+
+| Function | Purpose | Called From |
+|----------|---------|------------|
+| `bulk_update_graph_positions(p_user_id, p_positions)` | Saves pre-computed graph layout x/y positions for all nodes | `api/graph/compute-layout.ts` |

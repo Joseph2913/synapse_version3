@@ -176,23 +176,29 @@ async function runModuleRAG(
   // 1. Embed the module prompt
   const embedding = await embedText(modulePrompt.substring(0, 500))
 
-  // 2. Semantic search over source chunks
-  const { data: chunks } = await supabase.rpc('match_source_chunks', {
-    query_embedding: embedding,
-    match_threshold: 0.35,
-    match_count: 12,
-    p_user_id: userId,
-  })
+  // 2. Semantic search over source chunks, knowledge nodes, and relationships (parallel)
+  const [{ data: chunks }, { data: nodes }, { data: relationships }] = await Promise.all([
+    supabase.rpc('match_source_chunks', {
+      query_embedding: embedding,
+      match_threshold: 0.35,
+      match_count: 12,
+      p_user_id: userId,
+    }),
+    supabase.rpc('match_knowledge_nodes', {
+      query_embedding: embedding,
+      match_threshold: 0.35,
+      match_count: 15,
+      p_user_id: userId,
+    }),
+    supabase.rpc('match_relationships', {
+      query_embedding: embedding,
+      match_threshold: 0.6,
+      match_count: 10,
+      p_user_id: userId,
+    }),
+  ])
 
-  // 3. Semantic search over knowledge nodes
-  const { data: nodes } = await supabase.rpc('match_knowledge_nodes', {
-    query_embedding: embedding,
-    match_threshold: 0.35,
-    match_count: 15,
-    p_user_id: userId,
-  })
-
-  // 4. Build context
+  // 3. Build context
   const chunkContext = (chunks ?? [])
     .map((c: { content: string; source_title?: string }) =>
       `[Source: ${c.source_title ?? 'Unknown'}]\n${c.content}`)
@@ -203,11 +209,16 @@ async function runModuleRAG(
       `• ${n.entity_type}: ${n.label}${n.description ? ` — ${n.description}` : ''}`)
     .join('\n')
 
+  const relationshipContext = (relationships ?? [])
+    .map((r: { source_label: string; source_type: string; relation_type: string; target_label: string; target_type: string; evidence?: string }) =>
+      `• ${r.source_label} (${r.source_type}) ${r.relation_type} ${r.target_label} (${r.target_type})${r.evidence ? ` — ${r.evidence}` : ''}`)
+    .join('\n')
+
   const densityInstruction = DENSITY_INSTRUCTIONS[density] ?? DENSITY_INSTRUCTIONS.standard
 
   const systemPrompt = `You are an intelligence analyst for a personal knowledge graph. Synthesize the provided context to answer the user's query. Be specific, cite entities by name, and be actionable. ${densityInstruction}`
 
-  const userPrompt = `## Knowledge Graph Entities\n${nodeContext || 'No entities found.'}\n\n## Source Documents\n${chunkContext || 'No source documents found.'}\n\n## Task\n${modulePrompt}`
+  const userPrompt = `## Knowledge Graph Entities\n${nodeContext || 'No entities found.'}\n\n## Key Relationships\n${relationshipContext || 'No relationships found.'}\n\n## Source Documents\n${chunkContext || 'No source documents found.'}\n\n## Task\n${modulePrompt}`
 
   // 5. Generate with Gemini
   const content = await generateWithGemini(systemPrompt, userPrompt)

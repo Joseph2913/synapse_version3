@@ -105,6 +105,46 @@ export function buildSourceCompareContext(
   }
 }
 
+// ─── Home Feed: Multi-Source Compare (§3.6b) ──────────────────────────────────
+
+export function buildMultiSourceCompareContext(
+  primarySource: { id: string; title?: string | null },
+  relatedSources: { id: string; title?: string | null }[]
+): ChatEntryContext {
+  const primaryTitle = primarySource.title ?? 'Primary Source'
+  const allSources = [primarySource, ...relatedSources]
+  const allIds = allSources.map(s => s.id)
+
+  return {
+    autoQuery: `What are the key insights from "${primaryTitle}" and how does it connect to related sources in my graph?`,
+    systemDirective: `The user is exploring "${primaryTitle}" in the context of their broader knowledge graph. ${relatedSources.length} related sources are in scope. Keep the response SHORT (200–300 words). "${primaryTitle}" is the PRIMARY FOCUS — related sources are supporting context only.
+
+Structure your response EXACTLY as follows:
+
+**Source Summary**
+2–3 sentences: the core argument, key takeaways, and "so what" of "${primaryTitle}".
+
+**Connections Across Your Graph**
+2–3 connections, each 1–2 sentences. For each: name the related source, then state the SPECIFIC BRIDGE — how it connects back to "${primaryTitle}". Do NOT summarise what the related source is about on its own. Only state how it relates to the primary source.
+
+**Tensions or Surprises**
+1–2 sentences ONLY if there are genuine contradictions or non-obvious connections. Skip this section entirely if nothing is surprising — do not force it.
+
+**Synthesis**
+1–2 sentences: one takeaway that only emerges from seeing "${primaryTitle}" in the context of the broader graph. The "zoom out" moment.
+
+RULES:
+- Do NOT give a breakdown of each related source individually — no source-by-source summaries.
+- Related sources exist only to illuminate "${primaryTitle}" — they are supporting cast, not co-stars.
+- Be specific: cite entity names and relationship types, not vague thematic language.
+- If a section would be empty or forced, skip it.`,
+    queryConfig: { mindset: 'comparative', toolMode: 'deep' },
+    scope: { sourceIds: allIds, mode: 'hard' },
+    entryPoint: 'home_source_compare',
+    displayLabel: `Insights: ${primaryTitle} + ${relatedSources.length} sources`,
+  }
+}
+
 // ─── Explore: Entity Browser (§3.7) ─────────────────────────────────────────
 
 export function buildBrowseEntityExploreContext(entity: {

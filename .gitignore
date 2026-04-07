@@ -36,3 +36,7 @@ yarn-error.log*
 # Vite
 vite.config.ts.timestamp-*
 .vercel
+
+# Remotion output
+out/
+remotion/output/

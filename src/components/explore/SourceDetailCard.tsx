@@ -4,7 +4,7 @@ import { X, ChevronRight, ChevronDown, ArrowRight, Link2, Loader2, Sparkles, Mes
 import { getSourceConfig } from '../../config/sourceTypes'
 import { getEntityColor } from '../../config/entityTypes'
 import { stripMarkdown } from '../../utils/stripMarkdown'
-import { buildSourceChatContext, buildSourceCompareContext } from '../../config/chatEntryContexts'
+import { buildSourceChatContext, buildMultiSourceCompareContext } from '../../config/chatEntryContexts'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchSourceCardDetail } from '../../services/exploreQueries'
 import type { SourceCardDetail, SourceCardRelatedSource } from '../../services/exploreQueries'
@@ -18,7 +18,7 @@ interface SourceDetailCardProps {
   /** Override default "Chat with this source" behavior (default navigates to /ask) */
   onChatWithSourceOverride?: (source: { id: string; title: string; summary: string | null }) => void
   /** Override default "Compare with related sources" behavior */
-  onCompareWithSourcesOverride?: (sourceA: { id: string; title: string }, sourceB: { id: string; title: string }) => void
+  onCompareWithSourcesOverride?: (primarySource: { id: string; title: string }, relatedSources: { id: string; title: string }[]) => void
 }
 
 const PANEL_WIDTH = 370
@@ -88,21 +88,16 @@ export function SourceDetailCard({
     navigate('/ask', { state: { chatContext: context } })
   }, [detail, navigate, onChatWithSourceOverride])
 
-  // Compare with related sources
+  // Compare with ALL related sources
   const handleCompareWithSources = useCallback(() => {
     if (!detail || detail.relatedSources.length === 0) return
-    const topRelated = detail.relatedSources[0]!
+    const primary = { id: detail.sourceId, title: detail.title }
+    const related = detail.relatedSources.map(rs => ({ id: rs.sourceId, title: rs.title }))
     if (onCompareWithSourcesOverride) {
-      onCompareWithSourcesOverride(
-        { id: detail.sourceId, title: detail.title },
-        { id: topRelated.sourceId, title: topRelated.title },
-      )
+      onCompareWithSourcesOverride(primary, related)
       return
     }
-    const context = buildSourceCompareContext(
-      { id: detail.sourceId, title: detail.title },
-      { id: topRelated.sourceId, title: topRelated.title },
-    )
+    const context = buildMultiSourceCompareContext(primary, related)
     navigate('/ask', { state: { chatContext: context } })
   }, [detail, navigate, onCompareWithSourcesOverride])
 

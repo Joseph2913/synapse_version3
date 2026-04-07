@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ListMusic, ArrowLeft, Loader2 } from 'lucide-react'
-import { usePlaylistLayout, playlistRadius } from '../../hooks/usePlaylistLayout'
+import { ListMusic, Loader2 } from 'lucide-react'
+import { usePlaylistLayout } from '../../hooks/usePlaylistLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchPlaylistGraph } from '../../services/exploreQueries'
 import { SourceDetailCard } from '../../components/explore/SourceDetailCard'
@@ -12,10 +12,9 @@ import type {
   PlaylistVideoEdge,
 } from '../../types/explore'
 
-const MIN_ZOOM = 0.15
+const MIN_ZOOM = 0.08
 const MAX_ZOOM = 6.0
 
-// Colors for playlists — cycle through these
 const PLAYLIST_COLORS = [
   '#d63a00', '#2563eb', '#7c3aed', '#059669', '#d97706',
   '#dc2626', '#0891b2', '#4f46e5', '#16a34a', '#ea580c',
@@ -25,30 +24,77 @@ function getPlaylistColor(index: number): string {
   return PLAYLIST_COLORS[index % PLAYLIST_COLORS.length]!
 }
 
+// ─── Dynamic SVG icon paths based on playlist name keywords ──────────────────
+// Each returns an SVG path `d` string sized for a 24x24 viewBox
+
+interface PlaylistIconDef { path: string; viewBox?: string }
+
+const PLAYLIST_ICON_KEYWORDS: [string[], PlaylistIconDef][] = [
+  // AI / Tech
+  [['ai', 'artificial intelligence', 'machine learning', 'claude', 'gpt', 'upskill'],
+    { path: 'M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 0 2h-1.27a7 7 0 0 1-4.73 5.47V22a1 1 0 0 1-2 0v-.17a7.1 7.1 0 0 1-2 0V22a1 1 0 0 1-2 0v-.53A7 7 0 0 1 5.27 16H4a1 1 0 0 1 0-2h1a7 7 0 0 1 7-7h1V5.73A2 2 0 0 1 12 2m0 7a5 5 0 0 0-5 5 5 5 0 0 0 5 5 5 5 0 0 0 5-5 5 5 0 0 0-5-5m-1 2h2v3h3v2h-3v3h-2v-3H8v-2h3z' }], // Brain/chip
+  // India / Geography / Countries
+  [['india', 'geography', 'country', 'nation', 'geopolitical', 'global'],
+    { path: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z' }], // Globe
+  // Finance / Economics / Wealth
+  [['finance', 'econ', 'wealth', 'invest', 'money', 'stock', 'crypto', 'bitcoin'],
+    { path: 'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z' }], // Dollar
+  // Design / Creative
+  [['design', 'creative', 'ux', 'ui', 'art', 'visual'],
+    { path: 'M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.04 10 9c0 3.31-2.69 6-6 6h-1.77c-.28 0-.5.22-.5.5 0 .12.05.23.13.33.41.47.64 1.06.64 1.67A2.5 2.5 0 0 1 12 22zm0-18c-4.41 0-8 3.59-8 8s3.59 8 8 8c.28 0 .5-.22.5-.5a.54.54 0 0 0-.14-.35c-.41-.46-.63-1.05-.63-1.65a2.5 2.5 0 0 1 2.5-2.5H16c2.21 0 4-1.79 4-4 0-3.86-3.59-7-8-7zM6.5 13a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z' }], // Palette
+  // Sports / Fitness
+  [['sport', 'fitness', 'gym', 'workout', 'athletic', 'football', 'soccer', 'basketball', 'cricket'],
+    { path: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM5.61 16.78C4.6 15.45 4 13.8 4 12s.6-3.45 1.61-4.78a9.97 9.97 0 0 0 2.79 4.78 9.97 9.97 0 0 0-2.79 4.78zM12 20c-1.48 0-2.87-.41-4.06-1.12a7.98 7.98 0 0 1 3.06-4.63V18c0 .55.45 1 1 1s1-.45 1-1v-3.75a7.98 7.98 0 0 1 3.06 4.63A7.93 7.93 0 0 1 12 20zm0-8a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm6.39 4.78a9.97 9.97 0 0 0-2.79-4.78 9.97 9.97 0 0 0 2.79-4.78C19.4 8.55 20 10.2 20 12s-.6 3.45-1.61 4.78z' }], // Activity
+  // Nutrition / Health
+  [['nutrition', 'health', 'diet', 'wellness', 'medical', 'mental'],
+    { path: 'M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z' }], // Heart
+  // Second Brain / Knowledge / PKM
+  [['second brain', 'knowledge', 'pkm', 'note', 'zettelkasten', 'obsidian'],
+    { path: 'M12 3L1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z' }], // School/learn
+  // LinkedIn / Professional / Career
+  [['linkedin', 'career', 'professional', 'resume', 'job', 'networking'],
+    { path: 'M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14zm-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.32 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.79zM6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68zm1.39 9.94v-8.37H5.5v8.37h2.77z' }], // LinkedIn
+  // Psychology / Mind
+  [['psychology', 'mind', 'cognitive', 'behavior', 'therapy'],
+    { path: 'M13 1.07V9h7c0-4.08-3.05-7.44-7-7.93zM4 15c0 4.42 3.58 8 8 8s8-3.58 8-8v-4H4v4zm7-13.93C7.05 1.56 4 4.92 4 9h7V1.07z' }], // Brain-half
+]
+
+/** Resolve an SVG icon path based on playlist name keywords */
+function resolvePlaylistIcon(name: string): PlaylistIconDef {
+  const lower = name.toLowerCase()
+  for (const [keywords, icon] of PLAYLIST_ICON_KEYWORDS) {
+    for (const kw of keywords) {
+      if (lower.includes(kw)) return icon
+    }
+  }
+  // Default: list-music icon
+  return { path: 'M21 15V6c0-1.1-.9-2-2-2H8c-1.1 0-2 .9-2 2v9c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V8h9v7c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4z' }
+}
+
 interface Camera { zoom: number; panX: number; panY: number }
 
-// Live node for floating animation
+// Live node for drag + drift animation
 interface LiveNode {
   id: string
   x: number
   y: number
   vx: number
   vy: number
-  radius: number
 }
 
 interface PlaylistGraphViewProps {
   showEdges?: boolean
 }
 
-type ViewLevel = 'map' | 'expanded'
-
-/** Video node radius — scaled by entity count */
+/** Video node radius — scaled by entity count (compact) */
 function videoRadius(entityCount: number, maxEntityCount: number = 30): number {
-  if (entityCount <= 0) return 5
-  const minR = 5
-  const maxR = 14
-  return minR + Math.sqrt(entityCount / Math.max(maxEntityCount, 1)) * (maxR - minR)
+  if (entityCount <= 0) return 3
+  return 3 + Math.sqrt(entityCount / Math.max(maxEntityCount, 1)) * 5
+}
+
+/** Playlist center button radius — scaled by video count (compact) */
+function playlistCenterRadius(videoCount: number): number {
+  return 12 + Math.min(videoCount * 0.4, 12)
 }
 
 export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) {
@@ -70,16 +116,21 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
   const [videoEdges, setVideoEdges] = useState<PlaylistVideoEdge[]>([])
   const [loading, setLoading] = useState(true)
 
-  // View level
-  const [viewLevel, setViewLevel] = useState<ViewLevel>('map')
-  const [expandedPlaylistId, setExpandedPlaylistId] = useState<string | null>(null)
-  const [expandedOuterClusterId, setExpandedOuterClusterId] = useState<string | null>(null)
-
   // Interaction
-  const [hoveredPlaylistId, setHoveredPlaylistId] = useState<string | null>(null)
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
   const [hoveredVideoId, setHoveredVideoId] = useState<string | null>(null)
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
   const [exploringVideoId, setExploringVideoId] = useState<string | null>(null)
+  const [legendOpen, setLegendOpen] = useState(false)
+
+  const hasDraggedRef = useRef(false)
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+
+  // Drag infrastructure — live positions for all nodes (playlist centers + videos)
+  const liveNodesRef = useRef<LiveNode[]>([])
+  const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
+  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number; type: 'playlist' | 'video' } | null>(null)
+  const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
+  const rafRef = useRef<number>(0)
 
   // Playlist color map
   const playlistColorMap = useMemo(() => {
@@ -88,50 +139,143 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
     return map
   }, [playlists])
 
-  // Layout (Level 1)
-  const layoutPositions = usePlaylistLayout(playlists, playlistEdges, size.width, size.height)
+  // Use the existing layout hook to position playlist centers
+  const playlistCenterPositions = usePlaylistLayout(playlists, playlistEdges, size.width, size.height)
 
-  // Live positions
-  const liveNodesRef = useRef<LiveNode[]>([])
-  const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
-  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
-  const rafRef = useRef<number>(0)
-  const hasDraggedRef = useRef(false)
-  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
-  const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
+  // Videos grouped by playlist
+  const videosByPlaylist = useMemo(() => {
+    const map = new Map<string, PlaylistVideoNode[]>()
+    for (const v of videos) {
+      const list = map.get(v.playlistId) ?? []
+      list.push(v)
+      map.set(v.playlistId, list)
+    }
+    return map
+  }, [videos])
 
-  // Connectivity map for drag drift
+  // Global max entity count for consistent video sizing
+  const maxEntityCount = useMemo(() => Math.max(...videos.map(v => v.entityCount), 1), [videos])
+
+  // ─── Compute all video positions around their playlist centers ──────────────
+
+  const videoPositions = useMemo(() => {
+    if (playlistCenterPositions.size === 0 || videos.length === 0) return new Map<string, { x: number; y: number; r: number }>()
+
+    const result = new Map<string, { x: number; y: number; r: number }>()
+
+    for (const [playlistId, center] of playlistCenterPositions) {
+      const pVideos = videosByPlaylist.get(playlistId) ?? []
+      if (pVideos.length === 0) continue
+
+      const centerR = playlistCenterRadius(pVideos.length)
+      // Arrange videos in concentric rings around the center
+      const ringGap = 20 // tight gap between rings
+      let ringIdx = 0
+      let placed = 0
+
+      while (placed < pVideos.length) {
+        ringIdx++
+        const ringRadius = centerR + 8 + ringIdx * ringGap
+        const circumference = 2 * Math.PI * ringRadius
+        const maxInRing = Math.max(1, Math.floor(circumference / 18))
+        const countInRing = Math.min(maxInRing, pVideos.length - placed)
+
+        for (let j = 0; j < countInRing; j++) {
+          const video = pVideos[placed + j]!
+          const angle = (j / countInRing) * Math.PI * 2 - Math.PI / 2
+          const r = videoRadius(video.entityCount, maxEntityCount)
+          result.set(video.sourceId, {
+            x: center.x + Math.cos(angle) * ringRadius,
+            y: center.y + Math.sin(angle) * ringRadius,
+            r,
+          })
+        }
+        placed += countInRing
+      }
+    }
+
+    return result
+  }, [playlistCenterPositions, videosByPlaylist, videos, maxEntityCount])
+
+  // Cluster boundary radius per playlist (enclosing all videos)
+  const clusterRadii = useMemo(() => {
+    const result = new Map<string, number>()
+    for (const [playlistId, center] of playlistCenterPositions) {
+      const pVideos = videosByPlaylist.get(playlistId) ?? []
+      let maxDist = playlistCenterRadius(pVideos.length) + 10
+      for (const v of pVideos) {
+        const vPos = videoPositions.get(v.sourceId)
+        if (!vPos) continue
+        const dx = vPos.x - center.x
+        const dy = vPos.y - center.y
+        const dist = Math.sqrt(dx * dx + dy * dy) + vPos.r + 14
+        if (dist > maxDist) maxDist = dist
+      }
+      result.set(playlistId, maxDist)
+    }
+    return result
+  }, [playlistCenterPositions, videosByPlaylist, videoPositions])
+
+  // Cross-playlist video edges only
+  const crossPlaylistVideoEdges = useMemo(() => {
+    // Build sourceId → playlistId lookup
+    const sourceToPlaylist = new Map<string, string>()
+    for (const v of videos) sourceToPlaylist.set(v.sourceId, v.playlistId)
+    return videoEdges.filter(e => {
+      const pA = sourceToPlaylist.get(e.fromSourceId)
+      const pB = sourceToPlaylist.get(e.toSourceId)
+      return pA && pB && pA !== pB
+    })
+  }, [videos, videoEdges])
+
+  // Hovered video's connected video IDs (for highlighting)
+  const hoveredConnections = useMemo(() => {
+    if (!hoveredVideoId) return new Set<string>()
+    const ids = new Set<string>()
+    for (const e of videoEdges) {
+      if (e.fromSourceId === hoveredVideoId) ids.add(e.toSourceId)
+      if (e.toSourceId === hoveredVideoId) ids.add(e.fromSourceId)
+    }
+    return ids
+  }, [hoveredVideoId, videoEdges])
+
+  // ─── Live nodes: drag + drift animation ─────────────────────────────────────
+
+  // Connectivity: which nodes should drift when a node is dragged
+  // Playlist center → all its videos; Video → its playlist center + cross-playlist connected videos
   const connectivityRef = useRef(new Map<string, Map<string, number>>())
   useEffect(() => {
     const map = new Map<string, Map<string, number>>()
     const addLink = (a: string, b: string, weight: number) => {
       if (!map.has(a)) map.set(a, new Map())
       if (!map.has(b)) map.set(b, new Map())
-      const existing = map.get(a)!.get(b) ?? 0
-      if (weight > existing) {
-        map.get(a)!.set(b, weight)
-        map.get(b)!.set(a, weight)
-      }
+      const ex = map.get(a)!.get(b) ?? 0
+      if (weight > ex) { map.get(a)!.set(b, weight); map.get(b)!.set(a, weight) }
     }
-    const maxWeight = Math.max(...playlistEdges.map(e => e.connectionCount), 1)
-    for (const e of playlistEdges) {
-      addLink(e.fromPlaylistId, e.toPlaylistId, Math.min(e.connectionCount / maxWeight, 1))
+    // Playlist center ↔ its videos (strong link)
+    for (const [playlistId, pVideos] of videosByPlaylist) {
+      for (const v of pVideos) addLink(`p:${playlistId}`, `v:${v.sourceId}`, 0.8)
+    }
+    // Cross-playlist video edges (weaker)
+    const maxShared = Math.max(...crossPlaylistVideoEdges.map(e => e.sharedEntityCount), 1)
+    for (const e of crossPlaylistVideoEdges) {
+      addLink(`v:${e.fromSourceId}`, `v:${e.toSourceId}`, Math.min(e.sharedEntityCount / maxShared, 1) * 0.4)
     }
     connectivityRef.current = map
-  }, [playlistEdges])
+  }, [videosByPlaylist, crossPlaylistVideoEdges])
 
-  // Initialize live nodes from layout
+  // Initialize live nodes from computed positions
   useEffect(() => {
-    if (layoutPositions.size === 0) return
-    liveNodesRef.current = Array.from(layoutPositions.entries()).map(([id, pos]) => ({
-      id,
-      x: pos.x,
-      y: pos.y,
-      vx: 0,
-      vy: 0,
-      radius: pos.radius,
-    }))
-  }, [layoutPositions])
+    if (playlistCenterPositions.size === 0) return
+    const nodes: LiveNode[] = []
+    for (const [pid, pos] of playlistCenterPositions) {
+      nodes.push({ id: `p:${pid}`, x: pos.x, y: pos.y, vx: 0, vy: 0 })
+    }
+    for (const [sourceId, pos] of videoPositions) {
+      nodes.push({ id: `v:${sourceId}`, x: pos.x, y: pos.y, vx: 0, vy: 0 })
+    }
+    liveNodesRef.current = nodes
+  }, [playlistCenterPositions, videoPositions])
 
   // Animation loop
   useEffect(() => {
@@ -144,19 +288,32 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
 
       // Directional drag drift
       if (dragRef.current && dragPrevPos.current) {
-        const dragNode = nodeMap.get(dragRef.current.id)
+        const dragNode = nodeMap.get(
+          dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`
+        )
         if (dragNode) {
           const moveDx = dragNode.x - dragPrevPos.current.x
           const moveDy = dragNode.y - dragPrevPos.current.y
           if (Math.abs(moveDx) > 0.1 || Math.abs(moveDy) > 0.1) {
-            const connections = connectivityRef.current.get(dragRef.current.id)
+            const connections = connectivityRef.current.get(dragNode.id)
             if (connections) {
               for (const [connId, weight] of connections) {
                 const connNode = nodeMap.get(connId)
                 if (!connNode) continue
-                const strength = 0.0005 + weight * 0.004
+                const strength = 0.002 + weight * 0.008
                 connNode.vx += moveDx * strength
                 connNode.vy += moveDy * strength
+              }
+            }
+            // If dragging a playlist center, also move its videos more directly
+            if (dragRef.current.type === 'playlist') {
+              const pVideos = videosByPlaylist.get(dragRef.current.id) ?? []
+              for (const v of pVideos) {
+                const vNode = nodeMap.get(`v:${v.sourceId}`)
+                if (vNode) {
+                  vNode.x += moveDx
+                  vNode.y += moveDy
+                }
               }
             }
           }
@@ -164,16 +321,17 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         }
       }
 
+      // Update velocities
       for (const n of nodes) {
-        if (dragRef.current?.id === n.id) { n.vx = 0; n.vy = 0; continue }
-        const w = sizeRef.current.width
-        const h = sizeRef.current.height
-        if (w > 0 && h > 0) {
-          const pad = 40
-          if (n.x < pad) n.vx += (pad - n.x) * 0.01
-          if (n.x > w - pad) n.vx -= (n.x - (w - pad)) * 0.01
-          if (n.y < pad) n.vy += (pad - n.y) * 0.01
-          if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
+        const dragId = dragRef.current
+          ? (dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`)
+          : null
+        if (n.id === dragId) { n.vx = 0; n.vy = 0; continue }
+        // Also freeze videos of a dragged playlist (they move directly above)
+        if (dragRef.current?.type === 'playlist' && n.id.startsWith('v:')) {
+          const vid = n.id.slice(2)
+          const isChild = (videosByPlaylist.get(dragRef.current.id) ?? []).some(v => v.sourceId === vid)
+          if (isChild) { n.vx = 0; n.vy = 0; continue }
         }
         n.vx *= 0.97
         n.vy *= 0.97
@@ -188,22 +346,23 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
     }
     rafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [])
+  }, [videosByPlaylist])
 
-  // Auto-fit camera
+  // ─── Auto-fit camera ───────────────────────────────────────────────────────
+
   const hasAutoFitRef = useRef(false)
   useEffect(() => {
-    if (layoutPositions.size === 0 || size.width === 0 || size.height === 0) return
+    if (videoPositions.size === 0 || size.width === 0 || size.height === 0) return
     if (hasAutoFitRef.current) return
     hasAutoFitRef.current = true
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const [, pos] of layoutPositions) {
-      const r = pos.radius + 30
-      minX = Math.min(minX, pos.x - r)
-      minY = Math.min(minY, pos.y - r)
-      maxX = Math.max(maxX, pos.x + r)
-      maxY = Math.max(maxY, pos.y + r)
+    for (const [playlistId, center] of playlistCenterPositions) {
+      const r = clusterRadii.get(playlistId) ?? 50
+      minX = Math.min(minX, center.x - r - 30)
+      minY = Math.min(minY, center.y - r - 30)
+      maxX = Math.max(maxX, center.x + r + 30)
+      maxY = Math.max(maxY, center.y + r + 30)
     }
 
     const contentW = maxX - minX
@@ -212,18 +371,19 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
 
     const scaleX = size.width / contentW
     const scaleY = size.height / contentH
-    const zoom = Math.max(MIN_ZOOM, Math.min(1.5, Math.min(scaleX, scaleY) * 0.88))
+    const zoom = Math.max(MIN_ZOOM, Math.min(1.2, Math.min(scaleX, scaleY) * 0.88))
 
     setCamera({
       zoom,
       panX: size.width / 2 - ((minX + maxX) / 2) * zoom,
       panY: size.height / 2 - ((minY + maxY) / 2) * zoom,
     })
-  }, [layoutPositions, size])
+  }, [videoPositions, playlistCenterPositions, clusterRadii, size])
 
-  useEffect(() => { hasAutoFitRef.current = false }, [playlists])
+  useEffect(() => { hasAutoFitRef.current = false }, [playlists, videos])
 
-  // ResizeObserver
+  // ─── ResizeObserver ────────────────────────────────────────────────────────
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -239,7 +399,8 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
     return () => obs.disconnect()
   }, [])
 
-  // Fetch
+  // ─── Fetch data ────────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!user) return
     let cancelled = false
@@ -257,250 +418,7 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
     return () => { cancelled = true }
   }, [user])
 
-  // ─── Edges for a given playlist ────────────────────────────────────────────
-
-  const edgesForPlaylist = useMemo(() => {
-    const map = new Map<string, PlaylistEdge[]>()
-    for (const e of playlistEdges) {
-      const a = map.get(e.fromPlaylistId) ?? []
-      a.push(e); map.set(e.fromPlaylistId, a)
-      const b = map.get(e.toPlaylistId) ?? []
-      b.push(e); map.set(e.toPlaylistId, b)
-    }
-    return map
-  }, [playlistEdges])
-
-  const activePlaylistId = hoveredPlaylistId || selectedPlaylistId
-  const highlightedEdges = useMemo(() => {
-    if (!activePlaylistId) return new Set<string>()
-    const relevant = edgesForPlaylist.get(activePlaylistId) ?? []
-    return new Set(relevant.map(e => `${e.fromPlaylistId}-${e.toPlaylistId}`))
-  }, [activePlaylistId, edgesForPlaylist])
-
-  // ─── Level 2: Expanded playlist data ──────────────────────────────────────
-
-  const expandedPlaylist = useMemo(() => {
-    if (!expandedPlaylistId) return null
-    return playlists.find(p => p.id === expandedPlaylistId) ?? null
-  }, [expandedPlaylistId, playlists])
-
-  const innerVideos = useMemo(() => {
-    if (!expandedPlaylistId) return []
-    return videos.filter(v => v.playlistId === expandedPlaylistId)
-  }, [expandedPlaylistId, videos])
-
-  const outerPlaylists = useMemo(() => {
-    if (!expandedPlaylistId) return []
-    // All other playlists, with their connection count to the expanded one
-    return playlists
-      .filter(p => p.id !== expandedPlaylistId)
-      .map(p => {
-        const edge = playlistEdges.find(
-          e => (e.fromPlaylistId === expandedPlaylistId && e.toPlaylistId === p.id) ||
-               (e.toPlaylistId === expandedPlaylistId && e.fromPlaylistId === p.id)
-        )
-        return { ...p, connectionCount: edge?.connectionCount ?? 0 }
-      })
-      .sort((a, b) => b.connectionCount - a.connectionCount)
-  }, [expandedPlaylistId, playlists, playlistEdges])
-
-  // Videos from the expanded outer cluster
-  const outerClusterVideos = useMemo(() => {
-    if (!expandedOuterClusterId) return []
-    return videos.filter(v => v.playlistId === expandedOuterClusterId)
-  }, [expandedOuterClusterId, videos])
-
-  // Cross-connections between inner videos and expanded outer cluster videos
-  const crossVideoEdges = useMemo(() => {
-    if (!expandedOuterClusterId || innerVideos.length === 0 || outerClusterVideos.length === 0) return []
-    const innerSourceIds = new Set(innerVideos.map(v => v.sourceId))
-    const outerSourceIds = new Set(outerClusterVideos.map(v => v.sourceId))
-    return videoEdges.filter(e =>
-      (innerSourceIds.has(e.fromSourceId) && outerSourceIds.has(e.toSourceId)) ||
-      (outerSourceIds.has(e.fromSourceId) && innerSourceIds.has(e.toSourceId))
-    )
-  }, [expandedOuterClusterId, innerVideos, outerClusterVideos, videoEdges])
-
-  // Internal video edges (within expanded playlist)
-  const internalVideoEdges = useMemo(() => {
-    if (innerVideos.length === 0) return []
-    const innerSourceIds = new Set(innerVideos.map(v => v.sourceId))
-    return videoEdges.filter(e =>
-      innerSourceIds.has(e.fromSourceId) && innerSourceIds.has(e.toSourceId)
-    )
-  }, [innerVideos, videoEdges])
-
-  // Connected inner video source IDs (when outer cluster is expanded)
-  const connectedInnerSourceIds = useMemo(() => {
-    if (crossVideoEdges.length === 0) return new Set<string>()
-    const innerSourceIds = new Set(innerVideos.map(v => v.sourceId))
-    const ids = new Set<string>()
-    for (const e of crossVideoEdges) {
-      if (innerSourceIds.has(e.fromSourceId)) ids.add(e.fromSourceId)
-      if (innerSourceIds.has(e.toSourceId)) ids.add(e.toSourceId)
-    }
-    return ids
-  }, [crossVideoEdges, innerVideos])
-
-  // ─── Level 2 layout: position inner videos in center, outer playlists around ──
-
-  // Ellipse parameters — shared between video layout, outer playlist placement, and SVG rendering
-  const ellipseCx = size.width * 0.45
-  const ellipseCy = size.height / 2
-  const ellipseRx = size.width * 0.35
-  const ellipseRy = size.height * 0.42
-
-  const innerVideoPositions = useMemo(() => {
-    if (innerVideos.length === 0 || size.width === 0 || size.height === 0) return new Map<string, { x: number; y: number; r: number }>()
-
-    const cx = ellipseCx
-    const cy = ellipseCy
-    const rx = ellipseRx * 0.85  // Use most of the ellipse interior
-    const ry = ellipseRy * 0.85
-    const maxEntity = Math.max(...innerVideos.map(v => v.entityCount), 1)
-
-    // Build edge lookup for inner edges
-    const edgeLookup = new Map<string, { targetId: string; weight: number }[]>()
-    const maxW = Math.max(...internalVideoEdges.map(e => e.sharedEntityCount), 1)
-    for (const e of internalVideoEdges) {
-      if (!edgeLookup.has(e.fromSourceId)) edgeLookup.set(e.fromSourceId, [])
-      if (!edgeLookup.has(e.toSourceId)) edgeLookup.set(e.toSourceId, [])
-      const w = e.sharedEntityCount / maxW
-      edgeLookup.get(e.fromSourceId)!.push({ targetId: e.toSourceId, weight: w })
-      edgeLookup.get(e.toSourceId)!.push({ targetId: e.fromSourceId, weight: w })
-    }
-
-    // Initial placement: golden angle spiral to fill the ellipse evenly
-    interface SimNode { id: string; x: number; y: number; r: number }
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5))
-    const nodes: SimNode[] = innerVideos.map((v, i) => {
-      const t = (i + 0.5) / innerVideos.length  // 0..1, slightly offset from center
-      const spiralR = Math.sqrt(t)  // Square root for uniform area distribution
-      const angle = i * goldenAngle
-      const r = videoRadius(v.entityCount, maxEntity)
-      return {
-        id: v.sourceId,
-        x: cx + Math.cos(angle) * spiralR * rx,
-        y: cy + Math.sin(angle) * spiralR * ry,
-        r,
-      }
-    })
-
-    const nodeIndex = new Map(nodes.map((n, i) => [n.id, i]))
-
-    // Force sim: 80 ticks — stronger repulsion for better spread
-    for (let tick = 0; tick < 80; tick++) {
-      const alpha = 1 - tick / 80
-
-      // Repulsion — stronger to spread nodes apart
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i]!, b = nodes[j]!
-          const dx = b.x - a.x, dy = b.y - a.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 0.1
-          const minDist = a.r + b.r + 28
-          const rep = Math.max(0, (minDist * 3.5 - dist)) * 0.15 * alpha
-          if (rep > 0) {
-            const nx = dx / dist, ny = dy / dist
-            a.x -= nx * rep; a.y -= ny * rep
-            b.x += nx * rep; b.y += ny * rep
-          }
-        }
-      }
-
-      // Attraction — weaker to let repulsion dominate
-      for (const [srcId, targets] of edgeLookup) {
-        const ai = nodeIndex.get(srcId)
-        if (ai === undefined) continue
-        const a = nodes[ai]!
-        for (const { targetId, weight } of targets) {
-          const bi = nodeIndex.get(targetId)
-          if (bi === undefined) continue
-          const b = nodes[bi]!
-          const dx = b.x - a.x, dy = b.y - a.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 0.1
-          const idealDist = a.r + b.r + 40
-          if (dist > idealDist) {
-            const pull = (dist - idealDist) * 0.012 * weight * alpha
-            const nx = dx / dist, ny = dy / dist
-            a.x += nx * pull; a.y += ny * pull
-            b.x -= nx * pull; b.y -= ny * pull
-          }
-        }
-      }
-
-      // Very gentle center gravity — keep nodes loosely centered
-      for (const n of nodes) {
-        n.x += (cx - n.x) * 0.005 * alpha
-        n.y += (cy - n.y) * 0.005 * alpha
-      }
-
-      // Ellipse containment — push nodes back inside the ellipse boundary
-      for (const n of nodes) {
-        const dx = (n.x - cx) / rx
-        const dy = (n.y - cy) / ry
-        const d = dx * dx + dy * dy
-        if (d > 1) {
-          const scale = 1 / Math.sqrt(d) * 0.95
-          n.x = cx + (n.x - cx) * scale
-          n.y = cy + (n.y - cy) * scale
-        }
-      }
-    }
-
-    const result = new Map<string, { x: number; y: number; r: number }>()
-    for (const n of nodes) result.set(n.id, { x: n.x, y: n.y, r: n.r })
-    return result
-  }, [innerVideos, internalVideoEdges, size, ellipseCx, ellipseCy, ellipseRx, ellipseRy])
-
-  // Outer playlist positions — evenly distributed along the ellipse perimeter
-  const outerPlaylistPositions = useMemo(() => {
-    if (outerPlaylists.length === 0 || size.width === 0 || size.height === 0) return new Map<string, { x: number; y: number; r: number }>()
-
-    const cx = ellipseCx
-    const cy = ellipseCy
-    // Place on the ellipse boundary + a small outward offset so they sit just outside the dashed line
-    const rx = ellipseRx + 40
-    const ry = ellipseRy + 40
-
-    const result = new Map<string, { x: number; y: number; r: number }>()
-    outerPlaylists.forEach((p, i) => {
-      // Distribute evenly around the full ellipse, starting from the top
-      const angle = (i / outerPlaylists.length) * Math.PI * 2 - Math.PI / 2
-      const r = 14 + Math.min(p.connectionCount * 0.5, 20)
-      result.set(p.id, {
-        x: cx + Math.cos(angle) * rx,
-        y: cy + Math.sin(angle) * ry,
-        r,
-      })
-    })
-    return result
-  }, [outerPlaylists, size, ellipseCx, ellipseCy, ellipseRx, ellipseRy])
-
-  // Outer cluster expanded video positions
-  const outerVideoPositions = useMemo(() => {
-    if (!expandedOuterClusterId || outerClusterVideos.length === 0 || size.width === 0) return new Map<string, { x: number; y: number; r: number }>()
-
-    const clusterPos = outerPlaylistPositions.get(expandedOuterClusterId)
-    if (!clusterPos) return new Map<string, { x: number; y: number; r: number }>()
-
-    const maxEntity = Math.max(...outerClusterVideos.map(v => v.entityCount), 1)
-    const spreadR = 40 + outerClusterVideos.length * 6
-    const result = new Map<string, { x: number; y: number; r: number }>()
-
-    outerClusterVideos.forEach((v, i) => {
-      const angle = (i / outerClusterVideos.length) * Math.PI * 2 - Math.PI / 2
-      const r = videoRadius(v.entityCount, maxEntity)
-      result.set(v.sourceId, {
-        x: clusterPos.x + Math.cos(angle) * spreadR,
-        y: clusterPos.y + Math.sin(angle) * spreadR,
-        r,
-      })
-    })
-    return result
-  }, [expandedOuterClusterId, outerClusterVideos, outerPlaylistPositions, size])
-
-  // ─── Camera helpers ──────────────────────────────────────────────────────────
+  // ─── Camera helpers ────────────────────────────────────────────────────────
 
   const zoomAround = useCallback((factor: number, cx: number, cy: number) => {
     setCamera(prev => {
@@ -538,13 +456,11 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
       if (e.ctrlKey) {
-        const factor = 1 - e.deltaY * 0.004
-        zoomAround(factor, sx, sy)
+        zoomAround(1 - e.deltaY * 0.004, sx, sy)
       } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 0.5 && Math.abs(e.deltaX) > 2) {
         setCamera(prev => ({ ...prev, panX: prev.panX - e.deltaX, panY: prev.panY - e.deltaY }))
       } else {
-        const factor = e.deltaY < 0 ? 1.06 : 0.94
-        zoomAround(factor, sx, sy)
+        zoomAround(e.deltaY < 0 ? 1.06 : 0.94, sx, sy)
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -561,51 +477,12 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
       else if (e.key === '0') { resetCamera(); e.preventDefault() }
       else if (e.key === 'Escape') {
         if (exploringVideoId) setExploringVideoId(null)
-        else if (expandedOuterClusterId) setExpandedOuterClusterId(null)
-        else if (viewLevel === 'expanded') handleBackToMap()
+        else if (selectedPlaylistId) setSelectedPlaylistId(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoomIn, zoomOut, resetCamera, viewLevel, exploringVideoId, expandedOuterClusterId])
-
-  // ─── Node dragging (Level 1) ──────────────────────────────────────────────
-
-  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
-    if (viewLevel !== 'map') return
-    e.stopPropagation()
-    hasDraggedRef.current = false
-    const cam = cameraRef.current
-    const rect = svgRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const worldX = (e.clientX - rect.left - cam.panX) / cam.zoom
-    const worldY = (e.clientY - rect.top - cam.panY) / cam.zoom
-    const node = liveNodesRef.current.find(n => n.id === nodeId)
-    if (!node) return
-    dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
-    dragPrevPos.current = { x: node.x, y: node.y }
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current || !svgRef.current) return
-      hasDraggedRef.current = true
-      const cam2 = cameraRef.current
-      const r2 = svgRef.current.getBoundingClientRect()
-      const wx = (ev.clientX - r2.left - cam2.panX) / cam2.zoom
-      const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
-      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
-      if (n) { n.x = wx - dragRef.current.offsetX; n.y = wy - dragRef.current.offsetY }
-    }
-    const onUp = () => {
-      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current?.id)
-      if (n) { n.vx = 0; n.vy = 0 }
-      dragRef.current = null
-      dragPrevPos.current = null
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [viewLevel])
+  }, [zoomIn, zoomOut, resetCamera, exploringVideoId, selectedPlaylistId])
 
   // ─── SVG pan ──────────────────────────────────────────────────────────────
 
@@ -634,60 +511,63 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.target === e.currentTarget && !hasDraggedRef.current) {
       setSelectedPlaylistId(null)
-      setHoveredPlaylistId(null)
-      setExpandedOuterClusterId(null)
       setExploringVideoId(null)
     }
   }
 
-  // ─── Playlist interactions (Level 1) ──────────────────────────────────────
+  // ─── Drag handler ──────────────────────────────────────────────────────────
 
-  const lastClickTime = useRef<number>(0)
-  const lastClickId = useRef<string | null>(null)
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, nodeType: 'playlist' | 'video') => {
+    e.stopPropagation()
+    hasDraggedRef.current = false
+    const cam = cameraRef.current
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const worldX = (e.clientX - rect.left - cam.panX) / cam.zoom
+    const worldY = (e.clientY - rect.top - cam.panY) / cam.zoom
+    const liveId = nodeType === 'playlist' ? `p:${nodeId}` : `v:${nodeId}`
+    const node = liveNodesRef.current.find(n => n.id === liveId)
+    if (!node) return
+    dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y, type: nodeType }
+    dragPrevPos.current = { x: node.x, y: node.y }
 
-  const handlePlaylistClick = useCallback((playlist: PlaylistNode) => {
-    if (hasDraggedRef.current) return
-    const now = Date.now()
-    if (lastClickId.current === playlist.id && now - lastClickTime.current < 400) {
-      // Double click — expand
-      setExpandedPlaylistId(playlist.id)
-      setViewLevel('expanded')
-      setSelectedPlaylistId(null)
-      setExpandedOuterClusterId(null)
-      setExploringVideoId(null)
-      hasAutoFitRef.current = false
-      setCamera({ zoom: 1, panX: 0, panY: 0 })
-    } else {
-      // Single click — select
-      setSelectedPlaylistId(prev => prev === playlist.id ? null : playlist.id)
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current || !svgRef.current) return
+      hasDraggedRef.current = true
+      const cam2 = cameraRef.current
+      const r2 = svgRef.current.getBoundingClientRect()
+      const wx = (ev.clientX - r2.left - cam2.panX) / cam2.zoom
+      const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
+      const lid = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`
+      const n = liveNodesRef.current.find(nd => nd.id === lid)
+      if (n) { n.x = wx - dragRef.current.offsetX; n.y = wy - dragRef.current.offsetY }
     }
-    lastClickTime.current = now
-    lastClickId.current = playlist.id
+    const onUp = () => {
+      if (dragRef.current) {
+        const lid = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`
+        const n = liveNodesRef.current.find(nd => nd.id === lid)
+        if (n) { n.vx = 0; n.vy = 0 }
+      }
+      dragRef.current = null
+      dragPrevPos.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
   }, [])
 
-  const handleBackToMap = useCallback(() => {
-    setViewLevel('map')
-    setExpandedPlaylistId(null)
-    setExpandedOuterClusterId(null)
-    setExploringVideoId(null)
-    hasAutoFitRef.current = false
-  }, [])
-
-  const handleOuterClusterClick = useCallback((playlistId: string) => {
-    setExpandedOuterClusterId(prev => prev === playlistId ? null : playlistId)
-  }, [])
-
-  const handleOuterClusterNavigate = useCallback((playlistId: string) => {
-    setExpandedPlaylistId(playlistId)
-    setExpandedOuterClusterId(null)
-    setExploringVideoId(null)
-    hasAutoFitRef.current = false
-    setCamera({ zoom: 1, panX: 0, panY: 0 })
-  }, [])
+  // ─── Click handlers ───────────────────────────────────────────────────────
 
   const handleVideoClick = useCallback((sourceId: string) => {
     if (hasDraggedRef.current) return
     setExploringVideoId(prev => prev === sourceId ? null : sourceId)
+  }, [])
+
+  const handlePlaylistCenterClick = useCallback((playlistId: string) => {
+    if (hasDraggedRef.current) return
+    setSelectedPlaylistId(prev => prev === playlistId ? null : playlistId)
+    setExploringVideoId(null)
   }, [])
 
   // Loading
@@ -719,13 +599,12 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
     )
   }
 
-  // ─── RENDER ─────────────────────────────────────────────────────────────────
+  // ─── RENDER ────────────────────────────────────────────────────────────────
 
   return (
     <div ref={containerRef} className="relative w-full h-full" style={{ overflow: 'hidden', background: 'var(--color-bg-content)', userSelect: 'none', WebkitUserSelect: 'none' }}>
 
-      {/* ── LEVEL 1: Playlist Map ── */}
-      {viewLevel === 'map' && size.width > 0 && size.height > 0 && (
+      {size.width > 0 && size.height > 0 && (
         <svg
           ref={svgRef}
           width={size.width}
@@ -739,395 +618,189 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         >
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
 
-            {/* Playlist-to-playlist edges */}
-            {showEdges && playlistEdges.map(edge => {
-              const fromPos = livePositions.get(edge.fromPlaylistId)
-              const toPos = livePositions.get(edge.toPlaylistId)
+            {/* 1. Spoke lines — center to each video (use live positions) */}
+            {playlists.map(playlist => {
+              const centerLive = livePositions.get(`p:${playlist.id}`)
+              const center = centerLive ?? playlistCenterPositions.get(playlist.id)
+              if (!center) return null
+              const pVideos = videosByPlaylist.get(playlist.id) ?? []
+              const color = playlistColorMap.get(playlist.id) ?? PLAYLIST_COLORS[0]!
+
+              return pVideos.map(video => {
+                const vLive = livePositions.get(`v:${video.sourceId}`)
+                const vPos = vLive ?? videoPositions.get(video.sourceId)
+                if (!vPos) return null
+                return (
+                  <line
+                    key={`spoke-${video.sourceId}`}
+                    x1={center.x} y1={center.y}
+                    x2={vPos.x} y2={vPos.y}
+                    stroke={color}
+                    strokeWidth={1.2}
+                    strokeOpacity={0.18}
+                  />
+                )
+              })
+            })}
+
+            {/* 2. Cross-playlist video edges — prominent connecting lines */}
+            {showEdges && crossPlaylistVideoEdges.map(edge => {
+              const fromLive = livePositions.get(`v:${edge.fromSourceId}`)
+              const toLive = livePositions.get(`v:${edge.toSourceId}`)
+              const fromPos = fromLive ?? videoPositions.get(edge.fromSourceId)
+              const toPos = toLive ?? videoPositions.get(edge.toSourceId)
               if (!fromPos || !toPos) return null
 
-              const edgeKey = `${edge.fromPlaylistId}-${edge.toPlaylistId}`
-              const isHighlighted = highlightedEdges.has(edgeKey)
-              const isActive = isHighlighted
-              const hasActive = !!activePlaylistId
-              const maxConn = Math.max(...playlistEdges.map(e => e.connectionCount), 1)
-              const thickness = 1 + (edge.connectionCount / maxConn) * 3
+              const isHighlighted = hoveredVideoId === edge.fromSourceId || hoveredVideoId === edge.toSourceId
+              const hasHover = !!hoveredVideoId
+              const maxShared = Math.max(...crossPlaylistVideoEdges.map(e => e.sharedEntityCount), 1)
+              const weightNorm = edge.sharedEntityCount / maxShared
+              const baseWidth = 0.8 + weightNorm * 1.5
 
               return (
                 <line
-                  key={edgeKey}
+                  key={`ve-${edge.fromSourceId}-${edge.toSourceId}`}
                   x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
-                  stroke={isActive ? 'var(--color-accent-500)' : 'rgba(100,116,139,1)'}
-                  strokeWidth={isActive ? thickness : thickness * 0.5}
-                  strokeOpacity={isActive ? 0.5 : hasActive ? 0.04 : 0.12}
-                  style={{ transition: 'stroke-opacity 0.15s ease' }}
+                  stroke={isHighlighted ? 'var(--color-accent-500)' : 'rgba(120,130,145,1)'}
+                  strokeWidth={isHighlighted ? 2 : baseWidth}
+                  strokeOpacity={isHighlighted ? 0.6 : hasHover ? 0.04 : 0.15}
+                  style={{ transition: 'stroke-opacity 0.15s ease, stroke-width 0.15s ease' }}
                 />
               )
             })}
 
-            {/* Playlist nodes */}
-            {playlists.map((playlist) => {
-              const pos = livePositions.get(playlist.id)
-              if (!pos) return null
+            {/* 3. Video nodes per playlist (draggable) */}
+            {playlists.map(playlist => {
+              const pVideos = videosByPlaylist.get(playlist.id) ?? []
+              const color = playlistColorMap.get(playlist.id) ?? PLAYLIST_COLORS[0]!
 
-              const r = layoutPositions.get(playlist.id)?.radius ?? playlistRadius(playlist.videoCount)
+              return pVideos.map(video => {
+                const vLive = livePositions.get(`v:${video.sourceId}`)
+                const staticPos = videoPositions.get(video.sourceId)
+                const pos = vLive ?? staticPos
+                if (!pos || !staticPos) return null
+
+                const r = staticPos.r
+                const isHovered = hoveredVideoId === video.sourceId
+                const isExploring = exploringVideoId === video.sourceId
+                const isConnectedToHovered = hoveredConnections.has(video.sourceId)
+                const isDimmed = hoveredVideoId !== null && !isHovered && !isConnectedToHovered
+                const isDragging = dragRef.current?.type === 'video' && dragRef.current?.id === video.sourceId
+                const scale = isHovered ? 1.15 : 1
+                const label = video.videoTitle.length > 22 ? video.videoTitle.slice(0, 21) + '…' : video.videoTitle
+
+                return (
+                  <g
+                    key={video.sourceId}
+                    onMouseDown={e => handleNodeMouseDown(e, video.sourceId, 'video')}
+                    onMouseEnter={() => { if (!dragRef.current) setHoveredVideoId(video.sourceId) }}
+                    onMouseLeave={() => { if (!dragRef.current) setHoveredVideoId(null) }}
+                    onClick={() => handleVideoClick(video.sourceId)}
+                    style={{
+                      cursor: isDragging ? 'grabbing' : 'pointer',
+                      opacity: isDimmed ? 0.15 : 1,
+                      transition: 'opacity 0.18s ease',
+                    }}
+                  >
+                    <g transform={`translate(${pos.x}, ${pos.y})`}>
+                      <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
+                        {isExploring && (
+                          <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.5} opacity={0.6} />
+                        )}
+                        {isHovered && !isExploring && (
+                          <circle r={r + 3} fill="none" stroke={`${color}40`} strokeWidth={1.5} />
+                        )}
+                        {isConnectedToHovered && !isHovered && !isExploring && (
+                          <circle r={r + 3} fill="none" stroke="var(--color-accent-500)" strokeWidth={1} opacity={0.3} />
+                        )}
+                        <circle r={r} fill={`${color}20`} stroke={color} strokeWidth={1.5} />
+                      </g>
+
+                      <text
+                        y={r + 10}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-body)',
+                          fontSize: 7,
+                          fontWeight: isHovered ? 600 : 500,
+                          fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          transition: 'fill 0.15s ease',
+                        }}
+                      >
+                        {label}
+                      </text>
+                    </g>
+                  </g>
+                )
+              })
+            })}
+
+            {/* 4. Playlist center buttons — dynamic icon (draggable) */}
+            {playlists.map(playlist => {
+              const centerLive = livePositions.get(`p:${playlist.id}`)
+              const center = centerLive ?? playlistCenterPositions.get(playlist.id)
+              if (!center) return null
+              const pVideos = videosByPlaylist.get(playlist.id) ?? []
+              const r = playlistCenterRadius(pVideos.length)
               const color = playlistColorMap.get(playlist.id) ?? PLAYLIST_COLORS[0]!
               const isSelected = selectedPlaylistId === playlist.id
-              const isHovered = hoveredPlaylistId === playlist.id
-              const scale = isHovered ? 1.06 : 1
-              const label = playlist.playlistName.length > 22
-                ? playlist.playlistName.slice(0, 21) + '…'
-                : playlist.playlistName
+              const isDragging = dragRef.current?.type === 'playlist' && dragRef.current?.id === playlist.id
+              const iconDef = resolvePlaylistIcon(playlist.playlistName)
+              const iconSize = r * 0.65
 
               return (
                 <g
-                  key={playlist.id}
-                  onMouseDown={e => handleNodeMouseDown(e, playlist.id)}
-                  onMouseEnter={() => setHoveredPlaylistId(playlist.id)}
-                  onMouseLeave={() => setHoveredPlaylistId(null)}
-                  onClick={() => handlePlaylistClick(playlist)}
-                  style={{ cursor: dragRef.current?.id === playlist.id ? 'grabbing' : 'pointer' }}
+                  key={`center-${playlist.id}`}
+                  onMouseDown={e => handleNodeMouseDown(e, playlist.id, 'playlist')}
+                  onClick={() => handlePlaylistCenterClick(playlist.id)}
+                  style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
                 >
-                  <g transform={`translate(${pos.x}, ${pos.y})`}>
-                    <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
+                  <g transform={`translate(${center.x}, ${center.y})`}>
+                    {isSelected && (
+                      <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={2} opacity={0.5} />
+                    )}
 
-                      {/* Selection ring */}
-                      {isSelected && (
-                        <circle r={r + 5} fill="none" stroke="var(--color-accent-500)" strokeWidth={2} opacity={0.6} />
-                      )}
+                    <circle r={r} fill="white" stroke={color} strokeWidth={2.5} />
 
-                      {/* Hover glow ring */}
-                      {isHovered && !isSelected && (
-                        <circle r={r + 4} fill="none" stroke={`${color}35`} strokeWidth={2} />
-                      )}
-
-                      {/* Main circle */}
-                      <circle r={r} fill={`${color}18`} stroke={color} strokeWidth={2.5} />
-
-                      {/* Video count inside */}
-                      <text
-                        y={-2}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        style={{
-                          fontFamily: 'var(--font-display)',
-                          fontSize: Math.max(10, r * 0.45),
-                          fontWeight: 700,
-                          fill: color,
-                          opacity: 0.7,
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                        }}
-                      >
-                        {playlist.videoCount}
-                      </text>
-                      <text
-                        y={r * 0.35}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        style={{
-                          fontFamily: 'var(--font-body)',
-                          fontSize: Math.max(6, r * 0.22),
-                          fontWeight: 500,
-                          fill: color,
-                          opacity: 0.45,
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                        }}
-                      >
-                        videos
-                      </text>
+                    {/* Dynamic SVG icon based on playlist name */}
+                    <g transform={`translate(${-iconSize / 2}, ${-iconSize / 2})`}>
+                      <svg width={iconSize} height={iconSize} viewBox="0 0 24 24">
+                        <path d={iconDef.path} fill={color} opacity={0.7} />
+                      </svg>
                     </g>
 
-                    {/* Label below */}
                     <text
                       y={r + 14}
                       textAnchor="middle"
                       style={{
                         fontFamily: 'var(--font-display)',
                         fontSize: 10,
-                        fontWeight: 600,
-                        fill: isSelected ? 'var(--color-accent-500)'
-                          : isHovered ? 'var(--color-text-primary)'
-                          : 'var(--color-text-secondary)',
+                        fontWeight: 700,
+                        fill: isSelected ? 'var(--color-accent-500)' : color,
                         pointerEvents: 'none',
                         userSelect: 'none',
-                        transition: 'fill 0.15s ease',
                       }}
                     >
-                      {label}
+                      {playlist.playlistName.length > 24 ? playlist.playlistName.slice(0, 23) + '…' : playlist.playlistName}
                     </text>
-                  </g>
-                </g>
-              )
-            })}
 
-          </g>
-        </svg>
-      )}
-
-      {/* ── LEVEL 2: Expanded Playlist ── */}
-      {viewLevel === 'expanded' && expandedPlaylist && size.width > 0 && size.height > 0 && (
-        <svg
-          ref={svgRef}
-          width={size.width}
-          height={size.height}
-          style={{ display: 'block', userSelect: 'none', WebkitUserSelect: 'none' }}
-          onMouseDown={handleSvgMouseDown}
-          onMouseMove={handleSvgMouseMove}
-          onMouseUp={handleSvgMouseUp}
-          onMouseLeave={handleSvgMouseUp}
-          onClick={handleSvgClick}
-        >
-          <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
-
-            {/* Inner zone boundary */}
-            <ellipse
-              cx={ellipseCx}
-              cy={ellipseCy}
-              rx={ellipseRx}
-              ry={ellipseRy}
-              fill="none"
-              stroke={playlistColorMap.get(expandedPlaylistId!) ?? PLAYLIST_COLORS[0]}
-              strokeWidth={1.5}
-              strokeDasharray="6 4"
-              opacity={0.15}
-            />
-
-            {/* Inner zone label */}
-            <text
-              x={ellipseCx}
-              y={ellipseCy - ellipseRy - 12}
-              textAnchor="middle"
-              style={{
-                fontFamily: 'var(--font-display)',
-                fontSize: 12,
-                fontWeight: 700,
-                fill: playlistColorMap.get(expandedPlaylistId!) ?? PLAYLIST_COLORS[0],
-                opacity: 0.5,
-                pointerEvents: 'none',
-                userSelect: 'none',
-              }}
-            >
-              {expandedPlaylist.playlistName}
-            </text>
-
-            {/* Internal video edges */}
-            {showEdges && internalVideoEdges.map(edge => {
-              const fromPos = innerVideoPositions.get(edge.fromSourceId)
-              const toPos = innerVideoPositions.get(edge.toSourceId)
-              if (!fromPos || !toPos) return null
-
-              const dimmed = expandedOuterClusterId !== null
-              return (
-                <line
-                  key={`iv-${edge.fromSourceId}-${edge.toSourceId}`}
-                  x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
-                  stroke="rgba(100,116,139,1)"
-                  strokeWidth={0.8}
-                  strokeOpacity={dimmed ? 0.04 : 0.12}
-                  style={{ transition: 'stroke-opacity 0.2s ease' }}
-                />
-              )
-            })}
-
-            {/* Cross-connection lines (when outer cluster expanded) */}
-            {showEdges && crossVideoEdges.map(edge => {
-              const innerSrcIds = new Set(innerVideos.map(v => v.sourceId))
-              const innerSourceId = innerSrcIds.has(edge.fromSourceId) ? edge.fromSourceId : edge.toSourceId
-              const outerSourceId = innerSrcIds.has(edge.fromSourceId) ? edge.toSourceId : edge.fromSourceId
-              const fromPos = innerVideoPositions.get(innerSourceId)
-              const toPos = outerVideoPositions.get(outerSourceId)
-              if (!fromPos || !toPos) return null
-
-              return (
-                <line
-                  key={`cv-${edge.fromSourceId}-${edge.toSourceId}`}
-                  x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
-                  stroke="var(--color-accent-500)"
-                  strokeWidth={1.2}
-                  strokeOpacity={0.35}
-                  strokeDasharray="4 3"
-                />
-              )
-            })}
-
-            {/* Inner video nodes */}
-            {innerVideos.map(video => {
-              const pos = innerVideoPositions.get(video.sourceId)
-              if (!pos) return null
-
-              const r = pos.r
-              const color = playlistColorMap.get(expandedPlaylistId!) ?? PLAYLIST_COLORS[0]!
-              const isHovered = hoveredVideoId === video.sourceId
-              const isExploring = exploringVideoId === video.sourceId
-              const isDimmed = expandedOuterClusterId !== null && !connectedInnerSourceIds.has(video.sourceId)
-              const scale = isHovered ? 1.12 : 1
-              const label = video.videoTitle.length > 24 ? video.videoTitle.slice(0, 23) + '…' : video.videoTitle
-
-              return (
-                <g
-                  key={video.sourceId}
-                  onMouseEnter={() => setHoveredVideoId(video.sourceId)}
-                  onMouseLeave={() => setHoveredVideoId(null)}
-                  onClick={() => handleVideoClick(video.sourceId)}
-                  style={{
-                    cursor: 'pointer',
-                    opacity: isDimmed ? 0.2 : 1,
-                    transition: 'opacity 0.2s ease',
-                  }}
-                >
-                  <g transform={`translate(${pos.x}, ${pos.y})`}>
-                    <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
-                      {isExploring && (
-                        <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.5} opacity={0.6} />
-                      )}
-                      {isHovered && !isExploring && (
-                        <circle r={r + 3} fill="none" stroke={`${color}35`} strokeWidth={1.5} />
-                      )}
-                      <circle r={r} fill={`${color}22`} stroke={color} strokeWidth={1.5} />
-                    </g>
                     <text
-                      y={r + 10}
+                      y={r + 25}
                       textAnchor="middle"
                       style={{
                         fontFamily: 'var(--font-body)',
                         fontSize: 8,
-                        fontWeight: isHovered ? 600 : 500,
-                        fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                        fontWeight: 500,
+                        fill: 'var(--color-text-placeholder)',
                         pointerEvents: 'none',
                         userSelect: 'none',
-                        transition: 'fill 0.15s ease',
                       }}
                     >
-                      {label}
+                      {pVideos.length} videos
                     </text>
                   </g>
-                </g>
-              )
-            })}
-
-            {/* Outer playlist clusters */}
-            {outerPlaylists.map(op => {
-              const pos = outerPlaylistPositions.get(op.id)
-              if (!pos) return null
-
-              const color = playlistColorMap.get(op.id) ?? '#94a3b8'
-              const isExpanded = expandedOuterClusterId === op.id
-              const r = pos.r
-              const label = op.playlistName.length > 18 ? op.playlistName.slice(0, 17) + '…' : op.playlistName
-
-              return (
-                <g key={op.id}>
-                  {/* Cluster bubble */}
-                  <g
-                    onClick={() => handleOuterClusterClick(op.id)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <g transform={`translate(${pos.x}, ${pos.y})`}>
-                      {isExpanded && (
-                        <circle r={r + 4} fill="none" stroke={color} strokeWidth={1.5} strokeDasharray="3 2" opacity={0.4} />
-                      )}
-                      <circle r={r} fill={`${color}15`} stroke={color} strokeWidth={1.5} strokeDasharray={isExpanded ? 'none' : '4 3'} />
-
-                      {/* Connection count */}
-                      <text
-                        y={1}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        style={{
-                          fontFamily: 'var(--font-display)',
-                          fontSize: Math.max(8, r * 0.5),
-                          fontWeight: 700,
-                          fill: color,
-                          opacity: 0.6,
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                        }}
-                      >
-                        {op.connectionCount}
-                      </text>
-
-                      {/* Label below */}
-                      <text
-                        y={r + 12}
-                        textAnchor="middle"
-                        style={{
-                          fontFamily: 'var(--font-display)',
-                          fontSize: 9,
-                          fontWeight: 600,
-                          fill: color,
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                        }}
-                      >
-                        {label}
-                      </text>
-
-                      {/* Navigate arrow (below label) */}
-                      <text
-                        y={r + 24}
-                        textAnchor="middle"
-                        onClick={(e) => { e.stopPropagation(); handleOuterClusterNavigate(op.id) }}
-                        style={{
-                          fontFamily: 'var(--font-body)',
-                          fontSize: 8,
-                          fontWeight: 600,
-                          fill: 'var(--color-accent-500)',
-                          cursor: 'pointer',
-                          opacity: 0.7,
-                        }}
-                      >
-                        Enter →
-                      </text>
-                    </g>
-                  </g>
-
-                  {/* Expanded outer cluster videos */}
-                  {isExpanded && outerClusterVideos.map(video => {
-                    const vPos = outerVideoPositions.get(video.sourceId)
-                    if (!vPos) return null
-
-                    const vr = vPos.r
-                    const isVHovered = hoveredVideoId === video.sourceId
-                    const isVExploring = exploringVideoId === video.sourceId
-                    const vLabel = video.videoTitle.length > 18 ? video.videoTitle.slice(0, 17) + '…' : video.videoTitle
-
-                    return (
-                      <g
-                        key={video.sourceId}
-                        onMouseEnter={() => setHoveredVideoId(video.sourceId)}
-                        onMouseLeave={() => setHoveredVideoId(null)}
-                        onClick={() => handleVideoClick(video.sourceId)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <g transform={`translate(${vPos.x}, ${vPos.y})`}>
-                          {isVExploring && (
-                            <circle r={vr + 3} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.5} opacity={0.6} />
-                          )}
-                          {isVHovered && !isVExploring && (
-                            <circle r={vr + 2} fill="none" stroke={`${color}35`} strokeWidth={1} />
-                          )}
-                          <circle r={vr} fill={`${color}22`} stroke={color} strokeWidth={1.2} />
-                          {isVHovered && (
-                            <text
-                              y={vr + 9}
-                              textAnchor="middle"
-                              style={{
-                                fontFamily: 'var(--font-body)',
-                                fontSize: 7,
-                                fontWeight: 500,
-                                fill: 'var(--color-text-secondary)',
-                                pointerEvents: 'none',
-                                userSelect: 'none',
-                              }}
-                            >
-                              {vLabel}
-                            </text>
-                          )}
-                        </g>
-                      </g>
-                    )
-                  })}
                 </g>
               )
             })}
@@ -1136,68 +809,24 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         </svg>
       )}
 
-      {/* Hover tooltip (Level 1: playlist) */}
-      {viewLevel === 'map' && hoveredPlaylistId && !selectedPlaylistId && (() => {
-        const hPlaylist = playlists.find(p => p.id === hoveredPlaylistId)
-        if (!hPlaylist) return null
-        const livePos = livePositions.get(hPlaylist.id)
-        if (!livePos) return null
-        const r = layoutPositions.get(hPlaylist.id)?.radius ?? 20
-        const color = playlistColorMap.get(hPlaylist.id) ?? PLAYLIST_COLORS[0]!
-        const connCount = edgesForPlaylist.get(hPlaylist.id)?.length ?? 0
-
-        const screenX = livePos.x * camera.zoom + camera.panX
-        const screenY = livePos.y * camera.zoom + camera.panY
-        const cardWidth = 240
-        const left = Math.max(8, Math.min(size.width - cardWidth - 8, screenX - cardWidth / 2))
-        const top = Math.max(8, screenY - r * camera.zoom - 12)
-
-        return (
-          <div
-            style={{
-              position: 'absolute',
-              left,
-              bottom: size.height - top,
-              zIndex: 30,
-              width: cardWidth,
-              background: 'rgba(255,255,255,0.96)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 10,
-              padding: '8px 12px',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
-              pointerEvents: 'none',
-            }}
-          >
-            <div className="flex items-center gap-2" style={{ marginBottom: 3 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-              <span className="font-display" style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {hPlaylist.playlistName}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)' }}>
-                {hPlaylist.videoCount} videos · {connCount} playlist connections
-              </span>
-            </div>
-            <div className="font-body" style={{ fontSize: 8, color: 'var(--color-text-placeholder)', marginTop: 2 }}>
-              Double-click to expand
-            </div>
-          </div>
-        )
-      })()}
-
-      {/* Hover tooltip (Level 2: video) */}
-      {viewLevel === 'expanded' && hoveredVideoId && !exploringVideoId && (() => {
+      {/* Hover tooltip for video */}
+      {hoveredVideoId && !exploringVideoId && (() => {
         const hVideo = videos.find(v => v.sourceId === hoveredVideoId)
         if (!hVideo) return null
-        const pos = innerVideoPositions.get(hVideo.sourceId) ?? outerVideoPositions.get(hVideo.sourceId)
+        const posLive = livePositions.get(`v:${hVideo.sourceId}`)
+        const pos = posLive ?? videoPositions.get(hVideo.sourceId)
         if (!pos) return null
         const color = playlistColorMap.get(hVideo.playlistId) ?? '#94a3b8'
+        const playlist = playlists.find(p => p.id === hVideo.playlistId)
+
+        // Count cross-playlist connections for this video
+        const crossConns = crossPlaylistVideoEdges.filter(
+          e => e.fromSourceId === hVideo.sourceId || e.toSourceId === hVideo.sourceId
+        ).length
 
         const screenX = pos.x * camera.zoom + camera.panX
         const screenY = pos.y * camera.zoom + camera.panY
-        const cardWidth = 240
+        const cardWidth = 250
         const left = Math.max(8, Math.min(size.width - cardWidth - 8, screenX - cardWidth / 2))
         const top = Math.max(8, screenY - 20)
 
@@ -1224,36 +853,23 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
                 {hVideo.videoTitle}
               </span>
             </div>
-            <span className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)' }}>
-              {hVideo.entityCount} entities
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)' }}>
+                {hVideo.entityCount} entities
+                {crossConns > 0 && ` · ${crossConns} cross-playlist connections`}
+              </span>
+            </div>
+            {playlist && (
+              <div className="font-body" style={{ fontSize: 8, color: 'var(--color-text-placeholder)', marginTop: 2 }}>
+                {playlist.playlistName}
+              </div>
+            )}
           </div>
         )
       })()}
 
-      {/* Back button (Level 2) */}
-      {viewLevel === 'expanded' && (
-        <button
-          type="button"
-          onClick={handleBackToMap}
-          className="flex items-center gap-1.5 font-body font-semibold cursor-pointer"
-          style={{
-            position: 'absolute', top: 16, left: 16, zIndex: 20,
-            padding: '6px 12px', borderRadius: 20,
-            background: 'rgba(255,255,255,0.92)',
-            border: '1px solid var(--border-subtle)',
-            backdropFilter: 'blur(8px)',
-            fontSize: 11,
-            color: 'var(--color-text-secondary)',
-          }}
-        >
-          <ArrowLeft size={12} />
-          All Playlists
-        </button>
-      )}
-
-      {/* Right-side detail panel: playlist (Level 1) */}
-      {viewLevel === 'map' && selectedPlaylistId && !exploringVideoId && (() => {
+      {/* Right-side detail panel: playlist */}
+      {selectedPlaylistId && !exploringVideoId && (() => {
         const selected = playlists.find(p => p.id === selectedPlaylistId)
         if (!selected) return null
         return (
@@ -1265,20 +881,13 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
             videoEdges={videoEdges}
             playlistColorMap={playlistColorMap}
             onClose={() => setSelectedPlaylistId(null)}
-            onNavigateToPlaylist={(id) => {
-              setExpandedPlaylistId(id)
-              setViewLevel('expanded')
-              setSelectedPlaylistId(null)
-              setExpandedOuterClusterId(null)
-              hasAutoFitRef.current = false
-              setCamera({ zoom: 1, panX: 0, panY: 0 })
-            }}
+            onNavigateToPlaylist={(id) => setSelectedPlaylistId(id)}
             onNavigateToVideo={(sourceId) => setExploringVideoId(sourceId)}
           />
         )
       })()}
 
-      {/* Right-side detail panel: video (Level 2) */}
+      {/* Right-side detail panel: video */}
       {exploringVideoId && (
         <SourceDetailCard
           sourceId={exploringVideoId}
@@ -1287,33 +896,48 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         />
       )}
 
-      {/* Legend (Level 1) */}
-      {viewLevel === 'map' && (
-        <div
+      {/* Legend — bottom-left, collapsed by default */}
+      <div
+        style={{
+          position: 'absolute', bottom: 16, left: 16,
+          background: 'rgba(255,255,255,0.92)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8,
+          zIndex: 20,
+          overflow: 'hidden',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setLegendOpen(prev => !prev)}
+          className="flex items-center gap-1.5 w-full cursor-pointer"
           style={{
-            position: 'absolute', bottom: 16, left: 16,
-            background: 'rgba(255,255,255,0.92)',
-            backdropFilter: 'blur(8px)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 8,
-            padding: '8px 10px',
-            display: 'flex', flexDirection: 'column', gap: 4,
-            zIndex: 20,
+            padding: '6px 10px',
+            background: 'none', border: 'none',
+            fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700,
+            color: 'var(--color-text-secondary)', letterSpacing: '0.06em',
+            textTransform: 'uppercase' as const,
           }}
         >
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, color: 'var(--color-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
-            Playlists
-          </span>
-          {playlists.map((p, i) => (
-            <div key={p.id} className="flex items-center gap-2">
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${getPlaylistColor(i)}22`, border: `1.5px solid ${getPlaylistColor(i)}`, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
-                {p.playlistName}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+          <svg width={8} height={8} viewBox="0 0 8 8" style={{ flexShrink: 0, transition: 'transform 0.15s ease', transform: legendOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+            <path d="M2 1l4 3-4 3z" fill="currentColor" />
+          </svg>
+          Playlists ({playlists.length})
+        </button>
+        {legendOpen && (
+          <div style={{ padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 240, overflowY: 'auto' }}>
+            {playlists.map((p, i) => (
+              <div key={p.id} className="flex items-center gap-2">
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: `${getPlaylistColor(i)}22`, border: `1.5px solid ${getPlaylistColor(i)}`, flexShrink: 0 }} />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
+                  {p.playlistName}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Stats — top-right */}
       <div
@@ -1334,7 +958,7 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
           <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{videos.length}</strong> videos
         </span>
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
-          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{playlistEdges.length}</strong> connections
+          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{crossPlaylistVideoEdges.length}</strong> cross-connections
         </span>
       </div>
 

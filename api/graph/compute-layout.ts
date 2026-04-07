@@ -256,7 +256,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { data: saveResult, error: saveError } = await sb.rpc('bulk_update_graph_positions', {
       p_user_id: userId,
-      p_positions: JSON.stringify(positionsJson),
+      p_positions: positionsJson,
     })
 
     if (saveError) throw new Error(`Save failed: ${saveError.message}`)

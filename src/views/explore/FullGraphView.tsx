@@ -101,18 +101,29 @@ export function FullGraphView() {
 
     fetchFullGraph(user.id)
       .then(data => {
+        console.log('[FullGraph] Fetched:', {
+          nodes: data.nodes.length,
+          edges: data.edges.length,
+          stats: data.stats,
+          positionedSample: data.nodes.slice(0, 3).map(n => ({ id: n.id, label: n.label, graphX: n.graphX, graphY: n.graphY })),
+        })
         setGraphData(data)
 
         // If no nodes have positions yet, trigger layout computation
         if (data.stats.positionedNodes === 0 && data.stats.totalNodes > 0 && session?.access_token) {
+          console.log('[FullGraph] No positioned nodes — triggering compute-layout…')
           setComputing(true)
           triggerLayoutComputation(session.access_token, user.id)
-            .then(() => {
+            .then(ok => {
+              console.log('[FullGraph] compute-layout result:', ok)
               // Reload data after computation
               return fetchFullGraph(user.id)
             })
-            .then(freshData => setGraphData(freshData))
-            .catch(() => {})
+            .then(freshData => {
+              console.log('[FullGraph] Refreshed after layout:', freshData.stats)
+              setGraphData(freshData)
+            })
+            .catch(err => console.error('[FullGraph] compute-layout error:', err))
             .finally(() => setComputing(false))
         }
       })
@@ -219,7 +230,7 @@ export function FullGraphView() {
       if (isHovered || isSelected) {
         ctx.beginPath()
         ctx.arc(x, y, r + 3, 0, Math.PI * 2)
-        ctx.strokeStyle = isSelected ? 'var(--color-accent-500)' : `${color}40`
+        ctx.strokeStyle = isSelected ? '#d63a00' : `${color}40`
         ctx.lineWidth = 2 / cam.zoom
         ctx.stroke()
       }

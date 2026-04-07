@@ -11,9 +11,15 @@ import { fetchWithRetry } from './gemini'
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+/** Retrieval type determines which search strategy to use (PRD-RAG-01) */
+export type RetrievalType = 'factual' | 'relational' | 'synthesis'
+
 export interface QueryClassification {
   /** Detected intent type */
   intent: 'factual' | 'analytical' | 'comparative' | 'exploratory' | 'temporal' | 'actionable'
+
+  /** Retrieval routing type — drives search strategy (PRD-RAG-01) */
+  retrievalType: RetrievalType
 
   /** Recommended retrieval strategy */
   retrieval: {
@@ -39,6 +45,7 @@ export interface QueryClassification {
 /** Default fallback classification when the classifier fails */
 const DEFAULT_CLASSIFICATION: QueryClassification = {
   intent: 'analytical',
+  retrievalType: 'factual',
   retrieval: {
     chunkCount: 15,
     traversalHops: 2,
@@ -49,6 +56,74 @@ const DEFAULT_CLASSIFICATION: QueryClassification = {
   thinkingBudget: 1024,
   suggestFollowUp: true,
   confidence: 0,
+}
+
+// ─── PRD-RAG-01: Heuristic Retrieval Type Detection ────────────────────────
+
+const RELATIONAL_PATTERNS = [
+  /how\s+(does|do|did|is|are|was|were)\s+.+\s+(relate|connect|link|impact|affect|influence|support|block|enable)/i,
+  /relationship\s+between/i,
+  /connection\s+between/i,
+  /how\s+.+\s+and\s+.+\s+(relate|connect|interact)/i,
+  /what('s|\s+is)\s+the\s+(link|connection|relationship|relation)\s+between/i,
+  /does\s+.+\s+(support|block|enable|contradict|prevent)\s+/i,
+]
+
+const SYNTHESIS_PATTERNS = [
+  /what\s+do\s+I\s+know\s+about/i,
+  /summarise|summarize|overview|summary\s+of/i,
+  /how\s+has\s+.+\s+evolved/i,
+  /everything\s+(about|related|regarding)/i,
+  /compare\s+.+\s+(and|with|to|versus|vs)/i,
+  /what\s+are\s+(the\s+)?(key|main|major)\s+(themes|topics|points|takeaways)/i,
+  /across\s+(all\s+)?(my\s+)?(sources|meetings|documents)/i,
+  /brief\s+me\s+on/i,
+  /what\s+do\s+we\s+know/i,
+]
+
+const FACTUAL_PATTERNS = [
+  /what\s+did\s+\w+\s+say/i,
+  /when\s+(did|was|were|is)/i,
+  /who\s+(said|mentioned|proposed|decided|created|leads|owns)/i,
+  /what\s+is\s+the\s+(status|deadline|date|cost|price|number)/i,
+  /how\s+many/i,
+  /what\s+(exactly|specifically)/i,
+  /quote\s+(from|about)/i,
+]
+
+/**
+ * Fast heuristic retrieval type detection (PRD-RAG-01 Tier 1).
+ * Returns null if no pattern matches confidently (triggers Gemini fallback).
+ */
+export function detectRetrievalTypeHeuristic(query: string): RetrievalType | null {
+  for (const pattern of RELATIONAL_PATTERNS) {
+    if (pattern.test(query)) return 'relational'
+  }
+  for (const pattern of SYNTHESIS_PATTERNS) {
+    if (pattern.test(query)) return 'synthesis'
+  }
+  for (const pattern of FACTUAL_PATTERNS) {
+    if (pattern.test(query)) return 'factual'
+  }
+  return null
+}
+
+/**
+ * Derives retrieval type from Gemini's intent classification (PRD-RAG-01 Tier 2).
+ */
+function intentToRetrievalType(intent: QueryClassification['intent']): RetrievalType {
+  switch (intent) {
+    case 'factual':
+    case 'actionable':
+      return 'factual'
+    case 'comparative':
+      return 'relational'
+    case 'exploratory':
+    case 'temporal':
+      return 'synthesis'
+    case 'analytical':
+      return 'factual' // safe default — analytical queries benefit from precise retrieval
+  }
 }
 
 /**
@@ -64,6 +139,9 @@ export async function classifyQuery(
     console.warn('[classifier] No API key, using default classification')
     return DEFAULT_CLASSIFICATION
   }
+
+  // PRD-RAG-01: Try heuristic retrieval type detection first (fast, no API call)
+  const heuristicRetrievalType = detectRetrievalTypeHeuristic(question)
 
   try {
     const prompt = `Classify this knowledge graph query. Return ONLY valid JSON.
@@ -89,9 +167,13 @@ Return only the JSON object.`
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            maxOutputTokens: 256,
+            maxOutputTokens: 512,
             temperature: 0,
             responseMimeType: 'application/json',
+            // Disable thinking — classification is a simple task that doesn't
+            // need internal reasoning, and thinking was consuming the entire
+            // output budget leaving only "{" as the response
+            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
       },
@@ -99,20 +181,51 @@ Return only the JSON object.`
     )
 
     const data = await response.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
     }
 
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+    // Gemini 2.5 Flash returns thinking parts before the real JSON — skip them
+    const parts = data.candidates?.[0]?.content?.parts ?? []
+    const textPart = parts.find(p => p.thought !== true && typeof p.text === 'string')
+      ?? parts.find(p => typeof p.text === 'string')
+    const text = textPart?.text
+
     if (!text) {
       console.warn('[classifier] Empty response, using default')
-      return DEFAULT_CLASSIFICATION
+      const fallback = { ...DEFAULT_CLASSIFICATION }
+      if (heuristicRetrievalType) fallback.retrievalType = heuristicRetrievalType
+      return fallback
     }
 
-    const parsed = JSON.parse(text) as Record<string, unknown>
-    return validateClassification(parsed)
+    // Clean Gemini output: strip BOM, invisible chars, markdown fences
+    let cleanedText = text.trim()
+      .replace(/^\uFEFF/, '')             // BOM
+      .replace(/^[\x00-\x1F]+/, '')       // control chars before JSON
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+    // If text doesn't start with {, find the first {
+    if (!cleanedText.startsWith('{')) {
+      const braceStart = cleanedText.indexOf('{')
+      if (braceStart >= 0) cleanedText = cleanedText.slice(braceStart)
+    }
+    console.debug('[classifier] Cleaned response:', cleanedText.slice(0, 100))
+    const parsed = JSON.parse(cleanedText) as Record<string, unknown>
+    const classification = validateClassification(parsed)
+
+    // PRD-RAG-01: Heuristic retrieval type takes priority when available
+    // (regex patterns are highly specific and more reliable than Gemini for routing)
+    if (heuristicRetrievalType) {
+      classification.retrievalType = heuristicRetrievalType
+    }
+
+    return classification
   } catch (err) {
     console.warn('[classifier] Classification failed, using default:', err instanceof Error ? err.message : err)
-    return DEFAULT_CLASSIFICATION
+    const fallback = { ...DEFAULT_CLASSIFICATION }
+    if (heuristicRetrievalType) {
+      fallback.retrievalType = heuristicRetrievalType
+    }
+    return fallback
   }
 }
 
@@ -152,6 +265,7 @@ function validateClassification(raw: Record<string, unknown>): QueryClassificati
 
   return {
     intent,
+    retrievalType: intentToRetrievalType(intent),
     retrieval: {
       chunkCount,
       traversalHops,

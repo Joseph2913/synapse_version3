@@ -12,12 +12,12 @@ const STEP_ORDER: RAGPipelineStep[] = [
 ]
 
 const STEP_LABELS: Record<RAGPipelineStep, string> = {
-  embedding: 'Decomposing query',
-  semantic_search: 'Searching knowledge base',
-  keyword_search: 'Retrieving chunks',
+  embedding: 'Analysing question',
+  semantic_search: 'Searching knowledge graph',
+  keyword_search: 'Ranking results',
   graph_traversal: 'Traversing graph',
   context_assembly: 'Assembling context',
-  generating: 'Generating response',
+  generating: 'Generating answer',
 }
 
 const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']

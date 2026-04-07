@@ -35,16 +35,17 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
   const initial = displayName.charAt(0).toUpperCase() || '?'
 
   useEffect(() => {
+    if (!user) return
     async function fetchCounts() {
       const [nodes, edges] = await Promise.all([
-        supabase.from('knowledge_nodes').select('*', { count: 'exact', head: true }),
-        supabase.from('knowledge_edges').select('*', { count: 'exact', head: true }),
+        supabase.from('knowledge_nodes').select('id', { count: 'exact', head: true }).eq('user_id', user!.id).eq('is_merged', false),
+        supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('user_id', user!.id),
       ])
       setNodeCount(nodes.count ?? 0)
       setEdgeCount(edges.count ?? 0)
     }
     fetchCounts()
-  }, [])
+  }, [user])
 
   return (
     <header

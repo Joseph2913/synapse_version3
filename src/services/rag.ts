@@ -1,7 +1,10 @@
 import { generateRAGResponse, decomposeQuery, embedQuery } from './gemini'
 import { classifyQuery, mapIntentToMindset } from './queryClassifier'
-import type { QueryClassification } from './queryClassifier'
+import type { QueryClassification, RetrievalType } from './queryClassifier'
 import { getResponseFormatForClassification } from '../config/responseFormats'
+import { rerankCandidates } from './reranker'
+import type { RerankerCandidate } from './reranker'
+import { assembleContext, getTypeGuidance } from './contextAssembler'
 import {
   supabase,
   keywordSearchChunks,
@@ -10,11 +13,13 @@ import {
   keywordSearchSources,
   semanticSearchChunks,
   semanticSearchNodes,
+  searchRelationships,
   traverseGraphFromNodes,
   fetchSourcesByIds,
   fetchNodesByIds,
   fetchTopNodes,
 } from './supabase'
+import type { RelationshipMatch } from './supabase'
 import type {
   RAGStepEvent,
   RAGContext,
@@ -340,6 +345,9 @@ export async function queryGraph(
   let responseFormatInstruction: string | undefined
   let thinkingBudget: number | undefined
 
+  // PRD-RAG-01: retrievalType drives search strategy
+  let retrievalType: RetrievalType = 'factual'
+
   if (queryConfig?.skipClassification) {
     // Digest modules: skip classification entirely, use factual mindset
     effectiveMindsetId = 'analytical'
@@ -354,6 +362,7 @@ export async function queryGraph(
     effectiveMindsetId = mapIntentToMindset(classification.intent)
     responseFormatInstruction = getResponseFormatForClassification(classification.responseFormat)
     thinkingBudget = classification.thinkingBudget
+    retrievalType = classification.retrievalType
   } else {
     // Manual mindset — default thinking budget of 1024
     thinkingBudget = queryConfig?.thinkingBudget ?? 1024
@@ -361,6 +370,7 @@ export async function queryGraph(
       ? getResponseFormatForClassification(queryConfig.responseFormat)
       : undefined
   }
+  console.debug('[rag] retrieval type:', retrievalType)
 
   const mindset = QUERY_MINDSETS.find(m => m.id === effectiveMindsetId)
 
@@ -379,10 +389,14 @@ export async function queryGraph(
   onStepChange?.({ step: 'embedding', status: 'done', subQueries, hasEmbedding })
   checkAbort()
 
-  // ─── Approach 2: Hybrid retrieval — keyword + semantic in parallel ─────────
+  // ─── Approach 2: Hybrid retrieval — keyword + semantic + relationships in parallel ──
   onStepChange?.({ step: 'semantic_search', status: 'running' })
 
-  const [retrievalResults, semanticChunks, semanticNodes] = await Promise.all([
+  // PRD-RAG-01: Relationship search for relational/synthesis queries
+  const useRelationshipSearch = hasEmbedding && (retrievalType === 'relational' || retrievalType === 'synthesis')
+  const relationshipMatchCount = retrievalType === 'relational' ? 10 : 5
+
+  const [retrievalResults, semanticChunks, semanticNodes, relationshipMatches] = await Promise.all([
     // Keyword search per sub-query
     Promise.all(
       subQueries.map(sq =>
@@ -394,12 +408,19 @@ export async function queryGraph(
     ),
     // Semantic chunk search (returns [] if no embedding)
     hasEmbedding
-      ? semanticSearchChunks(queryEmbedding, userId, { matchThreshold: 0.4, matchCount: 15 })
+      ? semanticSearchChunks(queryEmbedding, userId, {
+          matchThreshold: retrievalType === 'synthesis' ? 0.35 : 0.4,
+          matchCount: retrievalType === 'synthesis' ? 20 : 15,
+        })
       : Promise.resolve([] as SemanticChunkResult[]),
     // Semantic node search (returns [] if no embedding)
     hasEmbedding
       ? semanticSearchNodes(queryEmbedding, userId, { matchThreshold: 0.4, matchCount: 20 })
       : Promise.resolve([] as SemanticNodeResult[]),
+    // Relationship embedding search (PRD-RAG-01)
+    useRelationshipSearch
+      ? searchRelationships(queryEmbedding, userId, { matchThreshold: 0.65, matchCount: relationshipMatchCount })
+      : Promise.resolve([] as RelationshipMatch[]),
   ])
   checkAbort()
 
@@ -440,6 +461,45 @@ export async function queryGraph(
   const finalChunkCount = Math.max(toolModeConfig.maxContextChunks, Math.min(toolModeConfig.chunkCount, allSources.length * 4))
   const balancedChunks = balanceChunksBySource(rankedChunks, finalChunkCount, 2)
   onStepChange?.({ step: 'keyword_search', status: 'done', rawChunks: rawChunks.length, rankedChunks: balancedChunks.length })
+
+  // ─── PRD-RAG-01: Gemini Reranking ────────────────────────────────────────
+  // Second-pass reranking using Gemini Flash for relevance scoring.
+  // Converts balanced chunks + relationship matches into RerankerCandidate format.
+  const rerankerCandidates: RerankerCandidate[] = [
+    ...balancedChunks.map(chunk => {
+      // Collect entity labels from keyword nodes whose source matches this chunk
+      const chunkEntityLabels = allKeywordNodes
+        .filter(n => n.source_id === chunk.source_id)
+        .map(n => n.label)
+
+      return {
+        id: chunk.id,
+        text: chunk.content,
+        source_type: 'chunk' as const,
+        metadata: {
+          source_title: allSources.find(s => s.id === chunk.source_id)?.title ?? undefined,
+          entity_labels: chunkEntityLabels.length > 0 ? chunkEntityLabels : undefined,
+        },
+      }
+    }),
+    ...relationshipMatches.map(rel => ({
+      id: rel.id,
+      text: `${rel.source_label} (${rel.source_type}) ${rel.relation_type} ${rel.target_label} (${rel.target_type})${rel.evidence ? '. Evidence: ' + rel.evidence : ''}`,
+      source_type: 'relationship' as const,
+      metadata: {
+        relation_type: rel.relation_type ?? undefined,
+        entity_labels: [rel.source_label, rel.target_label],
+      },
+    })),
+  ]
+
+  const geminiRerankedTopN = retrievalType === 'synthesis' ? 12
+    : retrievalType === 'relational' ? 10
+    : 8
+
+  const geminiReranked = await rerankCandidates(question, rerankerCandidates, geminiRerankedTopN)
+  console.debug('[rag] Gemini reranked:', geminiReranked.length, 'candidates from', rerankerCandidates.length)
+  checkAbort()
 
   // ─── Approach 3: Graph traversal from keyword + semantic nodes ────────────
   onStepChange?.({ step: 'graph_traversal', status: 'running' })
@@ -505,9 +565,11 @@ export async function queryGraph(
   const sourceContextNote = formatSourceContext(allSources)
 
   // Fetch skills and anchors in parallel for richer context
-  const [skills, anchors] = await Promise.all([
+  // PRD-RAG-01: Also assemble type-specific context (chronological entity evolution for synthesis)
+  const [skills, anchors, typeSpecificContext] = await Promise.all([
     fetchSkillsForRAG(userId).catch(() => [] as SkillSummary[]),
     fetchAnchorsForRAG(userId).catch(() => [] as AnchorSummary[]),
+    assembleContext(retrievalType, geminiReranked, relationshipMatches, userId),
   ])
 
   const context: RAGContext = {
@@ -526,12 +588,25 @@ export async function queryGraph(
   const temperature = mindset?.temperatureOverride ?? modelTier?.generationConfig.temperature
   const maxOutputTokens = modelTier?.generationConfig.maxOutputTokens
 
+  // PRD-RAG-01: Prepend type-specific retrieval guidance + assembled context
+  const typeGuidance = getTypeGuidance(retrievalType)
+  const enrichedMindsetPrompt = [
+    typeGuidance,
+    mindset?.promptAddition,
+  ].filter(Boolean).join('\n\n')
+
+  // Prepend type-specific context to source context note
+  const enrichedSourceContext = [
+    sourceContextNote,
+    typeSpecificContext ? `\n\n--- Smart Retrieval Context (${retrievalType}) ---\n${typeSpecificContext}` : '',
+  ].filter(Boolean).join('')
+
   const generationResult = await generateRAGResponse(
     context,
     question,
     conversationHistory.slice(-6),
-    sourceContextNote,
-    mindset?.promptAddition,
+    enrichedSourceContext,
+    enrichedMindsetPrompt,
     temperature,
     maxOutputTokens,
     queryConfig?.systemDirective,

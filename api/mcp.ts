@@ -133,6 +133,31 @@ async function embedText(text: string): Promise<number[]> {
   return data.embedding.values as number[]
 }
 
+// ─── Relationship Search (PRD-RAG-05) ───────────────────────────────────────
+// Called internally by ask_synapse when query classifier routes here (PRD-RAG-01)
+
+async function matchRelationships(
+  queryEmbedding: number[],
+  userId: string,
+  sb: SupabaseClient,
+  threshold: number = 0.65,
+  count: number = 10
+) {
+  const { data, error } = await sb.rpc('match_relationships', {
+    query_embedding: JSON.stringify(queryEmbedding),
+    match_threshold: threshold,
+    match_count: count,
+    p_user_id: userId,
+  })
+
+  if (error) {
+    console.error('match_relationships RPC error:', error)
+    return []
+  }
+
+  return data ?? []
+}
+
 async function generateAnswer(systemPrompt: string, userPrompt: string): Promise<string> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 8000)
@@ -184,6 +209,104 @@ function extractKeywords(query: string): string[] {
     .split(/\s+/)
     .filter(w => w.length > 2 && !STOP_WORDS.has(w))
     .slice(0, 3)
+}
+
+// ─── PRD-RAG-01: Inline Query Classification & Reranking ───────────────────
+
+type RetrievalType = 'factual' | 'relational' | 'synthesis'
+
+const RELATIONAL_PATTERNS = [
+  /how\s+(does|do|did|is|are|was|were)\s+.+\s+(relate|connect|link|impact|affect|influence|support|block|enable)/i,
+  /relationship\s+between/i,
+  /connection\s+between/i,
+  /how\s+.+\s+and\s+.+\s+(relate|connect|interact)/i,
+  /what('s|\s+is)\s+the\s+(link|connection|relationship|relation)\s+between/i,
+  /does\s+.+\s+(support|block|enable|contradict|prevent)\s+/i,
+]
+
+const SYNTHESIS_PATTERNS = [
+  /what\s+do\s+I\s+know\s+about/i,
+  /summarise|summarize|overview|summary\s+of/i,
+  /how\s+has\s+.+\s+evolved/i,
+  /everything\s+(about|related|regarding)/i,
+  /compare\s+.+\s+(and|with|to|versus|vs)/i,
+  /what\s+are\s+(the\s+)?(key|main|major)\s+(themes|topics|points|takeaways)/i,
+  /across\s+(all\s+)?(my\s+)?(sources|meetings|documents)/i,
+  /brief\s+me\s+on/i,
+  /what\s+do\s+we\s+know/i,
+]
+
+const FACTUAL_PATTERNS = [
+  /what\s+did\s+\w+\s+say/i,
+  /when\s+(did|was|were|is)/i,
+  /who\s+(said|mentioned|proposed|decided|created|leads|owns)/i,
+  /what\s+is\s+the\s+(status|deadline|date|cost|price|number)/i,
+  /how\s+many/i,
+  /what\s+(exactly|specifically)/i,
+  /quote\s+(from|about)/i,
+]
+
+function classifyRetrievalType(query: string): RetrievalType {
+  for (const p of RELATIONAL_PATTERNS) { if (p.test(query)) return 'relational' }
+  for (const p of SYNTHESIS_PATTERNS) { if (p.test(query)) return 'synthesis' }
+  for (const p of FACTUAL_PATTERNS) { if (p.test(query)) return 'factual' }
+  return 'factual' // safe default
+}
+
+interface RerankResult { id: string; text: string; score: number; source_type: 'chunk' | 'relationship' }
+
+async function rerankForMCP(
+  query: string,
+  candidates: Array<{ id: string; text: string; source_type: 'chunk' | 'relationship' }>,
+  topN: number
+): Promise<RerankResult[]> {
+  if (candidates.length <= topN) {
+    return candidates.map(c => ({ ...c, score: 5 }))
+  }
+
+  const candidateList = candidates.map((c, i) => `[${i}] ${c.text.slice(0, 300)}`).join('\n\n')
+  const prompt = `Score each passage 0-10 for relevance to this query. Return ONLY a JSON array of numbers.\n\nQuery: "${query}"\n\nPassages:\n${candidateList}`
+
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 6000)
+    try {
+      const resp = await fetch(
+        `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: 1024, temperature: 0, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
+          }),
+        }
+      )
+      const data = await resp.json()
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+      if (!text) throw new Error('empty')
+      const scores: number[] = JSON.parse(text)
+      const ranked = candidates.map((c, i) => ({ ...c, score: typeof scores[i] === 'number' ? scores[i] : 0 }))
+      ranked.sort((a, b) => b.score - a.score)
+      return ranked.slice(0, topN)
+    } finally {
+      clearTimeout(timeout)
+    }
+  } catch {
+    return candidates.slice(0, topN).map(c => ({ ...c, score: 5 }))
+  }
+}
+
+function getTypeSystemPromptGuidance(type: RetrievalType): string {
+  switch (type) {
+    case 'factual':
+      return 'Answer directly and specifically. Cite the exact source. Be concise.'
+    case 'relational':
+      return 'Explain the relationships between concepts. Describe how they connect, support, or influence each other. Reference evidence for each relationship.'
+    case 'synthesis':
+      return 'Provide a comprehensive overview synthesising information across multiple sources. Highlight patterns, contradictions, and temporal evolution. Be thorough but organised.'
+  }
 }
 
 // ─── Tool descriptors ────────────────────────────────────────────────────────
@@ -543,11 +666,13 @@ async function handleAskSynapse(
   sb: SupabaseClient
 ): Promise<ToolContent> {
   const maxResults = Math.min(params.max_results ?? 8, 20)
-  // Lower threshold when source_ids is provided — explicit source scoping is a strong intent signal
   const isSourceScoped = (params.source_ids && params.source_ids.length > 0) || !!params.source_type
   const matchThreshold = isSourceScoped ? 0.1 : 0.3
 
-  // 1. Embed query
+  // PRD-RAG-01 Step 1: Classify retrieval type
+  const retrievalType = classifyRetrievalType(params.query)
+
+  // Step 2: Embed query
   let embedding: number[]
   try {
     embedding = await embedText(params.query)
@@ -557,22 +682,51 @@ async function handleAskSynapse(
     }
   }
 
-  // 2. Semantic search on source chunks
-  const { data: semanticChunks } = await sb.rpc('match_source_chunks', {
-    query_embedding: JSON.stringify(embedding),
-    match_threshold: matchThreshold,
-    match_count: isSourceScoped ? maxResults * 3 : maxResults, // fetch more if we'll filter
-    p_user_id: userId,
-  })
+  // Step 3: Parallel retrieval — semantic chunks + keywords + relationships (if relational/synthesis)
+  const useRelSearch = retrievalType === 'relational' || retrievalType === 'synthesis'
+  const relMatchCount = retrievalType === 'relational' ? 10 : 5
 
-  let chunks: ChunkResult[] = (semanticChunks ?? []) as ChunkResult[]
+  const [semanticChunksResult, keywordNodesResult, relationshipsResult] = await Promise.all([
+    // Semantic search on source chunks
+    sb.rpc('match_source_chunks', {
+      query_embedding: JSON.stringify(embedding),
+      match_threshold: retrievalType === 'synthesis' ? Math.min(matchThreshold, 0.25) : matchThreshold,
+      match_count: isSourceScoped ? maxResults * 3 : (retrievalType === 'synthesis' ? maxResults * 2 : maxResults),
+      p_user_id: userId,
+    }),
+    // Keyword search on knowledge nodes
+    (async () => {
+      const keywords = extractKeywords(params.query)
+      if (keywords.length === 0) return [] as KeywordNodeResult[]
+      const pattern = `%${keywords.join('%')}%`
+      const { data } = await sb
+        .from('knowledge_nodes')
+        .select('id, label, description, entity_type, source_id')
+        .eq('user_id', userId)
+        .or(`label.ilike.${pattern},description.ilike.${pattern}`)
+        .limit(10)
+      return (data ?? []) as KeywordNodeResult[]
+    })(),
+    // Relationship embedding search (PRD-RAG-01)
+    useRelSearch
+      ? matchRelationships(embedding, userId, sb, 0.65, relMatchCount)
+      : Promise.resolve([]),
+  ])
+
+  let chunks: ChunkResult[] = (semanticChunksResult.data ?? []) as ChunkResult[]
+  const keywordNodes = keywordNodesResult as KeywordNodeResult[]
+  const relationships = relationshipsResult as Array<{
+    id: string; source_node_id: string; target_node_id: string;
+    relation_type: string; evidence: string; weight: number;
+    source_label: string; source_type: string; target_label: string; target_type: string;
+    similarity: number;
+  }>
 
   // Apply source scoping filters
   if (params.source_ids && params.source_ids.length > 0) {
     const scopeSet = new Set(params.source_ids)
     chunks = chunks.filter(c => scopeSet.has(c.source_id))
 
-    // Fall back to raw chunk retrieval if semantic search returned nothing for these sources
     if (chunks.length === 0) {
       const { data: fallbackChunks } = await sb
         .from('source_chunks')
@@ -587,7 +741,6 @@ async function handleAskSynapse(
     }
   }
   if (params.source_type) {
-    // Need to look up source types for the chunks
     const chunkSourceIds = [...new Set(chunks.map(c => c.source_id))]
     if (chunkSourceIds.length > 0) {
       const { data: stData } = await sb
@@ -602,36 +755,18 @@ async function handleAskSynapse(
       chunks = chunks.filter(c => typeMap.get(c.source_id) === params.source_type)
     }
   }
-  chunks = chunks.slice(0, maxResults)
+  chunks = chunks.slice(0, maxResults * 2) // Keep more for reranking
 
-  // 3. Keyword search on knowledge nodes
-  const keywords = extractKeywords(params.query)
-  let keywordNodes: KeywordNodeResult[] = []
-  if (keywords.length > 0) {
-    const pattern = `%${keywords.join('%')}%`
-    const { data } = await sb
-      .from('knowledge_nodes')
-      .select('id, label, description, entity_type, source_id')
-      .eq('user_id', userId)
-      .or(`label.ilike.${pattern},description.ilike.${pattern}`)
-      .limit(10)
-    keywordNodes = (data ?? []) as KeywordNodeResult[]
-  }
-
-  // 4. Merge & score — get source_ids from keyword nodes that overlap with chunk source_ids
-  const chunkSourceIds = new Set(chunks.map(c => c.source_id))
+  // Step 4: Hybrid score
   const keywordSourceIds = new Set(keywordNodes.map(n => n.source_id).filter(Boolean))
-
   const scoredChunks = chunks.map(c => ({
     ...c,
     score: 0.6 * c.similarity + (keywordSourceIds.has(c.source_id) ? 0.4 : 0),
   }))
   scoredChunks.sort((a, b) => b.score - a.score)
-  const topChunks = scoredChunks.slice(0, maxResults)
 
   // Handle empty results
-  if (topChunks.length === 0) {
-    // If source-scoped and empty, note the scoping
+  if (scoredChunks.length === 0 && relationships.length === 0) {
     if (params.source_ids || params.source_type) {
       return {
         content: [{
@@ -648,12 +783,33 @@ async function handleAskSynapse(
     }
   }
 
+  // Step 5: PRD-RAG-01 — Gemini reranking
+  const rerankerCandidates = [
+    ...scoredChunks.map(c => ({
+      id: c.id,
+      text: c.content,
+      source_type: 'chunk' as const,
+    })),
+    ...relationships.map(r => ({
+      id: r.id,
+      text: `${r.source_label} (${r.source_type}) ${r.relation_type} ${r.target_label} (${r.target_type})${r.evidence ? '. Evidence: ' + r.evidence : ''}`,
+      source_type: 'relationship' as const,
+    })),
+  ]
+
+  const topN = retrievalType === 'synthesis' ? 12 : retrievalType === 'relational' ? 10 : 8
+  const reranked = await rerankForMCP(params.query, rerankerCandidates, topN)
+
+  // Separate reranked back into chunks and relationships for context assembly
+  const finalChunkIds = new Set(reranked.filter(r => r.source_type === 'chunk').map(r => r.id))
+  const topChunks = scoredChunks.filter(c => finalChunkIds.has(c.id)).slice(0, maxResults)
+
   // Fetch source titles for top chunks
   const uniqueSourceIds = [...new Set(topChunks.map(c => c.source_id))]
   const { data: sourcesData } = await sb
     .from('knowledge_sources')
     .select('id, title, source_type')
-    .in('id', uniqueSourceIds)
+    .in('id', uniqueSourceIds.length > 0 ? uniqueSourceIds : ['_'])
     .eq('user_id', userId)
 
   const sourceMap = new Map<string, { title: string; source_type: string }>()
@@ -661,7 +817,7 @@ async function handleAskSynapse(
     sourceMap.set(s.id, { title: s.title, source_type: s.source_type })
   }
 
-  // 5. Graph traversal — fetch connected anchor nodes
+  // Step 6: Graph traversal — fetch connected anchor nodes
   const topNodeIds = keywordNodes.slice(0, 5).map(n => n.id)
   let anchorConnections: AnchorConnection[] = []
   if (topNodeIds.length > 0) {
@@ -697,7 +853,7 @@ async function handleAskSynapse(
     }
   }
 
-  // 6. Assemble context
+  // Step 7: Assemble context with type-specific structure
   const passageLines = topChunks.map(c => {
     const src = sourceMap.get(c.source_id)
     const title = src?.title ?? 'Unknown Source'
@@ -708,24 +864,38 @@ async function handleAskSynapse(
     a => `- ${a.label} (${a.entity_type}) — ${a.relation_type}`
   )
 
-  const contextStr = [
+  // PRD-RAG-01: Add relationship context for relational/synthesis queries
+  const relationshipLines = relationships.length > 0
+    ? relationships.map(r =>
+        `- ${r.source_label} (${r.source_type}) ${r.relation_type} ${r.target_label} (${r.target_type})${r.evidence ? ' — ' + r.evidence : ''}`
+      )
+    : []
+
+  const contextParts = [
     '[Source Passages]',
     ...passageLines,
     '',
     '[Key Entities & Connections]',
     ...(entityLines.length > 0 ? entityLines : ['(none found)']),
-  ].join('\n\n')
+  ]
 
-  // 7. Call Gemini
+  if (relationshipLines.length > 0) {
+    contextParts.push('', '[Semantic Relationships]', ...relationshipLines)
+  }
+
+  const contextStr = contextParts.join('\n\n')
+
+  // Step 8: Call Gemini with type-specific guidance
+  const typeGuidance = getTypeSystemPromptGuidance(retrievalType)
   const systemPrompt =
     'You are Synapse, an AI assistant that answers questions based only on the provided context from the user\'s personal knowledge graph. ' +
-    'Cite sources by their title. If the context does not contain enough information, say so clearly. Do not make up information.'
+    'Cite sources by their title. If the context does not contain enough information, say so clearly. Do not make up information. ' +
+    typeGuidance
 
   let answer: string
   try {
     answer = await generateAnswer(systemPrompt, `Context:\n${contextStr}\n\nQuestion: ${params.query}`)
   } catch {
-    // Timeout or Gemini error — return partial results
     const titles = topChunks
       .map(c => sourceMap.get(c.source_id)?.title)
       .filter(Boolean)
@@ -737,7 +907,7 @@ async function handleAskSynapse(
     }
   }
 
-  // 8. Format response — include source_ids for follow-up tool calls
+  // Step 9: Format response
   const sources = topChunks
     .map(c => {
       const src = sourceMap.get(c.source_id)
@@ -746,7 +916,6 @@ async function handleAskSynapse(
         : null
     })
     .filter(Boolean)
-    // Deduplicate by source_id
     .filter((s, i, arr) => arr.findIndex(x => x!.source_id === s!.source_id) === i) as Array<{
       source_id: string
       title: string

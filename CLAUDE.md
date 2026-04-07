@@ -123,6 +123,7 @@ synapse-v2/
 - **Verify every import resolves** — a single bad import crashes the entire function silently with `FUNCTION_INVOCATION_FAILED`
 - **Check Vercel runtime logs** (not frontend errors) to diagnose function crashes
 - **npm packages are fine** — only local file imports are problematic
+- **CRITICAL — Bulk writes, never loops:** When a serverless function needs to write data back to the database (e.g. saving computed positions for 5,000 nodes), NEVER loop through rows with individual UPDATE/INSERT calls. Use a Supabase RPC that accepts a JSON array and does a single bulk operation (e.g. `UPDATE ... FROM json_array_elements()`). Individual calls scale linearly and will timeout on Vercel's 60-second limit at ~500+ rows. A single bulk RPC handles 5,000+ rows in under a second. This applies to any serverless function that writes results back to the database — always ask: "what happens when this runs on 5,000 items?"
 
 ### Gemini AI
 - Model: `gemini-2.0-flash` for extraction and Graph RAG

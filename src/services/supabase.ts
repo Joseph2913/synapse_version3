@@ -889,6 +889,105 @@ export async function keywordSearchSources(
   return (data ?? []) as KeywordSourceResult[]
 }
 
+// ─── RAG: Relationship Search (edge embeddings, PRD-RAG-05) ────────────────
+
+export interface RelationshipMatch {
+  id: string
+  source_node_id: string
+  target_node_id: string
+  relation_type: string | null
+  evidence: string | null
+  weight: number | null
+  source_label: string
+  source_type: string
+  target_label: string
+  target_type: string
+  similarity: number
+}
+
+/** Semantic search over relationship edges using vector cosine similarity (match_relationships RPC). */
+export async function searchRelationships(
+  embedding: number[],
+  userId: string,
+  options: { matchThreshold?: number; matchCount?: number } = {}
+): Promise<RelationshipMatch[]> {
+  if (!embedding || embedding.length === 0) return []
+  const { matchThreshold = 0.65, matchCount = 10 } = options
+
+  const { data, error } = await supabase.rpc('match_relationships', {
+    query_embedding: embedding,
+    match_threshold: matchThreshold,
+    match_count: matchCount,
+    p_user_id: userId,
+  })
+
+  if (error) {
+    console.warn('[searchRelationships] RPC failed:', error.message)
+    return []
+  }
+
+  return (data ?? []) as RelationshipMatch[]
+}
+
+// ─── RAG: Chronological Entity Mentions (PRD-RAG-01) ────────────────────────
+
+export interface EntityMention {
+  chunk_content: string
+  source_id: string
+  source_title: string
+  source_type: string
+  source_created_at: string
+  chunk_index: number
+}
+
+/**
+ * Fetches source chunks mentioning an entity label, ordered by source creation date.
+ * Used by synthesis queries to build chronological entity evolution context.
+ */
+export async function fetchEntitySourceMentions(
+  entityLabel: string,
+  userId: string,
+  limit: number = 5
+): Promise<EntityMention[]> {
+  if (!entityLabel || entityLabel.length < 2) return []
+
+  const { data, error } = await supabase
+    .from('source_chunks')
+    .select(`
+      content,
+      chunk_index,
+      source_id,
+      knowledge_sources!inner (
+        title,
+        source_type,
+        created_at
+      )
+    `)
+    .eq('user_id', userId)
+    .ilike('content', `%${entityLabel}%`)
+    .order('chunk_index', { ascending: true })
+    .limit(limit)
+
+  if (error || !data) {
+    console.warn('[fetchEntitySourceMentions] Query failed:', error?.message)
+    return []
+  }
+
+  return data.map(row => {
+    const source = row.knowledge_sources as unknown as { title: string; source_type: string; created_at: string }
+    return {
+      chunk_content: row.content,
+      source_id: row.source_id,
+      source_title: source.title ?? 'Unknown Source',
+      source_type: source.source_type ?? 'Document',
+      source_created_at: source.created_at,
+      chunk_index: row.chunk_index,
+    }
+  })
+    // Sort by source creation date after fetch (can't sort by joined table in supabase-js)
+    .sort((a, b) => new Date(a.source_created_at).getTime() - new Date(b.source_created_at).getTime())
+}
+
 // ─── RAG: Graph Traversal ─────────────────────────────────────────────────────
 
 export async function traverseGraphFromNodes(
@@ -2035,6 +2134,39 @@ export async function fetchCrossSourceEdges(
     }
   }
   return result
+}
+
+/**
+ * Fetch edges crossing between N entity sets (all pairwise combinations).
+ * For sets [A, B, C], fetches edges A↔B, A↔C, B↔C.
+ */
+export async function fetchCrossSourceEdgesMulti(
+  entitySets: string[][],
+  _userId: string
+): Promise<KnowledgeEdge[]> {
+  if (entitySets.length < 2) return []
+
+  // Collect all pairwise fetch promises
+  const pairs: Promise<KnowledgeEdge[]>[] = []
+  for (let i = 0; i < entitySets.length; i++) {
+    for (let j = i + 1; j < entitySets.length; j++) {
+      pairs.push(fetchCrossSourceEdges(entitySets[i]!, entitySets[j]!, _userId))
+    }
+  }
+
+  const results = await Promise.all(pairs)
+  // Deduplicate across all pairs
+  const seen = new Set<string>()
+  const merged: KnowledgeEdge[] = []
+  for (const edges of results) {
+    for (const edge of edges) {
+      if (!seen.has(edge.id)) {
+        seen.add(edge.id)
+        merged.push(edge)
+      }
+    }
+  }
+  return merged
 }
 
 /**

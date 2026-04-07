@@ -12,7 +12,7 @@ import type { ChatSession } from '../services/chatHistory'
 import { DEFAULT_QUERY_CONFIG } from '../types/rag'
 import type { EnrichedChunk, InlineCitation } from '../types/rag'
 import { normalizeEntryContext } from '../types/chatRouting'
-import { buildSourceChatContext, buildSourceCompareContext } from '../config/chatEntryContexts'
+import { buildSourceChatContext, buildMultiSourceCompareContext } from '../config/chatEntryContexts'
 import { StatusBar } from '../components/ask/StatusBar'
 import { ChatMessageList } from '../components/ask/ChatMessageList'
 import { ChatInput } from '../components/ask/ChatInput'
@@ -196,9 +196,9 @@ export function AskView() {
     void sendMessage(ctx.autoQuery, config, ctx)
   }, [sendMessage, config])
 
-  // SourceDetailCard "Compare with related sources" → send message inline
-  const handleSourceCardCompare = useCallback((sourceA: { id: string; title: string }, sourceB: { id: string; title: string }) => {
-    const ctx = buildSourceCompareContext(sourceA, sourceB)
+  // SourceDetailCard "Compare with related sources" → send message inline (multi-source)
+  const handleSourceCardCompare = useCallback((primarySource: { id: string; title: string }, relatedSources: { id: string; title: string }[]) => {
+    const ctx = buildMultiSourceCompareContext(primarySource, relatedSources)
     setSidebarOpen(false)
     setExploringSourceId(null)
     void sendMessage(ctx.autoQuery, config, ctx)

@@ -188,6 +188,24 @@ export async function saveEdges(
   return (data ?? []).map(d => d.id)
 }
 
+// --- Update Edge Embeddings ---
+
+export async function updateEdgeEmbeddings(
+  edges: Array<{ id: string; embedding: number[] }>
+): Promise<void> {
+  const batchSize = 10
+  for (let i = 0; i < edges.length; i += batchSize) {
+    await Promise.all(
+      edges.slice(i, i + batchSize).map(e =>
+        supabase
+          .from('knowledge_edges')
+          .update({ embedding: e.embedding })
+          .eq('id', e.id)
+      )
+    )
+  }
+}
+
 // --- Update Node Embeddings ---
 
 export async function updateNodeEmbeddings(

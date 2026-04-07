@@ -17,9 +17,11 @@ import {
   saveNodes,
   saveEdges,
   updateNodeEmbeddings,
+  updateEdgeEmbeddings,
   saveChunks,
   saveExtractionSession,
 } from './extractionPersistence'
+import { embedEdgeBatch, type EdgeForEmbedding, type NodeLabel } from './edgeEmbedding'
 import { supabase } from './supabase'
 import { checkDeduplication, savePotentialDuplicates } from './deduplication'
 import { discoverCrossConnections, saveCrossConnectionEdges } from './crossConnections'
@@ -140,6 +142,48 @@ export async function runHeadlessExtraction(
 
   const savedNodes = saveResult.newNodes
 
+  // ── Step 4b: Generate edge embeddings ─────────────────────────────────────
+
+  if (savedEdgeIds.length > 0) {
+    try {
+      // Build node label map from all saved nodes (new + reused)
+      const nodesMap = new Map<string, NodeLabel>(
+        saveResult.allNodes.map(n => [n.id, { id: n.id, label: n.label, entity_type: n.entity_type }])
+      )
+
+      // Build edge objects from the extraction relationships + saved IDs
+      const labelToId = new Map(saveResult.allNodes.map(n => [n.label.toLowerCase(), n.id]))
+      const edgesForEmbedding: EdgeForEmbedding[] = []
+      let edgeIdx = 0
+      for (const rel of extractionResult.relationships) {
+        const sourceId = labelToId.get(rel.source.toLowerCase())
+        const targetId = labelToId.get(rel.target.toLowerCase())
+        const edgeId = savedEdgeIds[edgeIdx]
+        if (sourceId && targetId && sourceId !== targetId && edgeId) {
+          edgesForEmbedding.push({
+            id: edgeId,
+            source_node_id: sourceId,
+            target_node_id: targetId,
+            relation_type: rel.relation_type,
+            evidence: rel.evidence || null,
+          })
+          edgeIdx++
+        }
+      }
+
+      if (edgesForEmbedding.length > 0) {
+        const edgeEmbeddings = await embedEdgeBatch(edgesForEmbedding, nodesMap)
+        const edgesToUpdate = [...edgeEmbeddings.entries()].map(([id, embedding]) => ({ id, embedding }))
+        if (edgesToUpdate.length > 0) {
+          await updateEdgeEmbeddings(edgesToUpdate)
+        }
+      }
+    } catch (err) {
+      // Non-blocking — edges without embeddings are still valuable
+      console.warn('[extractionPipeline] Edge embedding failed:', err)
+    }
+  }
+
   // ── Step 5: Generate embeddings ────────────────────────────────────────────
 
   progress('generating_embeddings', 'Generating embeddings…')
@@ -219,6 +263,55 @@ export async function runHeadlessExtraction(
       crossConnectionCount = crossEdges.length
       if (crossEdges.length > 0) {
         crossEdgeIds = await saveCrossConnectionEdges(userId, crossEdges)
+
+        // Embed cross-connection edges (non-blocking)
+        try {
+          // Collect all node IDs referenced by cross-connection edges
+          const crossNodeIds = new Set<string>()
+          for (const e of crossEdges) {
+            crossNodeIds.add(e.sourceNodeId)
+            crossNodeIds.add(e.targetNodeId)
+          }
+
+          // Build node label map — start with saved nodes, then fetch any missing
+          const crossNodesMap = new Map<string, NodeLabel>(
+            saveResult.allNodes.map(n => [n.id, { id: n.id, label: n.label, entity_type: n.entity_type }])
+          )
+
+          const missingIds = [...crossNodeIds].filter(id => !crossNodesMap.has(id))
+          if (missingIds.length > 0) {
+            const { data: missingNodes } = await supabase
+              .from('knowledge_nodes')
+              .select('id, label, entity_type')
+              .in('id', missingIds)
+            for (const n of missingNodes ?? []) {
+              crossNodesMap.set(n.id, { id: n.id, label: n.label, entity_type: n.entity_type })
+            }
+          }
+
+          const crossEdgesForEmbedding: EdgeForEmbedding[] = []
+          for (let i = 0; i < crossEdges.length; i++) {
+            const e = crossEdges[i]
+            const id = crossEdgeIds[i]
+            if (e && id) {
+              crossEdgesForEmbedding.push({
+                id,
+                source_node_id: e.sourceNodeId,
+                target_node_id: e.targetNodeId,
+                relation_type: e.relationType,
+                evidence: e.evidence || null,
+              })
+            }
+          }
+
+          const crossEmbeddings = await embedEdgeBatch(crossEdgesForEmbedding, crossNodesMap)
+          const crossToUpdate = [...crossEmbeddings.entries()].map(([id, embedding]) => ({ id, embedding }))
+          if (crossToUpdate.length > 0) {
+            await updateEdgeEmbeddings(crossToUpdate)
+          }
+        } catch (embErr) {
+          console.warn('[extractionPipeline] Cross-connection edge embedding failed:', embErr)
+        }
       }
     }
   } catch {

@@ -7,9 +7,21 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "reembed": "node --env-file=.env.local scripts/reembed-all.mjs"
+    "reembed": "node --env-file=.env.local scripts/reembed-all.mjs",
+    "remotion:studio": "npx remotion studio remotion/index.ts",
+    "remotion:render": "npx remotion render remotion/index.ts",
+    "remotion:render:linkedin": "npx remotion render remotion/index.ts LinkedInUpdate out/linkedin-update.mp4",
+    "remotion:render:ig-post": "npx remotion render remotion/index.ts InstagramPost out/ig-post.mp4",
+    "remotion:render:ig-story": "npx remotion render remotion/index.ts InstagramStory out/ig-story.mp4",
+    "remotion:render:week1:gif": "npx remotion render remotion/index.ts TranscriptExtraction out/week1.gif --codec=gif --every-nth-frame=2 --number-of-gif-loops=0",
+    "remotion:render:week1:mp4": "npx remotion render remotion/index.ts TranscriptExtraction out/week1.mp4"
   },
   "dependencies": {
+    "@remotion/cli": "^4.0.446",
+    "@remotion/fonts": "4.0.446",
+    "@remotion/google-fonts": "4.0.446",
+    "@remotion/media": "4.0.446",
+    "@remotion/player": "^4.0.446",
     "@supabase/supabase-js": "^2.47.0",
     "lucide-react": "^0.460.0",
     "mammoth": "^1.11.0",
@@ -17,7 +29,9 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
-    "youtube-caption-extractor": "^1.9.1"
+    "remotion": "^4.0.446",
+    "youtube-caption-extractor": "^1.9.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",

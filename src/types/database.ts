@@ -57,6 +57,7 @@ export interface KnowledgeEdge {
   relation_type?: RelationType | null
   evidence?: string | null
   weight?: number | null
+  embedding?: number[] | null
   created_at: string
 }
 

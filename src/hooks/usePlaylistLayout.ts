@@ -7,20 +7,25 @@ export interface PlaylistPosition {
   radius: number
 }
 
-/** Playlist node radius — scaled by video count */
-export function playlistRadius(videoCount: number, maxVideoCount: number = 30): number {
-  if (videoCount <= 0) return 16
-  const minR = 16
-  const maxR = 48
-  return minR + Math.sqrt(videoCount / Math.max(maxVideoCount, 1)) * (maxR - minR)
+/** Playlist cluster radius — estimates the space videos will occupy around center.
+ *  Must match ringGap=20, spacing=18, centerR from PlaylistGraphView. */
+export function playlistRadius(videoCount: number, _maxVideoCount: number = 30): number {
+  if (videoCount <= 0) return 30
+  const centerR = 12 + Math.min(videoCount * 0.4, 12)
+  let placed = 0
+  let rings = 0
+  while (placed < videoCount) {
+    rings++
+    const ringR = centerR + 8 + rings * 20
+    const circumference = 2 * Math.PI * ringR
+    placed += Math.max(1, Math.floor(circumference / 18))
+  }
+  return centerR + 8 + rings * 20 + 18
 }
 
 /**
- * Force-directed layout for playlists.
- *
- * 1. Place playlists in a circle (initial positions).
- * 2. Run repulsion + edge-attraction simulation to cluster
- *    connected playlists together.
+ * Center-weighted layout: top ~25% playlists (by video count) placed in the center,
+ * remaining playlists distributed around the perimeter. Force refinement prevents overlap.
  */
 export function usePlaylistLayout(
   playlists: PlaylistNode[],
@@ -33,39 +38,80 @@ export function usePlaylistLayout(
 
     const cx = width / 2
     const cy = height / 2
-    const maxVideoCount = Math.max(...playlists.map(p => p.videoCount), 1)
 
-    // Build edge lookup
-    const edgeMap = new Map<string, { targetId: string; weight: number }[]>()
-    const maxWeight = Math.max(...edges.map(e => e.connectionCount), 1)
-    for (const e of edges) {
-      if (!edgeMap.has(e.fromPlaylistId)) edgeMap.set(e.fromPlaylistId, [])
-      if (!edgeMap.has(e.toPlaylistId)) edgeMap.set(e.toPlaylistId, [])
-      const w = e.connectionCount / maxWeight
-      edgeMap.get(e.fromPlaylistId)!.push({ targetId: e.toPlaylistId, weight: w })
-      edgeMap.get(e.toPlaylistId)!.push({ targetId: e.fromPlaylistId, weight: w })
+    // Sort by video count descending to identify top playlists
+    const sorted = [...playlists].sort((a, b) => b.videoCount - a.videoCount)
+
+    // Top 25% go in the center zone, rest go on the perimeter
+    const centerCount = Math.max(1, Math.min(
+      Math.ceil(sorted.length * 0.25),
+      sorted.length - 1
+    ))
+    const centerPlaylists = sorted.slice(0, centerCount)
+    const perimeterSorted = sorted.slice(centerCount)
+
+    // Interleave perimeter playlists: alternate large/small so connections
+    // are distributed evenly around the oval instead of clustering in one area.
+    // Split into two halves, then weave them together.
+    const half = Math.ceil(perimeterSorted.length / 2)
+    const topHalf = perimeterSorted.slice(0, half)   // larger playlists
+    const bottomHalf = perimeterSorted.slice(half)    // smaller playlists
+    const perimeterPlaylists: PlaylistNode[] = []
+    for (let i = 0; i < Math.max(topHalf.length, bottomHalf.length); i++) {
+      if (i < topHalf.length) perimeterPlaylists.push(topHalf[i]!)
+      if (i < bottomHalf.length) perimeterPlaylists.push(bottomHalf[i]!)
     }
 
-    // Initial placement: circle
-    interface SimNode { id: string; x: number; y: number; r: number }
-    const spreadR = Math.min(width, height) * 0.3
-    const nodes: SimNode[] = playlists.map((p, i) => {
-      const angle = (i / playlists.length) * Math.PI * 2 - Math.PI / 2
-      return {
+    // Perimeter ellipse
+    const ellipseRx = width * 0.42
+    const ellipseRy = height * 0.4
+
+    // Center zone — large interior so center playlists spread out well
+    const centerRx = ellipseRx * 0.65
+    const centerRy = ellipseRy * 0.65
+
+    interface SimNode { id: string; x: number; y: number; r: number; isCenter: boolean }
+    const nodes: SimNode[] = []
+
+    // Place center playlists using golden angle spiral
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+    if (centerPlaylists.length === 1) {
+      const p = centerPlaylists[0]!
+      nodes.push({ id: p.id, x: cx, y: cy, r: playlistRadius(p.videoCount), isCenter: true })
+    } else {
+      centerPlaylists.forEach((p, i) => {
+        const t = (i + 0.5) / centerPlaylists.length
+        const spiralR = Math.sqrt(t)
+        const angle = i * goldenAngle
+        const r = playlistRadius(p.videoCount)
+        nodes.push({
+          id: p.id,
+          x: cx + Math.cos(angle) * spiralR * centerRx,
+          y: cy + Math.sin(angle) * spiralR * centerRy,
+          r,
+          isCenter: true,
+        })
+      })
+    }
+
+    // Place interleaved perimeter playlists evenly around the outer ellipse
+    perimeterPlaylists.forEach((p, i) => {
+      const angle = (i / perimeterPlaylists.length) * Math.PI * 2 - Math.PI / 2
+      const r = playlistRadius(p.videoCount)
+      nodes.push({
         id: p.id,
-        x: cx + Math.cos(angle) * spreadR + (Math.random() - 0.5) * 15,
-        y: cy + Math.sin(angle) * spreadR + (Math.random() - 0.5) * 15,
-        r: playlistRadius(p.videoCount, maxVideoCount),
-      }
+        x: cx + Math.cos(angle) * ellipseRx,
+        y: cy + Math.sin(angle) * ellipseRy,
+        r,
+        isCenter: false,
+      })
     })
 
-    const nodeIndex = new Map(nodes.map((n, i) => [n.id, i]))
-
-    // Force simulation: 80 ticks
+    // Force refinement
     for (let tick = 0; tick < 80; tick++) {
       const alpha = 1 - tick / 80
 
-      // Repulsion
+      // Repulsion — all pairs, strong enough to spread center playlists apart
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i]!
@@ -73,8 +119,8 @@ export function usePlaylistLayout(
           const dx = b.x - a.x
           const dy = b.y - a.y
           const dist = Math.sqrt(dx * dx + dy * dy) || 0.1
-          const minDist = a.r + b.r + 20
-          const repulsion = Math.max(0, (minDist * 3 - dist)) * 0.12 * alpha
+          const minDist = (a.r + b.r) * 1.05
+          const repulsion = Math.max(0, (minDist - dist)) * 0.22 * alpha
 
           if (repulsion > 0) {
             const nx = dx / dist
@@ -87,42 +133,32 @@ export function usePlaylistLayout(
         }
       }
 
-      // Attraction (connected pairs)
-      for (const [srcId, targets] of edgeMap) {
-        const ai = nodeIndex.get(srcId)
-        if (ai === undefined) continue
-        const a = nodes[ai]!
-        for (const { targetId, weight } of targets) {
-          const bi = nodeIndex.get(targetId)
-          if (bi === undefined) continue
-          const b = nodes[bi]!
-          const dx = b.x - a.x
-          const dy = b.y - a.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 0.1
-          const idealDist = a.r + b.r + 50
-          if (dist > idealDist) {
-            const pull = (dist - idealDist) * 0.025 * weight * alpha
-            const nx = dx / dist
-            const ny = dy / dist
-            a.x += nx * pull
-            a.y += ny * pull
-            b.x -= nx * pull
-            b.y -= ny * pull
+      // Containment
+      for (const n of nodes) {
+        if (n.isCenter) {
+          // Keep center nodes inside the inner ellipse
+          const ndx = (n.x - cx) / centerRx
+          const ndy = (n.y - cy) / centerRy
+          const d = ndx * ndx + ndy * ndy
+          if (d > 1) {
+            const scale = 1 / Math.sqrt(d) * 0.95
+            n.x = cx + (n.x - cx) * scale
+            n.y = cy + (n.y - cy) * scale
+          }
+          // Very gentle center gravity
+          n.x += (cx - n.x) * 0.003 * alpha
+          n.y += (cy - n.y) * 0.003 * alpha
+        } else {
+          // Perimeter nodes: anchor to their ellipse slot
+          const idx = perimeterPlaylists.findIndex(p => p.id === n.id)
+          if (idx >= 0) {
+            const angle = (idx / perimeterPlaylists.length) * Math.PI * 2 - Math.PI / 2
+            const targetX = cx + Math.cos(angle) * ellipseRx
+            const targetY = cy + Math.sin(angle) * ellipseRy
+            n.x += (targetX - n.x) * 0.04 * alpha
+            n.y += (targetY - n.y) * 0.04 * alpha
           }
         }
-      }
-
-      // Center gravity
-      for (const n of nodes) {
-        n.x += (cx - n.x) * 0.015 * alpha
-        n.y += (cy - n.y) * 0.015 * alpha
-      }
-
-      // Boundary containment
-      const pad = 40
-      for (const n of nodes) {
-        n.x = Math.max(pad + n.r, Math.min(width - pad - n.r, n.x))
-        n.y = Math.max(pad + n.r, Math.min(height - pad - n.r, n.y))
       }
     }
 

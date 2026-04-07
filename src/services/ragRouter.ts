@@ -3,15 +3,17 @@ import {
   fetchAllChunksForSource,
   fetchEntitiesForSource,
   fetchEdgesBetweenEntities,
-  fetchCrossSourceEdges,
+  fetchCrossSourceEdgesMulti,
   fetchEntityDirectEdges,
   fetchNodeWithEmbedding,
   fetchNodeById,
   fetchSourcesByIds,
   fetchSourcesWithContent,
   semanticSearchNodes,
+  searchRelationships,
   traverseGraphFromNodes,
 } from './supabase'
+import type { RelationshipMatch } from './supabase'
 import { queryGraph, buildRAGResponseContext } from './rag'
 import type { RAGResponse } from './rag'
 import type { RAGStepEvent, RAGContext, EnrichedChunk, NodeSummary, RelationshipPath, QueryConfig, SemanticChunkResult } from '../types/rag'
@@ -36,6 +38,16 @@ function buildRelPaths(nodes: KnowledgeNode[], edges: KnowledgeEdge[]): Relation
     result.push({ from, relation: (e.relation_type ?? 'relates_to') as string, to, evidence: e.evidence ?? undefined })
   }
   return result
+}
+
+/** Convert semantic relationship matches (from edge embeddings) into RelationshipPaths. */
+function relationshipMatchesToPaths(matches: RelationshipMatch[]): RelationshipPath[] {
+  return matches.map(m => ({
+    from: m.source_label,
+    relation: (m.relation_type ?? 'relates_to') as string,
+    to: m.target_label,
+    evidence: m.evidence ?? undefined,
+  }))
 }
 
 async function enrichChunksWithSources(chunks: SemanticChunkResult[]): Promise<EnrichedChunk[]> {
@@ -211,13 +223,16 @@ async function pipelineEntityExplore(
 
   onStepChange?.({ step: 'semantic_search', status: 'running' })
 
-  // Direct edges + source chunks + semantic nodes
-  const [directEdges, sourceChunks, semanticNodes] = await Promise.all([
+  // Direct edges + source chunks + semantic nodes + relationship embeddings
+  const [directEdges, sourceChunks, semanticNodes, relMatches] = await Promise.all([
     fetchEntityDirectEdges(entityId, userId),
     entity.source_id ? fetchAllChunksForSource(entity.source_id, userId, 15) : Promise.resolve([]),
     queryEmbedding.length > 0
       ? semanticSearchNodes(queryEmbedding, userId, { matchThreshold: 0.4, matchCount: 20 })
       : Promise.resolve([]),
+    queryEmbedding.length > 0
+      ? searchRelationships(queryEmbedding, userId, { matchThreshold: 0.6, matchCount: 10 })
+      : Promise.resolve([] as RelationshipMatch[]),
   ])
 
   onStepChange?.({ step: 'semantic_search', status: 'done', semanticNodes: semanticNodes.length })
@@ -237,10 +252,15 @@ async function pipelineEntityExplore(
   const allEdges = deduplicateById([...directEdges, ...graphEdges])
   const enrichedChunks = await enrichChunksWithSources(sourceChunks)
 
+  // Merge graph-traversal paths with semantic relationship matches
+  const graphPaths = buildRelPaths(allNodes, allEdges)
+  const semanticPaths = relationshipMatchesToPaths(relMatches)
+  const allPaths = deduplicateRelPaths([...graphPaths, ...semanticPaths])
+
   const ragContext: RAGContext = {
     sourceChunks: enrichedChunks,
     nodeSummaries: toNodeSummaries(allNodes).slice(0, 25),
-    relationshipPaths: buildRelPaths(allNodes, allEdges).slice(0, 20),
+    relationshipPaths: allPaths.slice(0, 25),
   }
 
   onStepChange?.({ step: 'context_assembly', status: 'done', contextChunks: enrichedChunks.length, contextNodes: ragContext.nodeSummaries.length, relationshipPaths: ragContext.relationshipPaths.length })
@@ -279,9 +299,14 @@ async function pipelineEntityFindSimilar(
 
   onStepChange?.({ step: 'semantic_search', status: 'running' })
 
-  const semanticNodes = searchEmbedding.length > 0
-    ? await semanticSearchNodes(searchEmbedding, userId, { matchThreshold: 0.35, matchCount: 30 })
-    : []
+  const [semanticNodes, relMatches] = await Promise.all([
+    searchEmbedding.length > 0
+      ? semanticSearchNodes(searchEmbedding, userId, { matchThreshold: 0.35, matchCount: 30 })
+      : Promise.resolve([]),
+    searchEmbedding.length > 0
+      ? searchRelationships(searchEmbedding, userId, { matchThreshold: 0.6, matchCount: 10 })
+      : Promise.resolve([] as RelationshipMatch[]),
+  ])
 
   onStepChange?.({ step: 'semantic_search', status: 'done', semanticNodes: semanticNodes.length })
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
@@ -298,10 +323,14 @@ async function pipelineEntityFindSimilar(
 
   const allNodes = deduplicateById([nodeWithEmb as KnowledgeNode, ...graphNodes])
 
+  const graphPaths = buildRelPaths(allNodes, graphEdges)
+  const semanticPaths = relationshipMatchesToPaths(relMatches)
+  const allPaths = deduplicateRelPaths([...graphPaths, ...semanticPaths])
+
   const ragContext: RAGContext = {
     sourceChunks: [],
     nodeSummaries: toNodeSummaries(allNodes).slice(0, 30),
-    relationshipPaths: buildRelPaths(allNodes, graphEdges).slice(0, 20),
+    relationshipPaths: allPaths.slice(0, 25),
   }
 
   onStepChange?.({ step: 'context_assembly', status: 'done', contextChunks: 0, contextNodes: ragContext.nodeSummaries.length, relationshipPaths: ragContext.relationshipPaths.length })
@@ -323,29 +352,33 @@ async function pipelineRelationshipChat(
   const entityIds = ctx.scope?.entityIds ?? []
   if (entityIds.length < 2) return queryGraph(question, userId, conversationHistory, resolveConfig(ctx), onStepChange, signal)
 
-  const fromId = entityIds[0]!
-  const toId = entityIds[1]!
-
   onStepChange?.({ step: 'embedding', status: 'running' })
-  onStepChange?.({ step: 'embedding', status: 'done', subQueries: [question], hasEmbedding: false })
+
+  const queryEmbedding = await embedQuery(question)
+
+  onStepChange?.({ step: 'embedding', status: 'done', subQueries: [question], hasEmbedding: queryEmbedding.length > 0 })
 
   onStepChange?.({ step: 'semantic_search', status: 'running' })
 
-  // Fetch both entities and the edge between them
-  const [entities, directEdges] = await Promise.all([
-    Promise.all([fetchNodeById(fromId), fetchNodeById(toId)]),
-    fetchEntityDirectEdges(fromId, userId),
+  // Fetch ALL entities, direct edges for each, and relationship embedding matches
+  const [fetchedEntities, directEdgeArrays, relMatches] = await Promise.all([
+    Promise.all(entityIds.map(id => fetchNodeById(id))),
+    Promise.all(entityIds.map(id => fetchEntityDirectEdges(id, userId))),
+    queryEmbedding.length > 0
+      ? searchRelationships(queryEmbedding, userId, { matchThreshold: 0.55, matchCount: 15 })
+      : Promise.resolve([] as RelationshipMatch[]),
   ])
 
-  const [entityA, entityB] = entities
-  if (!entityA || !entityB) return queryGraph(question, userId, conversationHistory, resolveConfig(ctx), onStepChange, signal)
+  const validEntities = fetchedEntities.filter((e): e is NonNullable<typeof e> => e !== null)
+  if (validEntities.length < 2) return queryGraph(question, userId, conversationHistory, resolveConfig(ctx), onStepChange, signal)
 
-  // Fetch chunks for both entities' sources
-  const sourceIds = [entityA.source_id, entityB.source_id].filter((id): id is string => !!id)
+  // Fetch chunks for all entities' sources — dynamic budget
+  const sourceIds = validEntities.map(e => e.source_id).filter((id): id is string => !!id)
   const uniqueSourceIds = [...new Set(sourceIds)]
+  const chunksPerSource = Math.max(3, Math.floor(24 / uniqueSourceIds.length))
 
   const chunkArrays = await Promise.all(
-    uniqueSourceIds.map(sid => fetchAllChunksForSource(sid, userId, 8))
+    uniqueSourceIds.map(sid => fetchAllChunksForSource(sid, userId, chunksPerSource))
   )
 
   onStepChange?.({ step: 'semantic_search', status: 'done', sources: uniqueSourceIds.length })
@@ -353,23 +386,29 @@ async function pipelineRelationshipChat(
 
   onStepChange?.({ step: 'graph_traversal', status: 'running' })
 
-  // 1-hop from both
-  const { nodes: graphNodes, edges: graphEdges } = await traverseGraphFromNodes([fromId, toId], userId, 1)
+  // 1-hop from all entities
+  const { nodes: graphNodes, edges: graphEdges } = await traverseGraphFromNodes(entityIds, userId, 1)
 
-  onStepChange?.({ step: 'graph_traversal', status: 'done', seedNodes: 2, graphNodes: graphNodes.length, graphEdges: graphEdges.length })
+  onStepChange?.({ step: 'graph_traversal', status: 'done', seedNodes: entityIds.length, graphNodes: graphNodes.length, graphEdges: graphEdges.length })
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
 
   onStepChange?.({ step: 'context_assembly', status: 'running' })
 
   const allChunks = chunkArrays.flat()
   const enrichedChunks = await enrichChunksWithSources(allChunks)
-  const allNodes = deduplicateById([entityA, entityB, ...graphNodes])
+  const directEdges = directEdgeArrays.flat()
+  const allNodes = deduplicateById([...validEntities, ...graphNodes])
   const allEdges = deduplicateById([...directEdges, ...graphEdges])
+
+  // Merge graph-traversal paths with semantic relationship matches
+  const graphPaths = buildRelPaths(allNodes, allEdges)
+  const semanticPaths = relationshipMatchesToPaths(relMatches)
+  const allPaths = deduplicateRelPaths([...graphPaths, ...semanticPaths])
 
   const ragContext: RAGContext = {
     sourceChunks: enrichedChunks,
     nodeSummaries: toNodeSummaries(allNodes).slice(0, 15),
-    relationshipPaths: buildRelPaths(allNodes, allEdges).slice(0, 15),
+    relationshipPaths: allPaths.slice(0, 20),
   }
 
   onStepChange?.({ step: 'context_assembly', status: 'done', contextChunks: enrichedChunks.length, contextNodes: ragContext.nodeSummaries.length, relationshipPaths: ragContext.relationshipPaths.length })
@@ -537,61 +576,61 @@ async function pipelineSourceCompare(
   const sourceIds = ctx.scope?.sourceIds ?? []
   if (sourceIds.length < 2) return queryGraph(question, userId, conversationHistory, resolveConfig(ctx), onStepChange, signal)
 
-  const sourceIdA = sourceIds[0]!
-  const sourceIdB = sourceIds[1]!
-
   onStepChange?.({ step: 'embedding', status: 'running' })
   onStepChange?.({ step: 'embedding', status: 'done', subQueries: [question], hasEmbedding: false })
 
   onStepChange?.({ step: 'semantic_search', status: 'running' })
 
-  // Fetch source metadata, chunks, and entities for both sources in parallel
-  const [sourceMap, chunksA, chunksB, entitiesA, entitiesB] = await Promise.all([
-    fetchSourcesByIds([sourceIdA, sourceIdB]),
-    fetchAllChunksForSource(sourceIdA, userId, 15),
-    fetchAllChunksForSource(sourceIdB, userId, 15),
-    fetchEntitiesForSource(sourceIdA, userId),
-    fetchEntitiesForSource(sourceIdB, userId),
+  // Dynamic chunk budget: allocate ~30 total chunks across N sources
+  const totalChunkBudget = 30
+  const chunksPerSource = Math.max(3, Math.floor(totalChunkBudget / sourceIds.length))
+
+  // Fetch source metadata, chunks, and entities for ALL sources in parallel
+  const [sourceMap, chunkArrays, entityArrays] = await Promise.all([
+    fetchSourcesByIds(sourceIds),
+    Promise.all(sourceIds.map(sid => fetchAllChunksForSource(sid, userId, chunksPerSource))),
+    Promise.all(sourceIds.map(sid => fetchEntitiesForSource(sid, userId))),
   ])
 
-  console.debug(`[ragRouter:source_compare] A=${sourceIdA} chunks=${chunksA.length} entities=${entitiesA.length} | B=${sourceIdB} chunks=${chunksB.length} entities=${entitiesB.length}`)
+  console.debug(`[ragRouter:source_compare] ${sourceIds.length} sources | chunks: ${chunkArrays.map(c => c.length).join(',')} | entities: ${entityArrays.map(e => e.length).join(',')}`)
 
-  // Zero-chunk fallback: try summaries, then full source content, then standard pipeline
-  let allChunks = [...chunksA, ...chunksB]
+  // Zero-chunk fallback
+  let allChunks = chunkArrays.flat()
   if (allChunks.length === 0) {
-    console.warn(`[ragRouter:source_compare] 0 chunks for both sources — trying summary fallback`)
+    console.warn(`[ragRouter:source_compare] 0 chunks — trying summary fallback`)
     allChunks = sourceSummariesToChunks(sourceMap)
   }
   if (allChunks.length === 0) {
     console.warn(`[ragRouter:source_compare] 0 summaries — trying full content fallback`)
-    allChunks = await fetchContentFallbackChunks([sourceIdA, sourceIdB])
+    allChunks = await fetchContentFallbackChunks(sourceIds)
   }
-  if (allChunks.length === 0 && entitiesA.length === 0 && entitiesB.length === 0) {
+  const allEntities = entityArrays.flat()
+  if (allChunks.length === 0 && allEntities.length === 0) {
     return fallbackToStandard(question, userId, conversationHistory, ctx, onStepChange, signal)
   }
 
-  onStepChange?.({ step: 'semantic_search', status: 'done', sources: 2, semanticChunks: allChunks.length })
+  onStepChange?.({ step: 'semantic_search', status: 'done', sources: sourceIds.length, semanticChunks: allChunks.length })
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
 
   onStepChange?.({ step: 'graph_traversal', status: 'running' })
 
-  // Cross-source edges
-  const entityIdsA = entitiesA.map(e => e.id)
-  const entityIdsB = entitiesB.map(e => e.id)
-  const crossEdges = await fetchCrossSourceEdges(entityIdsA, entityIdsB, userId)
+  // Cross-source edges — N-way (all pairwise combinations)
+  const entitySets = entityArrays.map(ea => ea.map(e => e.id))
+  const crossEdges = await fetchCrossSourceEdgesMulti(entitySets, userId)
 
-  onStepChange?.({ step: 'graph_traversal', status: 'done', seedNodes: entityIdsA.length + entityIdsB.length, graphNodes: entitiesA.length + entitiesB.length, graphEdges: crossEdges.length })
+  const totalEntities = allEntities.length
+  onStepChange?.({ step: 'graph_traversal', status: 'done', seedNodes: totalEntities, graphNodes: totalEntities, graphEdges: crossEdges.length })
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
 
   onStepChange?.({ step: 'context_assembly', status: 'running' })
 
   const enrichedChunks = await enrichChunksWithSources(allChunks)
-  const allNodes = deduplicateById([...entitiesA, ...entitiesB])
+  const allNodes = deduplicateById(allEntities)
 
   const ragContext: RAGContext = {
     sourceChunks: enrichedChunks,
-    nodeSummaries: toNodeSummaries(allNodes).slice(0, 30),
-    relationshipPaths: buildRelPaths(allNodes, crossEdges).slice(0, 20),
+    nodeSummaries: toNodeSummaries(allNodes).slice(0, 40),
+    relationshipPaths: buildRelPaths(allNodes, crossEdges).slice(0, 30),
   }
 
   onStepChange?.({ step: 'context_assembly', status: 'done', contextChunks: enrichedChunks.length, contextNodes: ragContext.nodeSummaries.length, relationshipPaths: ragContext.relationshipPaths.length })
@@ -609,6 +648,17 @@ function deduplicateById<T extends { id: string }>(items: T[]): T[] {
   return items.filter(item => {
     if (seen.has(item.id)) return false
     seen.add(item.id)
+    return true
+  })
+}
+
+/** Deduplicate relationship paths by from+relation+to key. */
+function deduplicateRelPaths(paths: RelationshipPath[]): RelationshipPath[] {
+  const seen = new Set<string>()
+  return paths.filter(p => {
+    const key = `${p.from}|${p.relation}|${p.to}`
+    if (seen.has(key)) return false
+    seen.add(key)
     return true
   })
 }
