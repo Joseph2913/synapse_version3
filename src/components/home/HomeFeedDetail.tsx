@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, MessageSquare, GitBranch, RefreshCw, ArrowRight, Search, Link2, ChevronRight, Loader2 } from 'lucide-react'
+import { X, MessageSquare, MessageCircle, GitBranch, RefreshCw, ArrowRight, Search, Link2, ChevronRight, Loader2 } from 'lucide-react'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { getEntityColor } from '../../config/entityTypes'
 import { ProviderIcon } from '../shared/ProviderIcon'
@@ -17,6 +17,7 @@ import {
   buildSourceChatContext,
   buildSourceAnchorRelateContext,
   buildSourceCompareContext,
+  buildMultiSourceCompareContext,
 } from '../../config/chatEntryContexts'
 
 const PROVENANCE_LABELS: Record<string, string> = {
@@ -834,6 +835,32 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
             >
               <RefreshCw size={12} /> Re-extract
             </button>
+            {(() => {
+              const relatedSources = Array.from(
+                new Map(
+                  item.crossConnections
+                    .filter(cc => cc.toSourceId && cc.toSourceTitle)
+                    .map(cc => [cc.toSourceId!, { id: cc.toSourceId!, title: cc.toSourceTitle! }])
+                ).values()
+              )
+              if (relatedSources.length === 0) return null
+              return (
+                <button
+                  type="button"
+                  className="font-body cursor-pointer"
+                  style={actionBtnStyle}
+                  onClick={() => {
+                    const primary = { id: item.source.id, title: item.source.title ?? 'Untitled' }
+                    const context = buildMultiSourceCompareContext(primary, relatedSources)
+                    navigate('/ask', { state: { chatContext: context } })
+                  }}
+                  onMouseEnter={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-card)' }}
+                  onMouseLeave={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
+                >
+                  <MessageCircle size={12} /> Compare with related sources
+                </button>
+              )
+            })()}
           </div>
 
           {/* Re-extract options */}
