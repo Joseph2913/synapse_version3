@@ -1010,8 +1010,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startTime = Date.now();
   const results: StepResult[] = [];
 
-  // Optional: allow running a specific step only (for retry after partial failure)
-  const { step: requestedStep } = (req.body || {}) as { step?: number };
+  // Optional: allow running a specific step range (for retry after partial failure)
+  const { step: requestedStep, maxStep } = (req.body || {}) as { step?: number; maxStep?: number };
 
   const steps = [
     { num: 1, fn: step1_createAgents },
@@ -1027,8 +1027,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabase();
 
   for (const step of steps) {
-    // If a specific step was requested, skip earlier ones
+    // If a specific step range was requested, only run those
     if (requestedStep && step.num < requestedStep) continue;
+    if (maxStep && step.num > maxStep) break;
 
     try {
       const result = await step.fn(supabase);
