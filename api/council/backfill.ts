@@ -620,7 +620,7 @@ Summary: ${exp?.summary || ''}
 Themes: ${(exp?.core_themes || []).join(', ')}
 
 Sibling advisors:
-${siblings.map(s => `- ${s.name} (ID: ${s.id})\n  Summary: ${s.summary}\n  Themes: ${s.core_themes.join(', ')}`).join('\n\n')}`;
+${siblings.map(s => `- ${s.name} (ID: ${s.id})\n  Themes: ${s.core_themes.slice(0, 5).join(', ')}`).join('\n')}`;
 
     const result = await callGemini<{
       awareness: Array<{
@@ -629,7 +629,7 @@ ${siblings.map(s => `- ${s.name} (ID: ${s.id})\n  Summary: ${s.summary}\n  Theme
         relevance_summary: string;
         watch_topics: string[];
       }>;
-    }>(systemPrompt, userContent, 240000);
+    }>(systemPrompt, userContent);
 
     const { error: upErr } = await supabase
       .from('domain_agents')
