@@ -225,3 +225,53 @@ export interface RAGStepEvent {
   contextNodes?: number
   relationshipPaths?: number
 }
+
+// ─── Council Mode ────────────────────────────────────────────────────────────
+
+export interface CouncilAgentPerspective {
+  agent_name: string
+  agent_id: string
+  reasoning_style: string
+  analysis: string
+  key_claims: Array<{ claim: string; evidence: string; confidence: 'high' | 'medium' | 'low' }>
+  coverage_assessment: 'strong' | 'adequate' | 'thin' | 'gap'
+  coverage_note: string
+  cross_domain_flags: string[]
+  sources_cited: string[]
+}
+
+export interface CouncilRouting {
+  classification: 'single_domain' | 'cross_domain' | 'meta'
+  agents_consulted: Array<{
+    agent_id: string
+    agent_name: string
+    relevance: 'primary' | 'secondary'
+    reason: string
+  }>
+  routing_rationale: string
+}
+
+export interface CouncilSynthesis {
+  answer: string
+  agreements: Array<{ point: string; supporting_agents: string[] }>
+  tensions: Array<{ point: string; agents_involved: string[]; nature: string }>
+  emergent_insight: string | null
+  blind_spots: Array<{ topic: string; relevant_gaps: string[] }>
+  follow_up_suggestions: string[]
+}
+
+export interface CouncilResponse {
+  routing: CouncilRouting
+  agent_perspectives?: CouncilAgentPerspective[]
+  synthesis: CouncilSynthesis
+}
+
+export type CouncilQueryStatus = 'idle' | 'routing' | 'agents_working' | 'synthesising' | 'complete' | 'error'
+
+export interface CouncilQueryState {
+  status: CouncilQueryStatus
+  routing: CouncilRouting | null
+  agentPerspectives: Array<CouncilAgentPerspective & { status: 'loading' | 'complete' | 'error' }>
+  synthesis: (CouncilSynthesis & { status: 'waiting' | 'complete' }) | null
+  error: string | null
+}

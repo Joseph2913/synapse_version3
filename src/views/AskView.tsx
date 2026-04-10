@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { useRAGQuery } from '../hooks/useRAGQuery'
+import { useCouncilQuery } from '../hooks/useCouncilQuery'
 import { useChatScroll } from '../hooks/useChatScroll'
 import { useQueryComposer } from '../hooks/useQueryComposer'
 import { useGraphContext } from '../hooks/useGraphContext'
@@ -16,8 +17,11 @@ import { buildSourceChatContext, buildMultiSourceCompareContext } from '../confi
 import { StatusBar } from '../components/ask/StatusBar'
 import { ChatMessageList } from '../components/ask/ChatMessageList'
 import { ChatInput } from '../components/ask/ChatInput'
+import type { AskMode } from '../components/ask/ChatInput'
 import { EmptyAskState } from '../components/ask/EmptyAskState'
 import { AskRightPanel } from '../components/ask/AskRightPanel'
+import { CouncilResponse } from '../components/ask/CouncilResponse'
+import { CouncilRightPanel } from '../components/ask/CouncilRightPanel'
 import { SourceDetailCard } from '../components/explore/SourceDetailCard'
 import { NodeDetail } from '../components/panels/NodeDetail'
 import { SourceDetail } from '../components/panels/SourceDetail'
@@ -38,6 +42,9 @@ export function AskView() {
     setToolMode,
     setModelTier,
   } = useQueryComposer()
+  const { councilState, sendCouncilQuery, resetCouncil } = useCouncilQuery()
+  const [askMode, setAskMode] = useState<AskMode>('standard')
+  const [councilQuery, setCouncilQuery] = useState<string>('')
   const [graphIsEmpty, setGraphIsEmpty] = useState(false)
   const [recentSessions, setRecentSessions] = useState<ChatSession[]>([])
   const [highlightedCitationIndex, setHighlightedCitationIndex] = useState<number | null>(null)
@@ -68,7 +75,12 @@ export function AskView() {
 
   // ─── Handlers ──────────────────────────────────────────────────────────
   const handleSend = (text: string) => {
-    void sendMessage(text, config)
+    if (askMode === 'council') {
+      setCouncilQuery(text)
+      void sendCouncilQuery(text)
+    } else {
+      void sendMessage(text, config)
+    }
   }
 
   const handleSuggestion = (text: string) => {
@@ -76,7 +88,17 @@ export function AskView() {
   }
 
   const handleFollowUp = (question: string) => {
-    void sendMessage(question, config)
+    if (askMode === 'council') {
+      setCouncilQuery(question)
+      void sendCouncilQuery(question)
+    } else {
+      void sendMessage(question, config)
+    }
+  }
+
+  const handleCouncilFollowUp = (question: string) => {
+    setCouncilQuery(question)
+    void sendCouncilQuery(question)
   }
 
   // Resolve a citation index to a real source_id from source chunks
@@ -205,6 +227,8 @@ export function AskView() {
   }, [sendMessage, config])
 
   const hasMessages = messages.length > 0
+  const councilActive = councilState.status !== 'idle'
+  const hasContent = hasMessages || councilActive
 
   const helperText =
     config.scopeAnchors.length > 0
@@ -213,6 +237,15 @@ export function AskView() {
 
   // ─── Sidebar panel content ────────────────────────────────────────────
   const renderSidebarContent = () => {
+    // Council mode panel
+    if (councilActive && councilQuery && !exploringSourceId && !rightPanelContent) {
+      return (
+        <CouncilRightPanel
+          query={councilQuery}
+          state={councilState}
+        />
+      )
+    }
     if (rightPanelContent?.type === 'ask_context') {
       return (
         <AskRightPanel
@@ -287,14 +320,14 @@ export function AskView() {
       {/* Status bar */}
       <StatusBar
         hasError={!!error && !hasMessages}
-        hasMessages={hasMessages}
-        onClearChat={clearChat}
-        contextLabel={activeEntryContext?.displayLabel}
+        hasMessages={hasContent}
+        onClearChat={() => { clearChat(); resetCouncil(); setCouncilQuery('') }}
+        contextLabel={councilActive ? 'Council mode' : activeEntryContext?.displayLabel}
       />
 
       {/* Full-width chat area */}
       <div className="flex-1 flex flex-col overflow-hidden" style={{ paddingBottom: 8 }}>
-        {!hasMessages ? (
+        {!hasContent ? (
           /* ── Centered empty state ──────────────────────────────────── */
           <div
             className="flex flex-1 flex-col items-center justify-center overflow-y-auto"
@@ -309,8 +342,61 @@ export function AskView() {
               />
             </div>
           </div>
+        ) : councilActive ? (
+          /* ── Council mode response ────────────────────────────────── */
+          <div
+            ref={scroll.scrollRef}
+            className="flex-1 overflow-y-auto"
+            onScroll={scroll.onScroll}
+            style={{ scrollBehavior: 'smooth' }}
+          >
+            {/* Show any previous standard messages above council */}
+            {hasMessages && (
+              <ChatMessageList
+                messages={messages}
+                isLoading={false}
+                pipelineEvents={[]}
+                scroll={scroll}
+                onFollowUpClick={handleFollowUp}
+                onCitationClick={handleCitationClick}
+                onCitationHoverChange={setHighlightedCitationIndex}
+                onExploreMore={handleExploreMore}
+                onSourceClick={handleSourceClick}
+              />
+            )}
+
+            {/* Council query (rendered as user message style) */}
+            {councilQuery && (
+              <div style={{ maxWidth: 1020, margin: '0 auto', padding: '0 24px' }}>
+                <div className="flex justify-end" style={{ marginBottom: 12 }}>
+                  <div
+                    className="font-body"
+                    style={{
+                      fontSize: 13,
+                      color: 'var(--color-text-primary)',
+                      background: 'var(--color-accent-50)',
+                      border: '1px solid rgba(214,58,0,0.08)',
+                      borderRadius: '16px 16px 4px 16px',
+                      padding: '10px 16px',
+                      maxWidth: '75%',
+                    }}
+                  >
+                    {councilQuery}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Council response cards */}
+            <CouncilResponse
+              state={councilState}
+              onFollowUpClick={handleCouncilFollowUp}
+            />
+
+            <div ref={scroll.bottomRef} style={{ height: 1 }} />
+          </div>
         ) : (
-          /* ── Chat messages ─────────────────────────────────────────── */
+          /* ── Standard chat messages ───────────────────────────────── */
           <ChatMessageList
             messages={messages}
             isLoading={isLoading}
@@ -327,15 +413,17 @@ export function AskView() {
         {/* Chat input — always at bottom */}
         <ChatInput
           onSend={handleSend}
-          disabled={isLoading}
+          disabled={isLoading || (askMode === 'council' && councilState.status !== 'idle' && councilState.status !== 'complete' && councilState.status !== 'error')}
           helperText={helperText}
-          embedded={!hasMessages}
+          embedded={!hasContent}
           config={config}
           onSetMindset={setMindset}
           onToggleScopeAnchor={toggleScopeAnchor}
           onClearScope={clearScope}
           onSetToolMode={setToolMode}
           onSetModelTier={setModelTier}
+          askMode={askMode}
+          onAskModeChange={setAskMode}
         />
       </div>
 

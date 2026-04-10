@@ -5,11 +5,15 @@ import type { InlineQueryToolbarProps } from './InlineQueryToolbar'
 import { QUERY_MINDSETS, MODEL_TIERS } from '../../config/queryMindsets'
 import { TOOL_MODES } from '../../config/toolModes'
 
+export type AskMode = 'standard' | 'council'
+
 interface ChatInputProps extends InlineQueryToolbarProps {
   onSend: (text: string) => void
   disabled?: boolean
   helperText?: string
   embedded?: boolean
+  askMode?: AskMode
+  onAskModeChange?: (mode: AskMode) => void
 }
 
 export function ChatInput({
@@ -23,6 +27,8 @@ export function ChatInput({
   onClearScope,
   onSetToolMode,
   onSetModelTier,
+  askMode = 'standard',
+  onAskModeChange,
 }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [focused, setFocused] = useState(false)
@@ -152,12 +158,67 @@ export function ChatInput({
             overflow: 'hidden',
           }}
         >
+          {/* Mode toggle */}
+          {onAskModeChange && (
+            <div style={{ padding: '10px 16px 0' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  background: 'var(--color-bg-inset)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 10,
+                  padding: 3,
+                }}
+              >
+                {(['standard', 'council'] as const).map(mode => {
+                  const isActive = askMode === mode
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => onAskModeChange(mode)}
+                      className="font-body font-semibold cursor-pointer"
+                      style={{
+                        fontSize: 12,
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: isActive ? 'var(--color-bg-card)' : 'transparent',
+                        color: isActive
+                          ? (mode === 'council' ? 'var(--color-accent-500)' : 'var(--color-text-primary)')
+                          : 'var(--color-text-secondary)',
+                        boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      {mode === 'standard' ? 'Standard' : 'Council'}
+                    </button>
+                  )
+                })}
+              </div>
+              {askMode === 'council' && (
+                <p
+                  className="font-body"
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--color-text-secondary)',
+                    margin: '6px 0 0',
+                  }}
+                >
+                  Your question will be analysed by domain advisors with cross-perspective synthesis
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Textarea area */}
           <div style={{ padding: '12px 16px 0' }}>
             <textarea
               ref={textareaRef}
               rows={1}
-              placeholder="Ask your knowledge graph anything..."
+              placeholder={askMode === 'council'
+                ? 'Ask your advisory council...'
+                : 'Ask your knowledge graph anything...'}
               value={value}
               onInput={handleInput}
               onKeyDown={handleKeyDown}
