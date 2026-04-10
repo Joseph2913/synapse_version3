@@ -629,7 +629,7 @@ ${siblings.map(s => `- ${s.name} (ID: ${s.id})\n  Summary: ${s.summary}\n  Theme
         relevance_summary: string;
         watch_topics: string[];
       }>;
-    }>(systemPrompt, userContent);
+    }>(systemPrompt, userContent, 240000);
 
     const { error: upErr } = await supabase
       .from('domain_agents')
