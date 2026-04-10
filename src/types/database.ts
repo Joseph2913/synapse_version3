@@ -157,3 +157,103 @@ export interface AnchorCandidateRow {
   created_at:            string
   updated_at:            string
 }
+
+// ─── Advisory Council ───────────────────────────────────────────────────────
+
+export type HealthStatus = 'initialising' | 'thin' | 'growing' | 'strong' | 'stale'
+
+export interface DomainAgent {
+  id: string
+  user_id: string
+  playlist_id: string | null
+  name: string
+  description: string | null
+  reasoning_style: string | null
+  expertise_index: Record<string, unknown>
+  awareness_register: Record<string, unknown>
+  health_status: HealthStatus
+  linked_anchor_ids: string[]
+  source_count: number
+  entity_count: number
+  last_ingestion_at: string | null
+  last_index_rebuild_at: string | null
+  index_stale: boolean
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DomainAgentSource {
+  id: string
+  user_id: string
+  agent_id: string
+  source_id: string
+  association_type: 'primary' | 'associated' | 'cross_domain'
+  created_at: string
+}
+
+export interface AgentStandingQuestion {
+  id: string
+  user_id: string
+  agent_id: string
+  question: string
+  question_type: 'gap_driven' | 'frontier' | 'cross_domain' | 'user_defined'
+  status: 'open' | 'partially_addressed' | 'answered' | 'dismissed'
+  priority: number
+  trigger_description: string | null
+  trigger_source_id: string | null
+  addressing_source_ids: string[]
+  addressing_evidence: string | null
+  generated_at: string
+  status_changed_at: string | null
+  created_at: string
+}
+
+export interface AgentInsightRow {
+  id: string
+  user_id: string
+  agent_id: string
+  insight_type: 'tension' | 'convergence' | 'novel_connection'
+  claim: string
+  evidence_summary: string | null
+  trigger_source_id: string | null
+  related_source_ids: string[]
+  related_entity_ids: string[]
+  related_edge_ids: string[]
+  confidence: number | null
+  status: 'active' | 'promoted' | 'dismissed' | 'superseded'
+  promoted_to: string | null
+  created_at: string
+}
+
+export interface AgentGapRow {
+  id: string
+  user_id: string
+  agent_id: string
+  gap_type: 'structural' | 'orphan' | 'recency'
+  topic: string
+  description: string | null
+  severity: 'minor' | 'moderate' | 'significant'
+  content_suggestion: string | null
+  related_entity_ids: string[]
+  status: 'active' | 'filling' | 'resolved' | 'dismissed'
+  resolved_by_source_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentSignalRow {
+  id: string
+  user_id: string
+  source_agent_id: string
+  target_agent_id: string
+  trigger_source_id: string | null
+  bridge_entity_ids: string[]
+  bridge_edge_id: string | null
+  reason: string
+  status: 'pending' | 'processing' | 'acknowledged' | 'extracted' | 'dismissed'
+  processing_result: string | null
+  extracted_entity_ids: string[]
+  processed_at: string | null
+  created_at: string
+}

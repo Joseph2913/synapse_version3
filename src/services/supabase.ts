@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { UserProfile, ExtractionSettings, KnowledgeNode, KnowledgeEdge, KnowledgeSource, KnowledgeSkill } from '../types/database'
+import type { UserProfile, ExtractionSettings, KnowledgeNode, KnowledgeEdge, KnowledgeSource, KnowledgeSkill, DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow } from '../types/database'
 import type { NodeFilters, PaginationOptions, NodeWithMeta, NodeNeighbor } from '../types/nodes'
 import type { CrossConnection } from '../types/feed'
 import type { ExtractionSession } from '../types/extraction'
@@ -2637,4 +2637,130 @@ export async function fetchKnowledgeSnapshot(): Promise<KnowledgeSnapshot> {
     .sort((a, b) => b.count - a.count)
 
   return { entityTypeCounts, topAnchors, sourceTypeCounts }
+}
+
+// ─── Advisory Council ───────────────────────────────────────────────────────
+
+export async function fetchDomainAgents(): Promise<DomainAgent[]> {
+  const { data, error } = await supabase
+    .from('domain_agents')
+    .select('*')
+    .eq('is_active', true)
+    .order('source_count', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as DomainAgent[]
+}
+
+export async function fetchAgentWithPlaylist(agentId: string): Promise<{ agent: DomainAgent; playlistName: string | null }> {
+  const { data: agent, error } = await supabase
+    .from('domain_agents')
+    .select('*')
+    .eq('id', agentId)
+    .single()
+
+  if (error) throw error
+
+  let playlistName: string | null = null
+  if (agent.playlist_id) {
+    const { data: pl } = await supabase
+      .from('youtube_playlists')
+      .select('playlist_name')
+      .eq('id', agent.playlist_id)
+      .maybeSingle()
+    playlistName = pl?.playlist_name ?? null
+  }
+
+  return { agent: agent as DomainAgent, playlistName }
+}
+
+export async function fetchAgentQuestions(agentId: string): Promise<AgentStandingQuestion[]> {
+  const { data, error } = await supabase
+    .from('agent_standing_questions')
+    .select('*')
+    .eq('agent_id', agentId)
+    .order('priority', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []) as AgentStandingQuestion[]
+}
+
+export async function fetchAgentInsights(agentId: string): Promise<AgentInsightRow[]> {
+  const { data, error } = await supabase
+    .from('agent_insights')
+    .select('*')
+    .eq('agent_id', agentId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as AgentInsightRow[]
+}
+
+export async function fetchAgentGaps(agentId: string): Promise<AgentGapRow[]> {
+  const { data, error } = await supabase
+    .from('agent_gaps')
+    .select('*')
+    .eq('agent_id', agentId)
+    .in('status', ['active', 'filling'])
+    .order('severity', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []) as AgentGapRow[]
+}
+
+export async function fetchAgentSignalsOut(agentId: string): Promise<AgentSignalRow[]> {
+  const { data, error } = await supabase
+    .from('agent_signals')
+    .select('*')
+    .eq('source_agent_id', agentId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (error) throw error
+  return (data ?? []) as AgentSignalRow[]
+}
+
+export async function fetchGlobalSignals(limit = 10): Promise<(AgentSignalRow & { source_agent_name?: string; target_agent_name?: string })[]> {
+  const { data, error } = await supabase
+    .from('agent_signals')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return (data ?? []) as AgentSignalRow[]
+}
+
+export async function fetchGlobalInsights(limit = 10): Promise<(AgentInsightRow & { agent_name?: string })[]> {
+  const { data, error } = await supabase
+    .from('agent_insights')
+    .select('*')
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return (data ?? []) as AgentInsightRow[]
+}
+
+export async function fetchAgentCounts(agentId: string): Promise<{
+  standingQuestions: number
+  insights: number
+  signalsOut: number
+  gaps: number
+}> {
+  const [qRes, iRes, sRes, gRes] = await Promise.all([
+    supabase.from('agent_standing_questions').select('id', { count: 'exact', head: true }).eq('agent_id', agentId).in('status', ['open', 'partially_addressed']),
+    supabase.from('agent_insights').select('id', { count: 'exact', head: true }).eq('agent_id', agentId).eq('status', 'active'),
+    supabase.from('agent_signals').select('id', { count: 'exact', head: true }).eq('source_agent_id', agentId),
+    supabase.from('agent_gaps').select('id', { count: 'exact', head: true }).eq('agent_id', agentId).in('status', ['active', 'filling']),
+  ])
+
+  return {
+    standingQuestions: qRes.count ?? 0,
+    insights: iRes.count ?? 0,
+    signalsOut: sRes.count ?? 0,
+    gaps: gRes.count ?? 0,
+  }
 }
