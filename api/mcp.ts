@@ -656,6 +656,35 @@ const TOOLS: ToolDescriptor[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'consult_council',
+    description:
+      "Query your Advisory Council — a team of domain-specific AI advisors derived from your YouTube playlists. Each advisor has deep expertise in their domain and a distinct reasoning style.\n\nUse this instead of ask_synapse when:\n- The question spans multiple knowledge domains and benefits from cross-perspective analysis\n- You want to understand tensions or trade-offs between different viewpoints in your knowledge\n- The question is strategic/analytical (\"what should I think about X\") rather than factual (\"what do I know about X\")\n- You want to see which of your domain advisors have relevant expertise and where their knowledge gaps are\n\nDo NOT use for: simple factual lookups, single-source retrieval, \"what did X say about Y\" — use ask_synapse for those.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The question to put to the advisory council.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['auto', 'single', 'multi'],
+          description: 'Routing mode. "auto" (orchestrator decides), "single" (force one agent), "multi" (force multiple agents). Default "auto".',
+        },
+        agent_names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicitly name which advisors to consult (e.g. ["Geopolitics", "AI Upskilling"]). If omitted, the orchestrator selects.',
+        },
+        include_agent_reasoning: {
+          type: 'boolean',
+          description: 'Whether to include each agent\'s individual analysis or just the final synthesis. Default true.',
+        },
+      },
+      required: ['query'],
+    },
+  },
 ]
 
 // ─── Tool handlers ───────────────────────────────────────────────────────────
@@ -2445,6 +2474,491 @@ async function handleSearchSkills(
   return { content: [{ type: 'text', text: lines.join('\n') }] }
 }
 
+// ─── Council types ──────────────────────────────────────────────────────────
+
+interface CouncilAgent {
+  id: string
+  user_id: string
+  name: string
+  description: string | null
+  reasoning_style: string | null
+  expertise_index: {
+    summary?: string
+    core_themes?: string[]
+    reasoning_approach?: string
+    strongest_areas?: Array<{ topic: string; source_count: number; key_entities: string[] }>
+    weakest_areas?: Array<{ topic: string; reason: string }>
+  } | null
+  source_count: number
+  entity_count: number
+}
+
+interface OrchestratorResult {
+  classification: 'single_domain' | 'cross_domain' | 'meta'
+  selected_agents: Array<{
+    agent_id: string
+    agent_name: string
+    relevance: 'primary' | 'secondary'
+    reason: string
+  }>
+  routing_rationale: string
+  meta_answer: string | null
+}
+
+interface AgentAnalysisResult {
+  analysis: string
+  key_claims: Array<{ claim: string; evidence: string; confidence: 'high' | 'medium' | 'low' }>
+  coverage_assessment: 'strong' | 'adequate' | 'thin' | 'gap'
+  coverage_note: string
+  cross_domain_flags: string[]
+  sources_cited: string[]
+}
+
+interface SynthesisResult {
+  synthesis: string
+  agreements: Array<{ point: string; supporting_agents: string[] }>
+  tensions: Array<{ point: string; agents_involved: string[]; nature: string }>
+  emergent_insight: string | null
+  blind_spots: Array<{ topic: string; relevant_gaps: string[] }>
+  follow_up_suggestions: string[]
+}
+
+// ─── Council Gemini helper (JSON mode) ──────────────────────────────────────
+
+async function geminiJson<T>(
+  systemPrompt: string,
+  userContent: string,
+  temperature: number = 0.2,
+  timeoutMs: number = 30000
+): Promise<T> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(
+      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: userContent }] }],
+          generationConfig: {
+            temperature,
+            responseMimeType: 'application/json',
+          },
+        }),
+      }
+    )
+
+    if (!response.ok) {
+      const errText = await response.text()
+      throw new Error(`Gemini ${response.status}: ${errText.slice(0, 300)}`)
+    }
+
+    const data = await response.json() as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    }
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!text) throw new Error('No response from Gemini')
+    return JSON.parse(text) as T
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+// ─── Council handler ────────────────────────────────────────────────────────
+
+async function handleConsultCouncil(
+  params: {
+    query: string
+    mode?: string
+    agent_names?: string[]
+    include_agent_reasoning?: boolean
+  },
+  userId: string,
+  sb: SupabaseClient
+): Promise<ToolContent> {
+  const mode = params.mode ?? 'auto'
+  const includeReasoning = params.include_agent_reasoning !== false
+
+  // ── Fetch all agents for this user ──
+  const { data: allAgents, error: agentsErr } = await sb
+    .from('domain_agents')
+    .select('id, user_id, name, description, reasoning_style, expertise_index, source_count, entity_count')
+    .eq('user_id', userId)
+
+  if (agentsErr || !allAgents || allAgents.length === 0) {
+    // Fallback: no agents exist — delegate to ask_synapse behaviour
+    return {
+      content: [{
+        type: 'text',
+        text: 'No advisory council agents found. The council is built from your YouTube playlists — ingest some playlists first, then the nightly cron will create domain advisors. In the meantime, use ask_synapse for knowledge graph queries.',
+      }],
+    }
+  }
+
+  const agents = allAgents as CouncilAgent[]
+
+  // Build master index summary for the orchestrator
+  const masterIndex = agents.map(a => {
+    const ei = a.expertise_index
+    return [
+      `## ${a.name} (ID: ${a.id})`,
+      a.description ? `Description: ${a.description}` : '',
+      ei?.summary ? `Summary: ${ei.summary}` : '',
+      ei?.core_themes?.length ? `Core themes: ${ei.core_themes.join(', ')}` : '',
+      ei?.reasoning_approach ? `Reasoning approach: ${ei.reasoning_approach}` : '',
+      ei?.strongest_areas?.length
+        ? `Strongest areas: ${ei.strongest_areas.map(s => s.topic).join(', ')}`
+        : '',
+      ei?.weakest_areas?.length
+        ? `Weakest areas: ${ei.weakest_areas.map(w => w.topic).join(', ')}`
+        : '',
+      `Sources: ${a.source_count}, Entities: ${a.entity_count}`,
+    ].filter(Boolean).join('\n')
+  }).join('\n\n')
+
+  // ── Step 1: Orchestrator Classification ──
+  const orchestratorSystem = `You are the central orchestrator of an Advisory Council — a team of domain-specific AI advisors. Your job is to classify incoming queries and route them to the right advisor(s).
+
+You have access to the following advisors, each with their own domain expertise:
+
+${masterIndex}
+
+Given the user's query, determine:
+1. Is this a single-domain question (one advisor can handle it), a cross-domain question (2-3 advisors should each provide their perspective), or a meta question about the knowledge base itself (you answer directly)?
+2. Which specific advisor(s) should be consulted?
+3. Why these advisors? What does each bring to this question?
+
+If the user has explicitly specified agent names, respect that selection but note if you think additional advisors would strengthen the response.
+
+${mode === 'single' ? 'CONSTRAINT: You MUST select exactly ONE agent (the most relevant).' : ''}
+${mode === 'multi' ? 'CONSTRAINT: You MUST select 2-3 agents even if the query seems single-domain.' : ''}
+
+Respond with JSON matching this schema:
+{
+  "classification": "single_domain" | "cross_domain" | "meta",
+  "selected_agents": [{ "agent_id": "uuid", "agent_name": "string", "relevance": "primary" | "secondary", "reason": "string" }],
+  "routing_rationale": "string",
+  "meta_answer": "string or null"
+}`
+
+  const agentNameConstraint = params.agent_names?.length
+    ? `\n\nThe user has explicitly requested these advisors: ${params.agent_names.join(', ')}. Respect this selection.`
+    : ''
+
+  let orchestratorResult: OrchestratorResult
+  try {
+    orchestratorResult = await geminiJson<OrchestratorResult>(
+      orchestratorSystem,
+      `Query: ${params.query}${agentNameConstraint}`,
+      0.2,
+      15000
+    )
+  } catch (err) {
+    // Classification failed — fall back to flat text answer
+    return {
+      content: [{
+        type: 'text',
+        text: `Council orchestrator failed (${err instanceof Error ? err.message : 'unknown error'}). Please retry, or use ask_synapse for a standard knowledge graph query.`,
+      }],
+    }
+  }
+
+  // ── Meta classification: orchestrator answers directly ──
+  if (orchestratorResult.classification === 'meta' && orchestratorResult.meta_answer) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          routing: {
+            classification: 'meta',
+            agents_consulted: [],
+            routing_rationale: orchestratorResult.routing_rationale,
+          },
+          agent_perspectives: [],
+          synthesis: {
+            answer: orchestratorResult.meta_answer,
+            agreements: [],
+            tensions: [],
+            emergent_insight: null,
+            blind_spots: [],
+            follow_up_suggestions: [],
+          },
+        }, null, 2),
+      }],
+    }
+  }
+
+  // Resolve selected agents — match IDs from orchestrator to our fetched agents
+  const selectedAgentIds = new Set(orchestratorResult.selected_agents.map(a => a.agent_id))
+  // Also match by name in case orchestrator returned names that don't match IDs perfectly
+  const selectedByName = new Set(orchestratorResult.selected_agents.map(a => a.agent_name.toLowerCase()))
+  const resolvedAgents = agents.filter(
+    a => selectedAgentIds.has(a.id) || selectedByName.has(a.name.toLowerCase())
+  )
+
+  if (resolvedAgents.length === 0) {
+    // Orchestrator selected agents we can't find — pick the first agent as fallback
+    resolvedAgents.push(agents[0])
+  }
+
+  // ── Step 2: Domain-Scoped RAG (parallel across agents) ──
+  // Embed query once, reuse across all agents
+  let queryEmbedding: number[]
+  try {
+    queryEmbedding = await embedText(params.query)
+  } catch {
+    return {
+      content: [{ type: 'text', text: 'Unable to generate query embedding. Please try again.' }],
+    }
+  }
+
+  // Parallel retrieval for each agent: chunks + entities
+  const ragResults = await Promise.allSettled(
+    resolvedAgents.map(async (agent) => {
+      // Domain-scoped chunks via RPC
+      const { data: chunks } = await sb.rpc('get_domain_scoped_chunks', {
+        p_agent_id: agent.id,
+        p_query_embedding: JSON.stringify(queryEmbedding),
+        p_match_threshold: 0.5,
+        p_match_count: 8,
+      })
+
+      // Get agent's source IDs for entity lookup
+      const { data: agentSources } = await sb
+        .from('domain_agent_sources')
+        .select('source_id')
+        .eq('agent_id', agent.id)
+
+      const sourceIds = (agentSources ?? []).map((s: { source_id: string }) => s.source_id)
+
+      // Entity lookup within agent scope (by source_id membership)
+      let entities: Array<{ id: string; label: string; entity_type: string; description: string | null }> = []
+      if (sourceIds.length > 0) {
+        const { data: entityData } = await sb
+          .from('knowledge_nodes')
+          .select('id, label, entity_type, description')
+          .eq('user_id', userId)
+          .in('source_id', sourceIds)
+          .limit(10)
+        entities = (entityData ?? []) as typeof entities
+      }
+
+      return {
+        agentId: agent.id,
+        chunks: (chunks ?? []) as Array<{ chunk_id: string; source_id: string; content: string; similarity: number }>,
+        entities,
+      }
+    })
+  )
+
+  // Build context packages per agent
+  const contextPackages = new Map<string, string>()
+  for (let i = 0; i < resolvedAgents.length; i++) {
+    const result = ragResults[i]
+    const agent = resolvedAgents[i]
+    if (result.status === 'fulfilled') {
+      const { chunks, entities } = result.value
+      const chunkText = chunks.length > 0
+        ? chunks.map((c, idx) => `[Source chunk ${idx + 1}] (similarity: ${c.similarity.toFixed(2)})\n${c.content}`).join('\n\n')
+        : 'No relevant source chunks found for this agent.'
+      const entityText = entities.length > 0
+        ? entities.map(e => `- ${e.label} (${e.entity_type})${e.description ? ': ' + e.description : ''}`).join('\n')
+        : 'No closely related entities found.'
+      contextPackages.set(agent.id, `## Source Material\n\n${chunkText}\n\n## Related Entities\n\n${entityText}`)
+    } else {
+      contextPackages.set(agent.id, 'Retrieval failed for this agent — no source material available.')
+    }
+  }
+
+  // ── Step 3: Agent Analysis (parallel across agents) ──
+  // Build awareness register (one line per sibling agent)
+  const awarenessLines = agents
+    .map(a => `- ${a.name}: ${a.description ?? a.expertise_index?.summary ?? 'no description'}`)
+    .join('\n')
+
+  const analysisResults = await Promise.allSettled(
+    resolvedAgents.map(async (agent) => {
+      const ei = agent.expertise_index
+      const systemPrompt = `You are the ${agent.name} advisor — a domain expert in ${agent.description ?? 'your domain'}.
+
+Your reasoning style: ${agent.reasoning_style ?? ei?.reasoning_approach ?? 'analytical'}
+
+Your expertise covers: ${ei?.summary ?? 'Not yet indexed'}
+Your strongest areas: ${ei?.strongest_areas?.map(s => s.topic).join(', ') ?? 'Unknown'}
+Your known gaps: ${ei?.weakest_areas?.map(w => w.topic).join(', ') ?? 'Unknown'}
+
+You are part of an Advisory Council. Other advisors cover:
+${awarenessLines}
+
+Analyse the following question through your domain lens. Draw on the provided source material. Be specific — cite entities and sources. Be honest about where your coverage is strong and where it's thin.
+
+If you notice connections to other advisors' domains, flag them explicitly — the orchestrator will use these to enrich the synthesis.
+
+Respond with JSON matching this schema:
+{
+  "analysis": "string — 2-4 paragraphs",
+  "key_claims": [{ "claim": "string", "evidence": "string", "confidence": "high" | "medium" | "low" }],
+  "coverage_assessment": "strong" | "adequate" | "thin" | "gap",
+  "coverage_note": "string",
+  "cross_domain_flags": ["string"],
+  "sources_cited": ["string"]
+}`
+
+      const context = contextPackages.get(agent.id) ?? 'No context available.'
+      const userMessage = `Question: ${params.query}\n\n${context}`
+
+      return {
+        agentId: agent.id,
+        agentName: agent.name,
+        reasoningStyle: agent.reasoning_style ?? ei?.reasoning_approach ?? 'analytical',
+        result: await geminiJson<AgentAnalysisResult>(systemPrompt, userMessage, 0.3, 30000),
+      }
+    })
+  )
+
+  // Collect successful analyses
+  const perspectives: Array<{
+    agent_name: string
+    agent_id: string
+    reasoning_style: string
+    analysis: string
+    key_claims: AgentAnalysisResult['key_claims']
+    coverage_assessment: string
+    coverage_note: string
+    cross_domain_flags: string[]
+    sources_cited: string[]
+  }> = []
+  const failedAgents: string[] = []
+
+  for (const result of analysisResults) {
+    if (result.status === 'fulfilled') {
+      const { agentId, agentName, reasoningStyle, result: analysis } = result.value
+      perspectives.push({
+        agent_name: agentName,
+        agent_id: agentId,
+        reasoning_style: reasoningStyle,
+        analysis: analysis.analysis,
+        key_claims: analysis.key_claims,
+        coverage_assessment: analysis.coverage_assessment,
+        coverage_note: analysis.coverage_note,
+        cross_domain_flags: analysis.cross_domain_flags ?? [],
+        sources_cited: analysis.sources_cited ?? [],
+      })
+    } else {
+      failedAgents.push(result.reason?.toString?.() ?? 'unknown error')
+    }
+  }
+
+  if (perspectives.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: 'All agent analyses failed. Please retry, or use ask_synapse for a standard knowledge graph query.',
+      }],
+    }
+  }
+
+  // ── Step 4: Synthesis (cross-domain only) ──
+  const routing = {
+    classification: orchestratorResult.classification,
+    agents_consulted: orchestratorResult.selected_agents.filter(
+      sa => perspectives.some(p => p.agent_id === sa.agent_id || p.agent_name.toLowerCase() === sa.agent_name.toLowerCase())
+    ),
+    routing_rationale: orchestratorResult.routing_rationale,
+  }
+
+  // Single-domain: wrap the single agent's analysis as the synthesis
+  if (perspectives.length === 1) {
+    const p = perspectives[0]
+    const response = {
+      routing,
+      agent_perspectives: includeReasoning ? perspectives : undefined,
+      synthesis: {
+        answer: p.analysis,
+        agreements: [],
+        tensions: [],
+        emergent_insight: null,
+        blind_spots: p.coverage_assessment === 'thin' || p.coverage_assessment === 'gap'
+          ? [{ topic: p.coverage_note, relevant_gaps: [] }]
+          : [],
+        follow_up_suggestions: p.cross_domain_flags.length > 0
+          ? [`Consider consulting other advisors on: ${p.cross_domain_flags.join(', ')}`]
+          : [],
+      },
+    }
+    if (failedAgents.length > 0) {
+      (response.synthesis as Record<string, unknown>)._note = `${failedAgents.length} agent(s) failed and were excluded.`
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] }
+  }
+
+  // Multi-domain: synthesise across perspectives
+  const synthesisSystem = `You are the orchestrator synthesising perspectives from multiple domain advisors.
+
+The user asked: ${params.query}
+
+The following advisors provided their analyses:
+
+${perspectives.map(p => `### ${p.agent_name} (reasoning style: ${p.reasoning_style})\n${p.analysis}\n\nKey claims: ${p.key_claims.map(c => `- ${c.claim} [${c.confidence}]`).join('\n')}\nCoverage: ${p.coverage_assessment} — ${p.coverage_note}\nCross-domain flags: ${p.cross_domain_flags.join(', ') || 'none'}`).join('\n\n---\n\n')}
+
+Synthesise these perspectives into a coherent response. Specifically:
+1. Where do the advisors agree? What claims are corroborated across domains?
+2. Where do they diverge? What tensions exist between their perspectives?
+3. What emerges from the intersection that no single advisor would see alone?
+4. What couldn't any advisor address? Map this to known gaps.
+5. What follow-up questions would deepen the analysis?
+
+Do NOT simply concatenate the advisors' views. Produce genuine synthesis — the value is in the intersection, not the union.
+
+Respond with JSON matching this schema:
+{
+  "synthesis": "string — 3-5 paragraphs",
+  "agreements": [{ "point": "string", "supporting_agents": ["agent names"] }],
+  "tensions": [{ "point": "string", "agents_involved": ["agent names"], "nature": "string" }],
+  "emergent_insight": "string or null",
+  "blind_spots": [{ "topic": "string", "relevant_gaps": ["string"] }],
+  "follow_up_suggestions": ["string"]
+}`
+
+  let synthesisResult: SynthesisResult
+  try {
+    synthesisResult = await geminiJson<SynthesisResult>(synthesisSystem, params.query, 0.3, 30000)
+  } catch {
+    // Synthesis failed — return individual perspectives without synthesis
+    synthesisResult = {
+      synthesis: perspectives.map(p => `**${p.agent_name}:** ${p.analysis}`).join('\n\n'),
+      agreements: [],
+      tensions: [],
+      emergent_insight: null,
+      blind_spots: [],
+      follow_up_suggestions: ['Synthesis step failed — individual agent perspectives are shown above.'],
+    }
+  }
+
+  const finalResponse = {
+    routing,
+    agent_perspectives: includeReasoning ? perspectives : undefined,
+    synthesis: {
+      answer: synthesisResult.synthesis,
+      agreements: synthesisResult.agreements,
+      tensions: synthesisResult.tensions,
+      emergent_insight: synthesisResult.emergent_insight,
+      blind_spots: synthesisResult.blind_spots,
+      follow_up_suggestions: synthesisResult.follow_up_suggestions,
+    },
+  }
+
+  if (failedAgents.length > 0) {
+    (finalResponse.synthesis as Record<string, unknown>)._note = `${failedAgents.length} agent(s) failed and were excluded from synthesis.`
+  }
+
+  return { content: [{ type: 'text', text: JSON.stringify(finalResponse, null, 2) }] }
+}
+
 // ─── MCP Router ──────────────────────────────────────────────────────────────
 
 function jsonRpcError(id: string | number | null, code: number, message: string): JsonRpcResponse {
@@ -2678,6 +3192,21 @@ async function handleMcpRequest(
                 userId,
                 sb,
                 sessionId
+              )
+            )
+
+          case 'consult_council':
+            return jsonRpcResult(
+              reqId,
+              await handleConsultCouncil(
+                {
+                  query: toolArgs.query as string,
+                  mode: toolArgs.mode as string | undefined,
+                  agent_names: toolArgs.agent_names as string[] | undefined,
+                  include_agent_reasoning: toolArgs.include_agent_reasoning as boolean | undefined,
+                },
+                userId,
+                sb
               )
             )
 
