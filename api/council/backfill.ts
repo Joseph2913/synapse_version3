@@ -109,7 +109,7 @@ async function verifyUserAuth(
 
 // ─── GEMINI HELPER ─────────────────────────────────────────────────────────────
 
-async function callGemini<T>(systemPrompt: string, userContent: string): Promise<T> {
+async function callGemini<T>(systemPrompt: string, userContent: string, timeoutMs = 120000): Promise<T> {
   const response = await fetch(
     `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
@@ -123,7 +123,7 @@ async function callGemini<T>(systemPrompt: string, userContent: string): Promise
           responseMimeType: 'application/json',
         },
       }),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(timeoutMs),
     }
   );
 
