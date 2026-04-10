@@ -58,6 +58,10 @@
     {
       "path": "/api/skills/rescore",
       "schedule": "0 2 * * 0"
+    },
+    {
+      "path": "/api/council/cron",
+      "schedule": "0 2 * * *"
     }
   ]
 }

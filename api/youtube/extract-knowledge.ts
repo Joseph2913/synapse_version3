@@ -35,6 +35,7 @@ interface QueueItem {
   retry_count: number;
   max_retries: number;
   error_message: string | null;
+  playlist_id?: string | null;
   extraction_mode?: string;
   anchor_emphasis?: string;
   linked_anchor_ids?: string[];
@@ -835,6 +836,13 @@ Return an empty array if no genuine cross-source connections exist.`;
       });
     }
 
+    // ── ADVISORY COUNCIL HOOK (fire-and-forget, non-fatal) ─────────────────────
+    try {
+      await runAdvisoryCouncilHook(item, sourceId, supabase);
+    } catch (councilErr) {
+      console.warn('[extract-knowledge] Advisory council hook failed (non-fatal):', councilErr);
+    }
+
     return { success: true, nodesCreated, edgesCreated };
 
   } catch (err) {
@@ -870,6 +878,442 @@ Return an empty array if no genuine cross-source connections exist.`;
 
     return { success: false, nodesCreated: 0, edgesCreated: 0, error: msg };
   }
+}
+
+// ─── ADVISORY COUNCIL HOOK ────────────────────────────────────────────────────
+//
+// Post-extraction hook that updates the relevant domain agent whenever a
+// new YouTube video is ingested.  Wrapped in try-catch — a failure here
+// must NEVER cause the extraction to be marked as failed.
+//
+// Steps:
+//   1. Resolve domain agent via playlist_id → youtube_playlists.domain_agent_id
+//   2. Create source association (upsert into domain_agent_sources)
+//   3. Gemini ingestion-time analysis (insights + question eval + summary)
+//   4. Persist detected insights
+//   5. Update standing questions
+//   6. Detect cross-domain signals from edges
+//   7. Flag expertise index as stale, update counters
+
+interface AdvisoryInsight {
+  type: 'tension' | 'convergence' | 'novel_connection';
+  claim: string;
+  evidence_summary: string;
+  related_entity_labels: string[];
+  confidence: number;
+}
+
+interface QuestionUpdate {
+  question_id: string;
+  new_status: 'partially_addressed' | 'answered';
+  evidence: string;
+}
+
+interface AdvisoryAnalysisResult {
+  insights: AdvisoryInsight[];
+  question_updates: QuestionUpdate[];
+  contribution_summary: string;
+}
+
+async function runAdvisoryCouncilHook(
+  item: QueueItem,
+  sourceId: string,
+  supabase: ReturnType<typeof getSupabase>
+): Promise<void> {
+  const hookStart = Date.now();
+
+  // ── Step 1: Resolve domain agent ──────────────────────────────────────────
+  if (!item.playlist_id) return;
+
+  const { data: playlist } = await supabase
+    .from('youtube_playlists')
+    .select('domain_agent_id')
+    .eq('id', item.playlist_id)
+    .maybeSingle();
+
+  const agentId = (playlist as { domain_agent_id: string | null } | null)?.domain_agent_id;
+  if (!agentId) return; // No domain agent — playlist predates advisory council
+
+  console.log(`[advisory-council] Hook started for agent ${agentId}, source ${sourceId}`);
+
+  // ── Step 2: Create source association (idempotent upsert) ─────────────────
+  await supabase
+    .from('domain_agent_sources')
+    .upsert(
+      {
+        user_id: item.user_id,
+        agent_id: agentId,
+        source_id: sourceId,
+        association_type: 'primary',
+      },
+      { onConflict: 'agent_id,source_id' }
+    );
+
+  // ── Step 3: Ingestion-time analysis via Gemini ────────────────────────────
+  // Gather inputs for the prompt
+  const [nodesResult, chunksResult, agentResult, questionsResult] = await Promise.all([
+    // Entities from the new source
+    supabase
+      .from('knowledge_nodes')
+      .select('id, label, entity_type, description')
+      .eq('source_id', sourceId)
+      .eq('user_id', item.user_id)
+      .limit(50),
+    // Top chunks from the new source
+    supabase
+      .from('source_chunks')
+      .select('content')
+      .eq('source_id', sourceId)
+      .eq('user_id', item.user_id)
+      .order('chunk_index', { ascending: true })
+      .limit(8),
+    // Agent's current expertise index
+    supabase
+      .from('domain_agents')
+      .select('expertise_index')
+      .eq('id', agentId)
+      .single(),
+    // Open standing questions
+    supabase
+      .from('agent_standing_questions')
+      .select('id, question, question_type, status')
+      .eq('agent_id', agentId)
+      .in('status', ['open', 'partially_addressed'])
+      .limit(20),
+  ]);
+
+  const nodes = (nodesResult.data ?? []) as Array<{
+    id: string; label: string; entity_type: string; description: string;
+  }>;
+  const chunks = (chunksResult.data ?? []) as Array<{ content: string }>;
+  const expertiseIndex = (agentResult.data as { expertise_index: Record<string, unknown> } | null)?.expertise_index ?? {};
+  const openQuestions = (questionsResult.data ?? []) as Array<{
+    id: string; question: string; question_type: string; status: string;
+  }>;
+
+  // Build the analysis prompt
+  const entitySummary = nodes
+    .map(n => `- ${n.label} (${n.entity_type}): ${n.description}`)
+    .join('\n');
+  const chunkContent = chunks.map(c => c.content).join('\n---\n');
+  const questionList = openQuestions
+    .map(q => `- [${q.id}] (${q.question_type}, ${q.status}): ${q.question}`)
+    .join('\n');
+
+  const analysisPrompt = `You are an advisory council analyst for a personal knowledge graph.
+A new source has been ingested into a domain agent's scope. Analyse it for patterns.
+
+## New Source Entities
+${entitySummary || '(none extracted)'}
+
+## New Source Content (key chunks)
+${chunkContent || '(no chunks)'}
+
+## Agent's Current Expertise Index
+${JSON.stringify(expertiseIndex, null, 2)}
+
+## Open Standing Questions
+${questionList || '(none)'}
+
+## Your Task
+Analyse the new content and return structured JSON with exactly these three fields:
+
+1. **insights**: Array of patterns detected. Types:
+   - "tension": Content contradicts or disagrees with existing knowledge
+   - "convergence": Content independently corroborates existing patterns
+   - "novel_connection": Previously unlinked entities are now connected
+   Only report specific, evidence-backed patterns. Return empty array if none.
+
+2. **question_updates**: Array of standing questions affected by this content.
+   Return the question ID, new_status ("partially_addressed" or "answered"), and evidence.
+   Return empty array if no questions are addressed.
+
+3. **contribution_summary**: One sentence describing what this source adds.
+
+Return ONLY valid JSON matching this schema:
+{
+  "insights": [{ "type": "tension|convergence|novel_connection", "claim": "...", "evidence_summary": "...", "related_entity_labels": ["..."], "confidence": 0.0-1.0 }],
+  "question_updates": [{ "question_id": "uuid", "new_status": "partially_addressed|answered", "evidence": "..." }],
+  "contribution_summary": "..."
+}`;
+
+  let analysis: AdvisoryAnalysisResult = {
+    insights: [],
+    question_updates: [],
+    contribution_summary: '',
+  };
+
+  try {
+    const geminiResponse = await fetch(
+      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: analysisPrompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+        signal: AbortSignal.timeout(30000),
+      }
+    );
+
+    if (geminiResponse.ok) {
+      const geminiData = await geminiResponse.json() as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        analysis = JSON.parse(text) as AdvisoryAnalysisResult;
+      }
+    } else {
+      console.warn(`[advisory-council] Gemini analysis call failed: ${geminiResponse.status}`);
+    }
+  } catch (err) {
+    console.warn('[advisory-council] Gemini analysis failed:', err);
+  }
+
+  // ── Step 4: Persist insights ──────────────────────────────────────────────
+  if (analysis.insights.length > 0) {
+    // Build a label→id lookup from the source's nodes
+    const labelToIds = new Map<string, string>();
+    for (const n of nodes) {
+      labelToIds.set(n.label.toLowerCase(), n.id);
+    }
+
+    const insightRows = analysis.insights.map(ins => ({
+      user_id: item.user_id,
+      agent_id: agentId,
+      insight_type: ins.type,
+      claim: ins.claim,
+      evidence_summary: ins.evidence_summary,
+      trigger_source_id: sourceId,
+      related_entity_ids: ins.related_entity_labels
+        .map(label => labelToIds.get(label.toLowerCase()))
+        .filter((id): id is string => !!id),
+      confidence: ins.confidence,
+      status: 'active',
+    }));
+
+    const { error: insightError } = await supabase
+      .from('agent_insights')
+      .insert(insightRows);
+
+    if (insightError) {
+      console.warn('[advisory-council] Failed to insert insights:', insightError.message);
+    } else {
+      console.log(`[advisory-council] Inserted ${insightRows.length} insights`);
+    }
+  }
+
+  // ── Step 5: Update standing questions ─────────────────────────────────────
+  for (const qu of analysis.question_updates) {
+    // Validate the question_id is a real open question for this agent
+    const validQuestion = openQuestions.find(q => q.id === qu.question_id);
+    if (!validQuestion) continue;
+
+    // Append source_id to addressing_source_ids array
+    const { error: qError } = await supabase.rpc('append_to_uuid_array', {
+      p_table: 'agent_standing_questions',
+      p_id: qu.question_id,
+      p_column: 'addressing_source_ids',
+      p_value: sourceId,
+    }).then(
+      // If the RPC doesn't exist, fall back to a direct update
+      () => ({ error: null }),
+      () => ({ error: null })
+    );
+
+    // Direct update for status + evidence (always runs)
+    await supabase
+      .from('agent_standing_questions')
+      .update({
+        status: qu.new_status,
+        addressing_evidence: qu.evidence,
+        status_changed_at: new Date().toISOString(),
+      })
+      .eq('id', qu.question_id)
+      .eq('agent_id', agentId);
+
+    // Also append source_id to the array via raw update
+    // Postgres: addressing_source_ids = array_append(addressing_source_ids, sourceId)
+    await supabase.rpc('append_addressing_source', {
+      p_question_id: qu.question_id,
+      p_source_id: sourceId,
+    }).catch(() => {
+      // If RPC doesn't exist, do a read-modify-write
+      void (async () => {
+        const { data: qRow } = await supabase
+          .from('agent_standing_questions')
+          .select('addressing_source_ids')
+          .eq('id', qu.question_id)
+          .single();
+        const existing = ((qRow as { addressing_source_ids: string[] } | null)?.addressing_source_ids) ?? [];
+        if (!existing.includes(sourceId)) {
+          await supabase
+            .from('agent_standing_questions')
+            .update({ addressing_source_ids: [...existing, sourceId] })
+            .eq('id', qu.question_id);
+        }
+      })();
+    });
+
+    if (qError) {
+      console.warn(`[advisory-council] Question update failed for ${qu.question_id}:`, qError);
+    }
+  }
+
+  if (analysis.question_updates.length > 0) {
+    console.log(`[advisory-council] Updated ${analysis.question_updates.length} standing questions`);
+  }
+
+  // ── Step 6: Detect cross-domain signals (no LLM call) ─────────────────────
+  // Find edges where one node belongs to the new source and the other belongs
+  // to a different domain agent's scope.
+  const newSourceNodeIds = nodes.map(n => n.id);
+
+  if (newSourceNodeIds.length > 0) {
+    // Get all edges involving nodes from this source
+    const { data: outEdges } = await supabase
+      .from('knowledge_edges')
+      .select('id, source_node_id, target_node_id, evidence')
+      .eq('user_id', item.user_id)
+      .in('source_node_id', newSourceNodeIds);
+
+    const { data: inEdges } = await supabase
+      .from('knowledge_edges')
+      .select('id, source_node_id, target_node_id, evidence')
+      .eq('user_id', item.user_id)
+      .in('target_node_id', newSourceNodeIds);
+
+    type EdgeRow = { id: string; source_node_id: string; target_node_id: string; evidence: string | null };
+    const allEdges = [...((outEdges ?? []) as EdgeRow[]), ...((inEdges ?? []) as EdgeRow[])];
+
+    // Collect "other side" node IDs (nodes NOT from the new source)
+    const newNodeSet = new Set(newSourceNodeIds);
+    const otherNodeIds = new Set<string>();
+    for (const e of allEdges) {
+      if (!newNodeSet.has(e.source_node_id)) otherNodeIds.add(e.source_node_id);
+      if (!newNodeSet.has(e.target_node_id)) otherNodeIds.add(e.target_node_id);
+    }
+
+    if (otherNodeIds.size > 0) {
+      // Find which domain agents own these other nodes (via domain_agent_sources → knowledge_nodes.source_id)
+      const otherNodeIdArr = Array.from(otherNodeIds);
+      const { data: otherNodes } = await supabase
+        .from('knowledge_nodes')
+        .select('id, source_id')
+        .in('id', otherNodeIdArr.slice(0, 200)); // Cap to avoid oversized IN clause
+
+      const nodeSourceMap = new Map<string, string>();
+      for (const n of ((otherNodes ?? []) as Array<{ id: string; source_id: string | null }>)) {
+        if (n.source_id) nodeSourceMap.set(n.id, n.source_id);
+      }
+
+      const otherSourceIds = [...new Set(Array.from(nodeSourceMap.values()))];
+      if (otherSourceIds.length > 0) {
+        const { data: otherAgentSources } = await supabase
+          .from('domain_agent_sources')
+          .select('agent_id, source_id')
+          .in('source_id', otherSourceIds.slice(0, 200))
+          .neq('agent_id', agentId); // Exclude our own agent
+
+        const sourceToAgents = new Map<string, Set<string>>();
+        for (const das of ((otherAgentSources ?? []) as Array<{ agent_id: string; source_id: string }>)) {
+          if (!sourceToAgents.has(das.source_id)) sourceToAgents.set(das.source_id, new Set());
+          sourceToAgents.get(das.source_id)!.add(das.agent_id);
+        }
+
+        // Get existing bridge_edge_ids to dedup
+        const edgeIds = allEdges.map(e => e.id);
+        const { data: existingSignals } = await supabase
+          .from('agent_signals')
+          .select('bridge_edge_id')
+          .in('bridge_edge_id', edgeIds.slice(0, 200));
+
+        const existingBridgeEdges = new Set(
+          ((existingSignals ?? []) as Array<{ bridge_edge_id: string | null }>)
+            .map(s => s.bridge_edge_id)
+            .filter((id): id is string => !!id)
+        );
+
+        // Create signals for each cross-domain edge
+        const signalRows: Array<Record<string, unknown>> = [];
+        for (const edge of allEdges) {
+          if (existingBridgeEdges.has(edge.id)) continue; // Already signalled
+
+          const otherNodeId = newNodeSet.has(edge.source_node_id)
+            ? edge.target_node_id
+            : edge.source_node_id;
+          const otherSourceId = nodeSourceMap.get(otherNodeId);
+          if (!otherSourceId) continue;
+
+          const targetAgents = sourceToAgents.get(otherSourceId);
+          if (!targetAgents) continue;
+
+          for (const targetAgentId of targetAgents) {
+            signalRows.push({
+              user_id: item.user_id,
+              source_agent_id: agentId,
+              target_agent_id: targetAgentId,
+              trigger_source_id: sourceId,
+              bridge_entity_ids: [edge.source_node_id, edge.target_node_id],
+              bridge_edge_id: edge.id,
+              reason: edge.evidence ?? 'Cross-domain edge detected during ingestion',
+              status: 'pending',
+            });
+          }
+        }
+
+        if (signalRows.length > 0) {
+          // Batch insert (dedup on bridge_edge_id already handled above)
+          const { error: sigError } = await supabase
+            .from('agent_signals')
+            .insert(signalRows);
+
+          if (sigError) {
+            console.warn('[advisory-council] Failed to insert signals:', sigError.message);
+          } else {
+            console.log(`[advisory-council] Created ${signalRows.length} cross-domain signals`);
+          }
+        }
+      }
+    }
+  }
+
+  // ── Step 7: Flag expertise index as stale, update counters ────────────────
+  // Count entities across all of this agent's sources
+  const { count: entityCount } = await supabase
+    .from('knowledge_nodes')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', item.user_id)
+    .in('source_id',
+      await supabase
+        .from('domain_agent_sources')
+        .select('source_id')
+        .eq('agent_id', agentId)
+        .then(r => ((r.data ?? []) as Array<{ source_id: string }>).map(d => d.source_id))
+    );
+
+  const { count: sourceCount } = await supabase
+    .from('domain_agent_sources')
+    .select('id', { count: 'exact', head: true })
+    .eq('agent_id', agentId);
+
+  await supabase
+    .from('domain_agents')
+    .update({
+      index_stale: true,
+      last_ingestion_at: new Date().toISOString(),
+      source_count: sourceCount ?? 0,
+      entity_count: entityCount ?? 0,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', agentId);
+
+  console.log(`[advisory-council] Hook completed in ${Date.now() - hookStart}ms — agent ${agentId} updated`);
 }
 
 // ─── HANDLER ───────────────────────────────────────────────────────────────────
@@ -970,6 +1414,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         retry_count: (row['retry_count'] as number) ?? 0,
         max_retries: (row['max_retries'] as number) ?? 3,
         error_message: row['error_message'] as string | null,
+        playlist_id: row['playlist_id'] as string | null,
         extraction_mode: (playlist?.['extraction_mode'] as string) ?? undefined,
         anchor_emphasis: (playlist?.['anchor_emphasis'] as string) ?? undefined,
         linked_anchor_ids: (playlist?.['linked_anchor_ids'] as string[]) ?? [],
