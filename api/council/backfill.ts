@@ -696,7 +696,8 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
       .from('knowledge_nodes')
       .select('id, source_id')
       .in('source_id', batch)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .limit(10000);
 
     for (const node of nodes || []) {
       const agents = sourceToAgents.get(node.source_id as string);
@@ -745,7 +746,8 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
       .from('knowledge_edges')
       .select('id, source_node_id, target_node_id, relation_type')
       .in('source_node_id', batchNodeIds)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .limit(10000);
 
     for (const edge of edges || []) {
       edgesScanned++;
@@ -804,7 +806,7 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
   return {
     step: '6_signals',
     success: true,
-    detail: `Scanned ${edgesScanned} edges, created ${signalsCreated} cross-domain signals`,
+    detail: `${allSourceIds.length} source_ids, ${nodeIds.length} nodes mapped, ${edgesScanned} edges scanned, ${signalsCreated} signals created`,
   };
 }
 
