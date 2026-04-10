@@ -7,23 +7,31 @@ interface CouncilResponseProps {
   state: CouncilQueryState
   onFollowUpClick?: (question: string) => void
   onAgentClick?: (agentId: string) => void
+  onToggleAgent: (agentId: string) => void
+  onApprove: () => void
+  onSkip: () => void
 }
 
-export function CouncilResponse({ state, onFollowUpClick, onAgentClick }: CouncilResponseProps) {
+export function CouncilResponse({
+  state,
+  onFollowUpClick,
+  onAgentClick,
+  onToggleAgent,
+  onApprove,
+  onSkip,
+}: CouncilResponseProps) {
   const hasRouting = !!state.routing
   const hasAgents = state.agentPerspectives.length > 0
   const hasSynthesis = !!state.synthesis
 
-  // Show loading indicator when routing
+  // Routing in progress
   if (state.status === 'routing') {
     return (
       <div style={{ maxWidth: 1020, margin: '0 auto', padding: '24px', width: '100%' }}>
         <div
           className="flex items-center font-body"
           style={{
-            gap: 8,
-            fontSize: 12,
-            color: 'var(--color-text-secondary)',
+            gap: 8, fontSize: 12, color: 'var(--color-text-secondary)',
             padding: '12px 16px',
             background: 'var(--color-bg-card)',
             border: '1px solid var(--border-subtle)',
@@ -31,13 +39,10 @@ export function CouncilResponse({ state, onFollowUpClick, onAgentClick }: Counci
           }}
         >
           <span style={{ color: 'var(--color-accent-500)', fontSize: 12 }}>✦</span>
-          <span>Consulting your advisory council...</span>
+          <span>Analysing your question...</span>
           <span
             style={{
-              display: 'inline-block',
-              width: 4,
-              height: 4,
-              borderRadius: '50%',
+              display: 'inline-block', width: 4, height: 4, borderRadius: '50%',
               background: 'var(--color-accent-500)',
               animation: 'councilDot 1s ease-in-out infinite',
             }}
@@ -53,16 +58,14 @@ export function CouncilResponse({ state, onFollowUpClick, onAgentClick }: Counci
     )
   }
 
-  // Error state
+  // Error with no routing
   if (state.status === 'error' && !hasRouting) {
     return (
       <div style={{ maxWidth: 1020, margin: '0 auto', padding: '24px', width: '100%' }}>
         <div
           className="font-body"
           style={{
-            fontSize: 12,
-            color: '#dc2626',
-            padding: '12px 16px',
+            fontSize: 12, color: '#dc2626', padding: '12px 16px',
             background: 'rgba(220,38,38,0.04)',
             border: '1px solid rgba(220,38,38,0.1)',
             borderRadius: 12,
@@ -77,9 +80,19 @@ export function CouncilResponse({ state, onFollowUpClick, onAgentClick }: Counci
   return (
     <div style={{ maxWidth: 1020, margin: '0 auto', padding: '0 24px', width: '100%' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {/* Phase 1: Routing card */}
+
+        {/* Phase 1: Routing card with approval */}
         {hasRouting && (
-          <CouncilRoutingCard routing={state.routing!} visible />
+          <CouncilRoutingCard
+            routing={state.routing!}
+            availableAgents={state.availableAgents}
+            selectedAgentIds={state.selectedAgentIds}
+            awaitingApproval={state.status === 'awaiting_approval'}
+            metaAnswer={state.metaAnswer}
+            onToggleAgent={onToggleAgent}
+            onApprove={onApprove}
+            onSkip={onSkip}
+          />
         )}
 
         {/* Phase 2: Agent perspective cards */}
@@ -97,7 +110,7 @@ export function CouncilResponse({ state, onFollowUpClick, onAgentClick }: Counci
               <CouncilAgentCard
                 key={perspective.agent_id}
                 perspective={perspective}
-                visible={perspective.status !== 'loading' || state.status === 'agents_working'}
+                visible
                 onAgentClick={onAgentClick}
               />
             ))}
@@ -105,18 +118,23 @@ export function CouncilResponse({ state, onFollowUpClick, onAgentClick }: Counci
         )}
 
         {/* Synthesising indicator */}
-        {state.status === 'agents_working' && state.agentPerspectives.every(p => p.status === 'complete') && (
+        {state.status === 'synthesising' && (
           <div
             className="flex items-center font-body"
             style={{
-              gap: 6,
-              fontSize: 11,
-              color: 'var(--color-text-secondary)',
+              gap: 6, fontSize: 11, color: 'var(--color-text-secondary)',
               padding: '8px 16px',
             }}
           >
             <span style={{ color: 'var(--color-accent-500)' }}>✦</span>
             Synthesising perspectives...
+            <span
+              style={{
+                display: 'inline-block', width: 4, height: 4, borderRadius: '50%',
+                background: 'var(--color-accent-500)',
+                animation: 'councilDot 1s ease-in-out infinite',
+              }}
+            />
           </div>
         )}
 

@@ -266,11 +266,28 @@ export interface CouncilResponse {
   synthesis: CouncilSynthesis
 }
 
-export type CouncilQueryStatus = 'idle' | 'routing' | 'agents_working' | 'synthesising' | 'complete' | 'error'
+export interface AvailableAgent {
+  id: string
+  name: string
+  description: string | null
+  source_count: number
+}
+
+export type CouncilQueryStatus =
+  | 'idle'
+  | 'routing'
+  | 'awaiting_approval'
+  | 'agents_working'
+  | 'synthesising'
+  | 'complete'
+  | 'error'
 
 export interface CouncilQueryState {
   status: CouncilQueryStatus
   routing: CouncilRouting | null
+  availableAgents: AvailableAgent[]
+  selectedAgentIds: string[]
+  metaAnswer: string | null
   agentPerspectives: Array<CouncilAgentPerspective & { status: 'loading' | 'complete' | 'error' }>
   synthesis: (CouncilSynthesis & { status: 'waiting' | 'complete' }) | null
   error: string | null

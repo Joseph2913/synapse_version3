@@ -42,7 +42,7 @@ export function AskView() {
     setToolMode,
     setModelTier,
   } = useQueryComposer()
-  const { councilState, sendCouncilQuery, resetCouncil } = useCouncilQuery()
+  const { councilState, sendCouncilQuery, toggleAgent, approveAndAnalyse, skipAndAnalyse, resetCouncil } = useCouncilQuery()
   const [askMode, setAskMode] = useState<AskMode>('standard')
   const [councilQuery, setCouncilQuery] = useState<string>('')
   const [graphIsEmpty, setGraphIsEmpty] = useState(false)
@@ -391,6 +391,9 @@ export function AskView() {
             <CouncilResponse
               state={councilState}
               onFollowUpClick={handleCouncilFollowUp}
+              onToggleAgent={toggleAgent}
+              onApprove={approveAndAnalyse}
+              onSkip={skipAndAnalyse}
             />
 
             <div ref={scroll.bottomRef} style={{ height: 1 }} />
