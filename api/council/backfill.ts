@@ -653,10 +653,11 @@ ${siblings.map(s => `- ${s.name} (ID: ${s.id})\n  Themes: ${s.core_themes.slice(
 // ─── STEP 6: DETECT CROSS-DOMAIN SIGNALS ──────────────────────────────────────
 
 async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult> {
-  // Get all agents
+  // Get user_id from first agent
   const { data: agents, error: agErr } = await supabase
     .from('domain_agents')
-    .select('id, user_id');
+    .select('user_id')
+    .limit(1);
 
   if (agErr) return { step: '6_signals', success: false, detail: agErr.message };
   if (!agents || agents.length === 0) {
@@ -665,148 +666,60 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
 
   const userId = agents[0]!.user_id;
 
-  // Build a map: node_id → set of agent_ids
-  // We do this by joining domain_agent_sources → knowledge_nodes (via source_id)
-  // Fetch all agent-source mappings
-  const { data: agentSources, error: asErr } = await supabase
-    .from('domain_agent_sources')
-    .select('agent_id, source_id');
+  // Single RPC call — Postgres does all the joining server-side
+  const { data: crossEdges, error: rpcErr } = await supabase
+    .rpc('detect_cross_domain_signals', { p_user_id: userId });
 
-  if (asErr) return { step: '6_signals', success: false, detail: `Agent sources query: ${asErr.message}` };
-  if (!agentSources || agentSources.length === 0) {
-    return { step: '6_signals', success: true, detail: `No agent-source mappings found (agents: ${agents.length}, userId: ${userId})` };
+  if (rpcErr) {
+    return { step: '6_signals', success: false, detail: `RPC error: ${rpcErr.message}` };
   }
 
-  // Build source_id → agent_ids map
-  const sourceToAgents = new Map<string, Set<string>>();
-  for (const as of agentSources) {
-    const sid = as.source_id as string;
-    if (!sourceToAgents.has(sid)) sourceToAgents.set(sid, new Set());
-    sourceToAgents.get(sid)!.add(as.agent_id as string);
+  if (!crossEdges || crossEdges.length === 0) {
+    return { step: '6_signals', success: true, detail: '0 new cross-domain signals found' };
   }
 
-  const allSourceIds = Array.from(sourceToAgents.keys());
-
-  // Fetch all nodes that belong to agent sources, in batches of 500
-  // We need node_id → source_id mapping
-  const nodeToAgents = new Map<string, Set<string>>();
-  for (let i = 0; i < allSourceIds.length; i += 500) {
-    const batch = allSourceIds.slice(i, i + 500);
-    const { data: nodes } = await supabase
-      .from('knowledge_nodes')
-      .select('id, source_id')
-      .in('source_id', batch)
-      .eq('user_id', userId)
-      .range(0, 9999);
-
-    for (const node of nodes || []) {
-      const agents = sourceToAgents.get(node.source_id as string);
-      if (agents) {
-        if (!nodeToAgents.has(node.id)) nodeToAgents.set(node.id, new Set());
-        for (const agId of Array.from(agents)) {
-          nodeToAgents.get(node.id)!.add(agId);
-        }
-      }
-    }
-  }
-
-  // Now scan knowledge_edges to find cross-domain ones
-  // Fetch edges in batches where both source_node and target_node are in our map
-  const nodeIds = Array.from(nodeToAgents.keys());
-
-  // Check existing signals for idempotency
-  const { data: existingSignals } = await supabase
-    .from('agent_signals')
-    .select('source_agent_id, target_agent_id, bridge_edge_id');
-
-  const existingSignalKeys = new Set(
-    (existingSignals || []).map(s =>
-      `${s.source_agent_id}:${s.target_agent_id}:${s.bridge_edge_id}`
-    )
-  );
-
-  let signalsCreated = 0;
-  let edgesScanned = 0;
-  const signalBatch: Array<{
-    user_id: string;
+  // Build insert rows from RPC results
+  const signalRows = (crossEdges as Array<{
+    edge_id: string;
     source_agent_id: string;
     target_agent_id: string;
-    trigger_source_id: null;
-    bridge_entity_ids: string[];
-    bridge_edge_id: string;
-    reason: string;
-    status: string;
-    processing_result: string;
-  }> = [];
+    source_node_id: string;
+    target_node_id: string;
+    relation_type: string;
+  }>).map(e => ({
+    user_id: userId,
+    source_agent_id: e.source_agent_id,
+    target_agent_id: e.target_agent_id,
+    trigger_source_id: null,
+    bridge_entity_ids: [e.source_node_id, e.target_node_id],
+    bridge_edge_id: e.edge_id,
+    reason: `Cross-domain edge: ${e.relation_type}`,
+    status: 'acknowledged',
+    processing_result: 'acknowledge_only',
+  }));
 
-  // Process edges in batches — fetch edges where source_node_id is in our nodes
-  for (let i = 0; i < nodeIds.length; i += 1000) {
-    const batchNodeIds = nodeIds.slice(i, i + 1000);
-    const { data: edges } = await supabase
-      .from('knowledge_edges')
-      .select('id, source_node_id, target_node_id, relation_type')
-      .in('source_node_id', batchNodeIds)
-      .eq('user_id', userId)
-      .range(0, 9999);
+  // Bulk insert in chunks of 500
+  let signalsCreated = 0;
+  for (let i = 0; i < signalRows.length; i += 500) {
+    const chunk = signalRows.slice(i, i + 500);
+    const { error: insErr } = await supabase
+      .from('agent_signals')
+      .insert(chunk);
 
-    for (const edge of edges || []) {
-      edgesScanned++;
-      const sourceAgents = nodeToAgents.get(edge.source_node_id as string);
-      const targetAgents = nodeToAgents.get(edge.target_node_id as string);
-
-      // Skip if either node is unassigned (not in any agent's domain)
-      if (!sourceAgents || !targetAgents) continue;
-
-      // Find all unique cross-domain agent pairs
-      for (const sAgent of Array.from(sourceAgents)) {
-        for (const tAgent of Array.from(targetAgents)) {
-          // Skip same-agent edges
-          if (sAgent === tAgent) continue;
-
-          // Idempotency: skip if signal already exists
-          const key = `${sAgent}:${tAgent}:${edge.id}`;
-          if (existingSignalKeys.has(key)) continue;
-
-          signalBatch.push({
-            user_id: userId,
-            source_agent_id: sAgent,
-            target_agent_id: tAgent,
-            trigger_source_id: null,
-            bridge_entity_ids: [edge.source_node_id as string, edge.target_node_id as string],
-            bridge_edge_id: edge.id as string,
-            reason: `Cross-domain edge: ${edge.relation_type}`,
-            status: 'acknowledged',
-            processing_result: 'acknowledge_only',
-          });
-        }
-      }
+    if (insErr) {
+      return {
+        step: '6_signals',
+        success: false,
+        detail: `Insert failed at chunk ${i}: ${insErr.message}. ${signalsCreated} created before failure.`,
+      };
     }
-  }
-
-  // Bulk insert signals
-  if (signalBatch.length > 0) {
-    // Insert in chunks of 500 to avoid payload limits
-    for (let i = 0; i < signalBatch.length; i += 500) {
-      const chunk = signalBatch.slice(i, i + 500);
-      const { error: insErr } = await supabase
-        .from('agent_signals')
-        .insert(chunk);
-
-      if (insErr) {
-        return {
-          step: '6_signals',
-          success: false,
-          detail: `Insert failed at chunk ${i}: ${insErr.message}. ${signalsCreated} created before failure.`,
-        };
-      }
-      signalsCreated += chunk.length;
-    }
+    signalsCreated += chunk.length;
   }
 
   return {
     step: '6_signals',
     success: true,
-    detail: `${allSourceIds.length} source_ids, ${nodeIds.length} nodes mapped, ${edgesScanned} edges scanned, ${signalsCreated} signals created`,
+    detail: `${signalsCreated} cross-domain signals created`,
   };
 }
 
