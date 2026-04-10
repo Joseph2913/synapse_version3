@@ -674,7 +674,7 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
 
   if (asErr) return { step: '6_signals', success: false, detail: `Agent sources query: ${asErr.message}` };
   if (!agentSources || agentSources.length === 0) {
-    return { step: '6_signals', success: true, detail: 'No agent-source mappings' };
+    return { step: '6_signals', success: true, detail: `No agent-source mappings found (agents: ${agents.length}, userId: ${userId})` };
   }
 
   // Build source_id → agent_ids map
