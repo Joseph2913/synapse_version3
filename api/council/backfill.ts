@@ -583,7 +583,7 @@ async function step5_generateAwareness(supabase: SupabaseClient): Promise<StepRe
     return { step: '5_awareness', success: true, detail: 'No agents with expertise indexes' };
   }
 
-  // Single Gemini call with all agent summaries
+  // One Gemini call per agent — each produces only its own awareness register
   const agentSummaries = agents.map(a => {
     const exp = a.expertise_index as ExpertiseIndex;
     return {
@@ -594,60 +594,60 @@ async function step5_generateAwareness(supabase: SupabaseClient): Promise<StepRe
     };
   });
 
-  const systemPrompt = `You are an AI that generates awareness registers for a council of domain-specific advisors.
-Each advisor needs to know what the OTHER advisors cover, so it can recognise when incoming content might be relevant to a sibling domain.
+  const results = await runInBatches(agents, GEMINI_CONCURRENCY, async (agent) => {
+    const siblings = agentSummaries.filter(a => a.id !== agent.id);
+    const exp = agent.expertise_index as ExpertiseIndex;
 
-Given a list of advisors with their expertise summaries, produce one awareness register per advisor.
-Each register is a condensed map of what EVERY OTHER advisor knows, written from the perspective of the current advisor.
+    const systemPrompt = `You are an AI that generates an awareness register for a domain-specific advisor.
+This advisor needs to know what its SIBLING advisors cover, so it can recognise when incoming content might be relevant to another domain.
+
+Given this advisor's expertise and a list of sibling advisors, produce an awareness register — a condensed map of what each sibling knows, from this advisor's perspective.
 
 Output JSON:
 {
-  "registers": [
+  "awareness": [
     {
-      "agent_id": "uuid of the advisor this register is FOR",
-      "awareness": [
-        {
-          "sibling_agent_id": "uuid",
-          "sibling_name": "string",
-          "relevance_summary": "1-2 sentences on what this sibling covers that might overlap or complement this advisor's domain",
-          "watch_topics": ["topics from the sibling that this advisor should pay attention to"]
-        }
-      ]
+      "sibling_agent_id": "uuid",
+      "sibling_name": "string",
+      "relevance_summary": "1-2 sentences on what this sibling covers that might overlap or complement this advisor's domain",
+      "watch_topics": ["topics from the sibling that this advisor should pay attention to"]
     }
   ]
 }`;
 
-  const userContent = `Advisors in the council:
-${agentSummaries.map(a => `- ${a.name} (ID: ${a.id})\n  Summary: ${a.summary}\n  Themes: ${a.core_themes.join(', ')}`).join('\n\n')}`;
+    const userContent = `This advisor: ${agent.name}
+Summary: ${exp?.summary || ''}
+Themes: ${(exp?.core_themes || []).join(', ')}
 
-  try {
+Sibling advisors:
+${siblings.map(s => `- ${s.name} (ID: ${s.id})\n  Summary: ${s.summary}\n  Themes: ${s.core_themes.join(', ')}`).join('\n\n')}`;
+
     const result = await callGemini<{
-      registers: Array<{
-        agent_id: string;
-        awareness: Array<{
-          sibling_agent_id: string;
-          sibling_name: string;
-          relevance_summary: string;
-          watch_topics: string[];
-        }>;
+      awareness: Array<{
+        sibling_agent_id: string;
+        sibling_name: string;
+        relevance_summary: string;
+        watch_topics: string[];
       }>;
     }>(systemPrompt, userContent);
 
-    // Update each agent's awareness register
-    let updated = 0;
-    for (const reg of result.registers || []) {
-      const { error: upErr } = await supabase
-        .from('domain_agents')
-        .update({ awareness_register: reg.awareness })
-        .eq('id', reg.agent_id);
+    const { error: upErr } = await supabase
+      .from('domain_agents')
+      .update({ awareness_register: result.awareness })
+      .eq('id', agent.id);
 
-      if (!upErr) updated++;
-    }
+    if (upErr) throw new Error(`Update failed: ${upErr.message}`);
+    return 'ok';
+  });
 
-    return { step: '5_awareness', success: true, detail: `Updated ${updated}/${agents.length} awareness registers` };
-  } catch (err) {
-    return { step: '5_awareness', success: false, detail: String(err) };
-  }
+  const succeeded = results.filter(r => r.result === 'ok').length;
+  const failed = results.filter(r => r.error).length;
+
+  return {
+    step: '5_awareness',
+    success: failed === 0,
+    detail: `Updated ${succeeded}/${agents.length} awareness registers${failed > 0 ? ', ' + failed + ' failed' : ''}`,
+  };
 }
 
 // ─── STEP 6: DETECT CROSS-DOMAIN SIGNALS ──────────────────────────────────────
