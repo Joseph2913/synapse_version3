@@ -109,9 +109,9 @@ async function verifyUserAuth(
 
 // ─── GEMINI HELPER ─────────────────────────────────────────────────────────────
 
-async function callGemini<T>(systemPrompt: string, userContent: string, timeoutMs = 120000): Promise<T> {
+async function callGemini<T>(systemPrompt: string, userContent: string, timeoutMs = 120000, model = 'gemini-2.0-flash'): Promise<T> {
   const response = await fetch(
-    `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
