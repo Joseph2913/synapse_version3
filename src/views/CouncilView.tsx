@@ -1,5 +1,16 @@
-import { useState, useRef, useCallback } from 'react'
-import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, Globe, Landmark, Trophy, Dice5, Brain, HelpCircle, Zap, ArrowUpRight, Circle, Check, type LucideIcon } from 'lucide-react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, HelpCircle, Zap, ArrowUpRight, Circle, Check, type LucideIcon } from 'lucide-react'
+import {
+  fetchDomainAgents,
+  fetchAgentQuestions,
+  fetchAgentInsights,
+  fetchAgentGaps,
+  fetchAgentSignalsOut,
+  fetchGlobalSignals,
+  fetchGlobalInsights,
+  fetchAgentCounts,
+} from '../services/supabase'
+import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow } from '../types/database'
 
 // ── Design tokens (inline for mockup) ───────────────────────────────────────
 
@@ -107,29 +118,136 @@ interface AgentSignal {
   timestamp: string
 }
 
-// ── Sample Data ─────────────────────────────────────────────────────────────
+// ── Helpers to map DB → UI ──────────────────────────────────────────────────
 
-const ADVISORS: Advisor[] = [
-  { id: 'ai-upskilling', name: 'AI Upskilling', icon: Bot, iconBg: '#ede9fe', iconColor: '#7c3aed', description: 'Tracks developments in AI engineering, LLM capabilities, agent architectures, and practical AI implementation patterns.', reasoningStyle: 'Technical-analytical with emphasis on practical implementation over theory.', playlistName: 'AI Upskilling Playlist', videoCount: 46, entityCount: 1284, health: 'strong', updatedAgo: '2 hours ago', themes: [{ label: 'LLM Agents', color: ENTITY_COLORS.technology }, { label: 'RAG Pipelines', color: ENTITY_COLORS.concept }, { label: 'Prompt Engineering', color: ENTITY_COLORS.topic }], standingQuestions: 3, newInsights: 2, signalsOut: 3, gaps: 1, expertiseIndex: [{ area: 'LLM Agent Architectures', confidence: 0.92 }, { area: 'RAG Pipeline Design', confidence: 0.88 }, { area: 'Prompt Engineering', confidence: 0.85 }], weakAreas: ['Multimodal models', 'On-device inference'], coreThemes: ['Agent autonomy', 'Knowledge retrieval', 'Evaluation methods'], crossDomainBridges: [{ target: 'Philosophy', description: 'Agent autonomy ethics' }, { target: 'Second Brain', description: 'Knowledge graph as RAG substrate' }], linkedAnchors: ['Personal AI Infrastructure', 'Agent Reliability'], awarenessRegister: [{ agent: 'Geopolitics', summary: 'Tracking AI governance and US-China chip competition' }, { agent: 'Philosophy', summary: 'Epistemology of AI reasoning' }], questions: [{ id: 'q1', question: 'What are the failure modes when LLM agents are given long-horizon tasks with ambiguous success criteria?', type: 'gap_driven', status: 'open', age: '3 days', trigger: 'No sources cover agent failure taxonomy beyond simple retry logic' }, { id: 'q2', question: 'How does Karpathy\'s "wiki" approach compare with vector-based RAG for factual accuracy?', type: 'frontier', status: 'partially_addressed', age: '1 week', evidence: '2 sources partially address this' }, { id: 'q3', question: 'Can philosophical frameworks for epistemic humility improve agent self-assessment?', type: 'cross_domain', status: 'open', age: '5 days' }], insights: [{ id: 'i1', type: 'tension', claim: 'Sources disagree on whether autonomous agents should self-correct or defer to human review.', confidence: 0.82, sourceCount: 4, sourceAttribution: 'Karpathy Lecture #12, LangChain Webinar, Anthropic Safety Paper' }, { id: 'i2', type: 'novel_connection', claim: 'Karpathy\'s wiki-style knowledge maps directly onto Synapse\'s entity-relationship pipeline.', confidence: 0.76, sourceCount: 2, sourceAttribution: 'Karpathy Lecture #8 ↔ Synapse Architecture Notes' }], agentGaps: [{ id: 'g1', type: 'structural', severity: 'significant', topic: 'Agent reliability in production', description: 'No sources cover monitoring or failure recovery for deployed LLM agents.', suggestion: 'Seek content on LLMOps or production post-mortems.' }], signals: [{ id: 's1', target: 'Philosophy', reason: 'Bridge entity "epistemic humility"', status: 'pending', timestamp: '2 hours ago' }, { id: 's2', target: 'Second Brain', reason: 'Karpathy wiki ↔ knowledge graph methodology', status: 'processed', timestamp: '1 day ago' }, { id: 's3', target: 'Geopolitics', reason: 'US AI executive order → open-source model access', status: 'pending', timestamp: '3 hours ago' }] },
-  { id: 'geopolitics', name: 'Geopolitics', icon: Globe, iconBg: '#dbeafe', iconColor: '#2563eb', description: 'Monitors geopolitical dynamics, great power competition, and economic statecraft.', reasoningStyle: 'Multi-stakeholder analysis with emphasis on second-order effects.', playlistName: 'Geopolitics Playlist', videoCount: 9, entityCount: 312, health: 'growing', updatedAgo: '1 day ago', themes: [{ label: 'US-China Relations', color: ENTITY_COLORS.topic }, { label: 'Chip Wars', color: ENTITY_COLORS.concept }], standingQuestions: 2, newInsights: 1, signalsOut: 1, gaps: 2 },
-  { id: 'philosophy', name: 'Philosophy', icon: Landmark, iconBg: '#fce7f3', iconColor: '#db2777', description: 'Explores epistemology, ethics, philosophy of mind, and reasoning frameworks.', reasoningStyle: 'Socratic questioning, dialectical analysis.', playlistName: 'Philosophy Playlist', videoCount: 4, entityCount: 89, health: 'thin', updatedAgo: '5 days ago', themes: [{ label: 'Epistemology', color: ENTITY_COLORS.concept }, { label: 'Ethics', color: ENTITY_COLORS.topic }], standingQuestions: 1, newInsights: 0, signalsOut: 0, gaps: 3 },
-  { id: 'sports', name: 'Sports Analytics', icon: Trophy, iconBg: '#d1fae5', iconColor: '#059669', description: 'Tracks sports performance analysis and statistical modelling in athletics.', reasoningStyle: 'Data-driven with statistical rigour.', playlistName: 'Sports Playlist', videoCount: 11, entityCount: 198, health: 'growing', updatedAgo: '3 days ago', themes: [{ label: 'Expected Goals', color: ENTITY_COLORS.concept }, { label: 'Player Tracking', color: ENTITY_COLORS.technology }], standingQuestions: 1, newInsights: 1, signalsOut: 0, gaps: 1 },
-  { id: 'betting', name: 'Betting Markets', icon: Dice5, iconBg: '#fef3c7', iconColor: '#b45309', description: 'Analyses prediction markets, betting strategy, and odds modelling.', reasoningStyle: 'Probabilistic reasoning, expected value calculations.', playlistName: 'Betting Playlist', videoCount: 2, entityCount: 34, health: 'thin', updatedAgo: '2 weeks ago', themes: [{ label: 'Prediction Markets', color: ENTITY_COLORS.concept }], standingQuestions: 0, newInsights: 0, signalsOut: 0, gaps: 2 },
-  { id: 'second-brain', name: 'Second Brain', icon: Brain, iconBg: '#ede9fe', iconColor: '#7c3aed', description: 'Explores personal knowledge management, Zettelkasten methodology, and augmented cognition.', reasoningStyle: 'Systems thinking, emphasis on interconnection and emergence.', playlistName: 'Second Brain Playlist', videoCount: 15, entityCount: 421, health: 'strong', updatedAgo: '6 hours ago', themes: [{ label: 'Zettelkasten', color: ENTITY_COLORS.concept }, { label: 'Knowledge Graphs', color: ENTITY_COLORS.technology }, { label: 'PKM', color: ENTITY_COLORS.topic }], standingQuestions: 2, newInsights: 1, signalsOut: 1, gaps: 0 },
+function timeAgo(dateStr: string | null): string {
+  if (!dateStr) return 'never'
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  return `${weeks}w ago`
+}
+
+const THEME_COLORS = [
+  ENTITY_COLORS.topic, ENTITY_COLORS.concept, ENTITY_COLORS.technology,
+  ENTITY_COLORS.person, ENTITY_COLORS.organization, ENTITY_COLORS.insight,
+  ENTITY_COLORS.product, ENTITY_COLORS.action,
 ]
 
-const GLOBAL_SIGNALS = [
-  { source: 'AI Upskilling', target: 'Philosophy', reason: 'Epistemic humility ↔ confidence calibration', status: 'pending' },
-  { source: 'AI Upskilling', target: 'Second Brain', reason: 'Karpathy wiki ↔ knowledge graph methodology', status: 'processed' },
-  { source: 'AI Upskilling', target: 'Geopolitics', reason: 'AI regulation ↔ open-source model access', status: 'pending' },
-  { source: 'Sports Analytics', target: 'Betting Markets', reason: 'xG models ↔ odds calibration', status: 'pending' },
-  { source: 'Second Brain', target: 'AI Upskilling', reason: 'RAG substrate ↔ personal knowledge infra', status: 'processed' },
-]
+function mapAgentToAdvisor(agent: DomainAgent, counts: { standingQuestions: number; insights: number; signalsOut: number; gaps: number }): Advisor {
+  const exp = agent.expertise_index as {
+    summary?: string
+    core_themes?: string[]
+    reasoning_approach?: string
+    strongest_areas?: Array<{ topic: string; source_count: number; key_entities: string[] }>
+    weakest_areas?: Array<{ topic: string; reason: string }>
+    cross_domain_bridges?: Array<{ target_agent_name: string; bridge_description: string }>
+  } | null
 
-const GLOBAL_INSIGHTS = [
-  { type: 'tension', agent: 'AI Upskilling', claim: 'Autonomous agents vs. human-in-the-loop — sources disagree on safety boundaries' },
-  { type: 'convergence', agent: 'Second Brain', claim: 'Zettelkasten atomic notes converge with LLM chunk-level retrieval' },
-]
+  const awareness = (agent.awareness_register as unknown) as Array<{
+    sibling_name: string
+    relevance_summary: string
+  }> | null
+
+  const themes = (exp?.core_themes ?? []).slice(0, 5).map((t, i) => ({
+    label: t,
+    color: THEME_COLORS[i % THEME_COLORS.length]!,
+  }))
+
+  const expertiseIndex = (exp?.strongest_areas ?? []).map(a => ({
+    area: a.topic,
+    confidence: Math.min(1, (a.source_count || 1) / Math.max(agent.source_count, 1)),
+  }))
+
+  const weakAreas = (exp?.weakest_areas ?? []).map(w => w.topic)
+  const coreThemes = exp?.core_themes ?? []
+  const crossDomainBridges = (exp?.cross_domain_bridges ?? []).map(b => ({
+    target: b.target_agent_name,
+    description: b.bridge_description,
+  }))
+
+  const awarenessRegister = (awareness ?? []).map(a => ({
+    agent: a.sibling_name,
+    summary: a.relevance_summary,
+  }))
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    icon: Bot,
+    iconBg: '#ede9fe',
+    iconColor: '#7c3aed',
+    description: agent.description ?? exp?.summary ?? '',
+    reasoningStyle: agent.reasoning_style ?? exp?.reasoning_approach ?? '',
+    playlistName: agent.name,
+    videoCount: agent.source_count,
+    entityCount: agent.entity_count,
+    health: agent.health_status,
+    updatedAgo: timeAgo(agent.updated_at),
+    themes,
+    standingQuestions: counts.standingQuestions,
+    newInsights: counts.insights,
+    signalsOut: counts.signalsOut,
+    gaps: counts.gaps,
+    expertiseIndex: expertiseIndex.length > 0 ? expertiseIndex : undefined,
+    weakAreas: weakAreas.length > 0 ? weakAreas : undefined,
+    coreThemes: coreThemes.length > 0 ? coreThemes : undefined,
+    crossDomainBridges: crossDomainBridges.length > 0 ? crossDomainBridges : undefined,
+    linkedAnchors: undefined,
+    awarenessRegister: awarenessRegister.length > 0 ? awarenessRegister : undefined,
+  }
+}
+
+function mapQuestion(q: AgentStandingQuestion): StandingQuestion {
+  return {
+    id: q.id,
+    question: q.question,
+    type: q.question_type,
+    status: q.status,
+    age: timeAgo(q.generated_at),
+    trigger: q.trigger_description ?? undefined,
+    evidence: q.addressing_evidence ?? undefined,
+  }
+}
+
+function mapInsight(ins: AgentInsightRow): AgentInsight {
+  return {
+    id: ins.id,
+    type: ins.insight_type,
+    claim: ins.claim,
+    confidence: ins.confidence ?? 0,
+    sourceCount: ins.related_source_ids?.length ?? 0,
+    sourceAttribution: ins.evidence_summary ?? '',
+  }
+}
+
+function mapGap(g: AgentGapRow): AgentGap {
+  return {
+    id: g.id,
+    type: g.gap_type,
+    severity: g.severity,
+    topic: g.topic,
+    description: g.description ?? '',
+    suggestion: g.content_suggestion ?? '',
+  }
+}
+
+function mapSignal(s: AgentSignalRow, agentNameMap: Map<string, string>): AgentSignal {
+  return {
+    id: s.id,
+    target: agentNameMap.get(s.target_agent_id) ?? 'Unknown',
+    reason: s.reason,
+    status: s.status === 'pending' ? 'pending' : 'processed',
+    timestamp: timeAgo(s.created_at),
+  }
+}
+
+// (Data is fetched from Supabase — see CouncilView component below)
 
 // ── Section Label Component ─────────────────────────────────────────────────
 
@@ -941,15 +1059,96 @@ const MIN_LEFT_PCT = 30
 const MAX_LEFT_PCT = 80
 
 export function CouncilView() {
+  const [advisors, setAdvisors] = useState<Advisor[]>([])
+  const [loading, setLoading] = useState(true)
   const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null)
-  const selectedAdvisor = ADVISORS.find((a) => a.id === selectedAdvisorId) ?? null
+  const [agentNameMap, setAgentNameMap] = useState<Map<string, string>>(new Map())
+  const [globalSignals, setGlobalSignals] = useState<Array<{ source: string; target: string; reason: string; status: string }>>([])
+  const [globalInsights, setGlobalInsights] = useState<Array<{ type: string; agent: string; claim: string }>>([])
+
+  // Load all advisors from DB
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const agents = await fetchDomainAgents()
+        const nameMap = new Map(agents.map(a => [a.id, a.name]))
+        if (cancelled) return
+        setAgentNameMap(nameMap)
+
+        // Fetch counts for all agents in parallel
+        const countsArr = await Promise.all(agents.map(a => fetchAgentCounts(a.id)))
+        if (cancelled) return
+
+        const mapped = agents.map((a, i) => mapAgentToAdvisor(a, countsArr[i]!))
+        setAdvisors(mapped)
+
+        // Fetch global signals + insights
+        const [sigData, insData] = await Promise.all([fetchGlobalSignals(10), fetchGlobalInsights(10)])
+        if (cancelled) return
+
+        setGlobalSignals(sigData.map(s => ({
+          source: nameMap.get(s.source_agent_id) ?? 'Unknown',
+          target: nameMap.get(s.target_agent_id) ?? 'Unknown',
+          reason: s.reason,
+          status: s.status === 'pending' ? 'pending' : 'processed',
+        })))
+        setGlobalInsights(insData.map(ins => ({
+          type: ins.insight_type,
+          agent: nameMap.get(ins.agent_id) ?? 'Unknown',
+          claim: ins.claim,
+        })))
+      } catch (err) {
+        console.error('Failed to load council data:', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  // Load detail data when an advisor is selected
+  const selectedAdvisor = advisors.find((a) => a.id === selectedAdvisorId) ?? null
+
+  useEffect(() => {
+    if (!selectedAdvisorId) return
+    const agentId = selectedAdvisorId
+    let cancelled = false
+    async function loadDetail() {
+      try {
+        const [questions, insights, gaps, signals] = await Promise.all([
+          fetchAgentQuestions(agentId),
+          fetchAgentInsights(agentId),
+          fetchAgentGaps(agentId),
+          fetchAgentSignalsOut(agentId),
+        ])
+        if (cancelled) return
+
+        setAdvisors(prev => prev.map(a => {
+          if (a.id !== agentId) return a
+          return {
+            ...a,
+            questions: questions.map(mapQuestion),
+            insights: insights.map(mapInsight),
+            agentGaps: gaps.map(mapGap),
+            signals: signals.map(s => mapSignal(s, agentNameMap)),
+          }
+        }))
+      } catch (err) {
+        console.error('Failed to load advisor detail:', err)
+      }
+    }
+    loadDetail()
+    return () => { cancelled = true }
+  }, [selectedAdvisorId, agentNameMap])
 
   // List filters
   const [searchTerm, setSearchTerm] = useState('')
   const [healthFilter, setHealthFilter] = useState<string>('all')
   const [toggleFilter, setToggleFilter] = useState<'all' | 'strong' | 'signals'>('all')
 
-  const filtered = ADVISORS.filter((a) => {
+  const filtered = advisors.filter((a) => {
     if (searchTerm && !a.name.toLowerCase().includes(searchTerm.toLowerCase())) return false
     if (healthFilter !== 'all' && a.health !== healthFilter) return false
     if (toggleFilter === 'strong' && !['strong', 'growing'].includes(a.health)) return false
@@ -988,6 +1187,16 @@ export function CouncilView() {
     },
     [leftWidthPct],
   )
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="font-body" style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+          Loading council data...
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -1108,7 +1317,7 @@ export function CouncilView() {
 
             {/* Spacer + summary */}
             <span className="ml-auto font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-              {ADVISORS.length} advisors · {ADVISORS.reduce((s, a) => s + a.videoCount, 0)} videos
+              {advisors.length} advisors · {advisors.reduce((s, a) => s + a.videoCount, 0)} videos
             </span>
           </>
         )}
@@ -1164,7 +1373,7 @@ export function CouncilView() {
           {selectedAdvisor ? (
             <AdvisorDetailRight advisor={selectedAdvisor} />
           ) : (
-            <CouncilListRight advisors={ADVISORS} globalSignals={GLOBAL_SIGNALS} globalInsights={GLOBAL_INSIGHTS} />
+            <CouncilListRight advisors={advisors} globalSignals={globalSignals} globalInsights={globalInsights} />
           )}
         </div>
       </div>
