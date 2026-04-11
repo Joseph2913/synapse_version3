@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, type ReactNode } from 'react'
 import {
-  User, Anchor, Zap, Calendar, Link, X, Plus, Check, Loader2,
+  User, Anchor, Zap, Calendar, Link, X, Plus, Check, Loader2, LogOut,
   type LucideIcon,
 } from 'lucide-react'
+import { useAuth } from '../../hooks/useAuth'
 import { useSettings } from '../../hooks/useSettings'
 import { useAutoResize } from '../../hooks/useAutoResize'
 import { EXTRACTION_MODES, ANCHOR_EMPHASIS_LEVELS } from '../../config/extractionModes'
@@ -648,6 +649,8 @@ interface SettingsModalProps {
 
 export function SettingsModal({ onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState('profile')
+  const { signOut } = useAuth()
+  const [signingOut, setSigningOut] = useState(false)
 
   // Esc to close
   useEffect(() => {
@@ -725,6 +728,39 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                 </button>
               )
             })}
+          </div>
+
+          <div style={{ marginTop: 'auto', padding: '0 2px' }}>
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  setSigningOut(true)
+                  await signOut()
+                }}
+                disabled={signingOut}
+                className="flex items-center gap-2.5 w-full border-none cursor-pointer"
+                style={{
+                  padding: '9px 12px',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  fontFamily: 'var(--font-body)',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: '#dc2626',
+                  transition: 'background 0.15s ease',
+                  opacity: signingOut ? 0.5 : 1,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#fef2f2' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+              >
+                {signingOut
+                  ? <Loader2 size={15} strokeWidth={1.8} style={{ color: '#dc2626', animation: 'spin 1s linear infinite' }} />
+                  : <LogOut size={15} strokeWidth={1.8} style={{ color: '#dc2626' }} />
+                }
+                {signingOut ? 'Signing out...' : 'Sign out'}
+              </button>
+            </div>
           </div>
         </div>
 
