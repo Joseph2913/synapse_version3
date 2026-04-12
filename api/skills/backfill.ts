@@ -1073,6 +1073,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // ─── Check for unassigned skill clusters → propose new agents (fire-and-forget)
+
+  if (!dryRun && (created > 0) && targetUserId) {
+    try {
+      const appUrl = process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3000';
+
+      fetch(`${appUrl}/api/council/propose-agents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${CRON_SECRET ?? ''}`,
+        },
+        body: JSON.stringify({ minClusterSize: 3 }),
+      }).catch(err => {
+        console.warn('[skills/backfill] Agent proposal check failed (non-fatal):', err);
+      });
+    } catch {
+      // Non-fatal
+    }
+  }
+
   // ─── Count remaining ────────────────────────────────────────────────────────
 
   let remainingQuery = supabase
