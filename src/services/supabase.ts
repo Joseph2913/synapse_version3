@@ -2868,7 +2868,7 @@ export async function fetchGlobalSignals(limit = 10, actionedOnly = false): Prom
     .select('*')
 
   if (actionedOnly) {
-    query = query.in('status', ['extracted', 'acknowledged', 'processing'])
+    query = query.in('processing_result', ['targeted_extraction', 'full_ingestion'])
   }
 
   const { data, error } = await query

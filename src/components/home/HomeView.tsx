@@ -163,9 +163,6 @@ function InsightRow({ insight, isLast }: { insight: AgentInsightRow; isLast: boo
         className="flex w-full text-left bg-transparent cursor-pointer border-none"
         style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
       >
-        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-accent-50)' }}>
-          <Zap size={15} style={{ color: 'var(--color-accent-500)' }} />
-        </div>
         <div className="flex-1 min-w-0">
           <div className="font-display text-text-primary" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.4, marginBottom: 3, display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
             {insight.claim}
@@ -212,12 +209,19 @@ function SignalRow({ signal, isLast }: { signal: AgentSignalRow & { source_name?
         className="flex w-full text-left bg-transparent cursor-pointer border-none"
         style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
       >
-        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: '#fef2f2' }}>
-          <ArrowUpRight size={15} style={{ color: '#ef4444' }} />
+        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: '50%', border: '2px solid var(--color-accent-500)', background: 'var(--color-accent-50)' }}>
+          <ArrowUpRight size={15} style={{ color: 'var(--color-accent-500)' }} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-body text-text-primary" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.4, marginBottom: 3 }}>
-            {signal.source_name} → {signal.target_name}
+          <div className="flex items-center" style={{ gap: 6, marginBottom: 3 }}>
+            <span className="font-body text-text-primary" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.4 }}>
+              {signal.source_name} → {signal.target_name}
+            </span>
+            {(signal.extracted_entity_ids?.length ?? 0) > 0 && (
+              <span className="font-body" style={{ fontSize: 10, fontWeight: 600, color: '#15803d', background: '#dcfce7', padding: '1px 6px', borderRadius: 10 }}>
+                {signal.extracted_entity_ids.length} extracted
+              </span>
+            )}
           </div>
           <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
             {signal.reason}
