@@ -61,7 +61,7 @@
     },
     {
       "path": "/api/council/cron",
-      "schedule": "0 2 * * *"
+      "schedule": "*/30 * * * *"
     }
   ]
 }
