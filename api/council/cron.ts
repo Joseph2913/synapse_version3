@@ -255,33 +255,68 @@ async function phase1_processSignals(supabase: SupabaseClient): Promise<PhaseRes
 
     const sourceMap = new Map(sourceMeta.map(s => [s.id, s]));
 
-    // Get bridge entity labels
+    // Get bridge entity details (label, type, description) for quality assessment
     const allBridgeEntityIds = agentSignals.flatMap(s => s.bridge_entity_ids ?? []);
     let entityMap = new Map<string, string>();
+    let entityDetailMap = new Map<string, { label: string; entity_type: string; description: string | null }>();
     if (allBridgeEntityIds.length > 0) {
       const { data: entities } = await supabase
         .from('knowledge_nodes')
-        .select('id, label')
+        .select('id, label, entity_type, description')
         .in('id', Array.from(new Set(allBridgeEntityIds)).slice(0, 100));
-      entityMap = new Map((entities ?? []).map(e => [(e as { id: string; label: string }).id, (e as { id: string; label: string }).label]));
+      for (const e of (entities ?? []) as Array<{ id: string; label: string; entity_type: string; description: string | null }>) {
+        entityMap.set(e.id, e.label);
+        entityDetailMap.set(e.id, { label: e.label, entity_type: e.entity_type, description: e.description });
+      }
     }
 
-    // Build the signal descriptions for the prompt
+    // Compute quality tier for each signal based on bridge entity specificity
+    const GENERIC_TYPES = new Set(['Topic', 'Concept', 'Document', 'Event', 'Location']);
+    const GENERIC_LABELS = new Set(['AI', 'Technology', 'Document', 'documents', 'API', 'APIs']);
+
+    function getSignalQuality(bridgeEntityIds: string[]): 'high' | 'medium' | 'low' {
+      const details = bridgeEntityIds.map(id => entityDetailMap.get(id)).filter(Boolean);
+      if (details.length < 2) return 'low';
+
+      let specificCount = 0;
+      for (const d of details) {
+        if (!d) continue;
+        const isGenericType = GENERIC_TYPES.has(d.entity_type);
+        const isGenericLabel = GENERIC_LABELS.has(d.label);
+        const hasDescription = !!d.description && d.description.length > 10;
+        if (!isGenericType && !isGenericLabel && hasDescription) specificCount++;
+        else if (hasDescription && !isGenericLabel) specificCount += 0.5;
+      }
+
+      if (specificCount >= 2) return 'high';
+      if (specificCount >= 1) return 'medium';
+      return 'low';
+    }
+
+    // Build the signal descriptions for the prompt, including quality tier
     const signalDescriptions = agentSignals.map(sig => {
       const source = sig.trigger_source_id ? sourceMap.get(sig.trigger_source_id) : null;
-      const bridgeLabels = (sig.bridge_entity_ids ?? []).map(id => entityMap.get(id) ?? id).join(', ');
-      return `- Signal ${sig.id}: Bridge entities [${bridgeLabels}]. Reason: ${sig.reason}. Source: "${source?.title ?? 'unknown'}" (${source?.content?.slice(0, 500) ?? 'no content'})`;
+      const bridgeDetails = (sig.bridge_entity_ids ?? []).map(id => {
+        const d = entityDetailMap.get(id);
+        return d ? `${d.label} (${d.entity_type}${d.description ? ': ' + d.description.slice(0, 80) : ''})` : id;
+      }).join(' ↔ ');
+      const quality = getSignalQuality(sig.bridge_entity_ids ?? []);
+      const qualityLabel = quality === 'high' ? '⬆ HIGH QUALITY' : quality === 'medium' ? '➡ MEDIUM QUALITY' : '⬇ LOW QUALITY';
+      return `- Signal ${sig.id} [${qualityLabel}]: Bridge: [${bridgeDetails}]. Reason: ${sig.reason}. Source: "${source?.title ?? 'unknown'}" (${source?.content?.slice(0, 500) ?? 'no content'})`;
     }).join('\n');
 
     // One Gemini call for all signals to this agent
-    const systemPrompt = `You are a domain advisor deciding how to handle cross-domain signals.
+    const systemPrompt = `You are a domain advisor deciding how to handle cross-domain signals from other domain experts.
 
 For each signal, decide:
-- "acknowledge_only": The connection is noted but no new extraction is needed. The bridge is interesting but doesn't warrant pulling content into your domain.
-- "targeted_extraction": The trigger source has specific relevant content. Read the relevant chunks through your domain lens and extract entities. Use this when a few specific ideas are worth importing.
-- "full_ingestion": The entire trigger source is deeply relevant to your domain. Treat the whole source as domain content.
+- "acknowledge_only": The connection is noted but no new extraction is needed.
+- "targeted_extraction": The trigger source has specific relevant content worth extracting through your domain lens.
+- "full_ingestion": The entire trigger source is deeply relevant — treat it as domain content.
 
-Be selective — most signals should be acknowledge_only. Only choose targeted or full when the content genuinely enriches your domain.
+Each signal has a quality indicator:
+- ⬆ HIGH QUALITY: Both bridge entities are specific, named concepts with descriptions. These are strong cross-domain connections. Lean towards targeted_extraction if the trigger source content offers a perspective your domain doesn't already have.
+- ➡ MEDIUM QUALITY: One bridge entity is specific, one is generic. Choose targeted_extraction only if the evidence text demonstrates a substantive insight beyond a shared mention.
+- ⬇ LOW QUALITY: Both bridge entities are generic types (e.g. "AI", "Technology", "Document"). These are usually vocabulary overlaps, not real insights. Prefer acknowledge_only unless the evidence clearly contains a novel cross-domain finding.
 
 Return JSON:
 {

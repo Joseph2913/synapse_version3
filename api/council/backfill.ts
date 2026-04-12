@@ -678,25 +678,54 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
     return { step: '6_signals', success: true, detail: '0 new cross-domain signals found' };
   }
 
-  // Build insert rows from RPC results
-  const signalRows = (crossEdges as Array<{
+  const typedEdges = crossEdges as Array<{
     edge_id: string;
     source_agent_id: string;
     target_agent_id: string;
     source_node_id: string;
     target_node_id: string;
     relation_type: string;
-  }>).map(e => ({
-    user_id: userId,
-    source_agent_id: e.source_agent_id,
-    target_agent_id: e.target_agent_id,
-    trigger_source_id: null,
-    bridge_entity_ids: [e.source_node_id, e.target_node_id],
-    bridge_edge_id: e.edge_id,
-    reason: `Cross-domain edge: ${e.relation_type}`,
-    status: 'acknowledged',
-    processing_result: 'acknowledge_only',
-  }));
+  }>;
+
+  // Resolve trigger_source_id for each signal by looking up the source_node's source_id
+  const allNodeIds = new Set<string>();
+  for (const e of typedEdges) {
+    allNodeIds.add(e.source_node_id);
+    allNodeIds.add(e.target_node_id);
+  }
+
+  const nodeSourceMap = new Map<string, string>();
+  const nodeIdArr = [...allNodeIds];
+  for (let i = 0; i < nodeIdArr.length; i += 200) {
+    const chunk = nodeIdArr.slice(i, i + 200);
+    const { data: nodes } = await supabase
+      .from('knowledge_nodes')
+      .select('id, source_id')
+      .in('id', chunk);
+    for (const n of (nodes ?? []) as Array<{ id: string; source_id: string | null }>) {
+      if (n.source_id) nodeSourceMap.set(n.id, n.source_id);
+    }
+  }
+
+  // Build insert rows — now with trigger_source_id resolved from the source agent's node
+  // Also set status to 'pending' so the cron can evaluate them with the trigger source content
+  const signalRows = typedEdges.map(e => {
+    // Use the source agent's node to find the trigger source
+    const triggerSourceId = nodeSourceMap.get(e.source_node_id) || nodeSourceMap.get(e.target_node_id) || null;
+    return {
+      user_id: userId,
+      source_agent_id: e.source_agent_id,
+      target_agent_id: e.target_agent_id,
+      trigger_source_id: triggerSourceId,
+      bridge_entity_ids: [e.source_node_id, e.target_node_id],
+      bridge_edge_id: e.edge_id,
+      reason: `Cross-domain edge: ${e.relation_type}`,
+      status: triggerSourceId ? 'pending' : 'acknowledged',
+      processing_result: triggerSourceId ? null : 'acknowledge_only',
+    };
+  });
+
+  const withSource = signalRows.filter(r => r.trigger_source_id !== null).length;
 
   // Bulk insert in chunks of 500
   let signalsCreated = 0;
@@ -719,7 +748,73 @@ async function step6_detectSignals(supabase: SupabaseClient): Promise<StepResult
   return {
     step: '6_signals',
     success: true,
-    detail: `${signalsCreated} cross-domain signals created`,
+    detail: `${signalsCreated} cross-domain signals created (${withSource} with trigger sources, set as pending)`,
+  };
+}
+
+// ─── STEP 6b: BACKFILL TRIGGER SOURCES ON EXISTING NULL SIGNALS ──────────────
+
+async function step6b_backfillSignalSources(supabase: SupabaseClient): Promise<StepResult> {
+  // Find signals with null trigger_source_id
+  const { data: nullSignals, error: fetchErr } = await supabase
+    .from('agent_signals')
+    .select('id, bridge_entity_ids')
+    .is('trigger_source_id', null)
+    .limit(500);
+
+  if (fetchErr) return { step: '6b_backfill_sources', success: false, detail: fetchErr.message };
+  if (!nullSignals || nullSignals.length === 0) {
+    return { step: '6b_backfill_sources', success: true, detail: 'No signals need source backfill' };
+  }
+
+  // Collect all bridge entity IDs
+  const allEntityIds = new Set<string>();
+  for (const s of nullSignals as Array<{ id: string; bridge_entity_ids: string[] }>) {
+    for (const eid of (s.bridge_entity_ids || [])) allEntityIds.add(eid);
+  }
+
+  // Resolve entity → source_id
+  const entitySourceMap = new Map<string, string>();
+  const eidArr = [...allEntityIds];
+  for (let i = 0; i < eidArr.length; i += 200) {
+    const chunk = eidArr.slice(i, i + 200);
+    const { data: nodes } = await supabase
+      .from('knowledge_nodes')
+      .select('id, source_id')
+      .in('id', chunk);
+    for (const n of (nodes ?? []) as Array<{ id: string; source_id: string | null }>) {
+      if (n.source_id) entitySourceMap.set(n.id, n.source_id);
+    }
+  }
+
+  // Update each signal with its resolved trigger_source_id
+  let updated = 0;
+  for (const s of nullSignals as Array<{ id: string; bridge_entity_ids: string[] }>) {
+    let triggerSourceId: string | null = null;
+    for (const eid of (s.bridge_entity_ids || [])) {
+      const sid = entitySourceMap.get(eid);
+      if (sid) { triggerSourceId = sid; break; }
+    }
+    if (!triggerSourceId) continue;
+
+    const { error: upErr } = await supabase
+      .from('agent_signals')
+      .update({
+        trigger_source_id: triggerSourceId,
+        // Re-open for evaluation if it was previously auto-acknowledged
+        status: 'pending',
+        processing_result: null,
+        processed_at: null,
+      })
+      .eq('id', s.id);
+
+    if (!upErr) updated++;
+  }
+
+  return {
+    step: '6b_backfill_sources',
+    success: true,
+    detail: `${updated} of ${nullSignals.length} signals backfilled with trigger sources and re-opened for evaluation`,
   };
 }
 
@@ -935,8 +1030,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     { num: 4, fn: step4_generateQuestionsAndGaps },
     { num: 5, fn: step5_generateAwareness },
     { num: 6, fn: step6_detectSignals },
-    { num: 7, fn: step7_generateInsights },
-    { num: 8, fn: step8_updateCountsAndHealth },
+    { num: 7, fn: step6b_backfillSignalSources },
+    { num: 8, fn: step7_generateInsights },
+    { num: 9, fn: step8_updateCountsAndHealth },
   ];
 
   const supabase = getSupabase();
