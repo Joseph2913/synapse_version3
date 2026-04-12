@@ -404,17 +404,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // ── Link meeting sources to meeting domain agent ──────────────────────
         if (sourceType === 'Meeting' && sourceId) {
           try {
-            const { data: meetingAgents } = await supabase
-              .from('domain_agents')
-              .select('id')
+            // Resolve via Microsoft integration → domain_agent_id
+            let meetingAgentId: string | null = null;
+
+            const { data: msIntegrations } = await supabase
+              .from('user_integrations')
+              .select('domain_agent_id')
               .eq('user_id', item.user_id)
-              .is('playlist_id', null)
-              .eq('is_active', true)
+              .eq('integration_slug', 'microsoft')
+              .not('domain_agent_id', 'is', null)
               .limit(1);
 
-            if (meetingAgents && meetingAgents.length > 0) {
-              const meetingAgentId = (meetingAgents[0] as { id: string }).id;
+            meetingAgentId = (msIntegrations?.[0] as { domain_agent_id: string } | undefined)?.domain_agent_id ?? null;
 
+            // Fallback: any meeting agent for this user
+            if (!meetingAgentId) {
+              const { data: agents } = await supabase
+                .from('domain_agents')
+                .select('id')
+                .eq('user_id', item.user_id)
+                .not('integration_id', 'is', null)
+                .eq('is_active', true)
+                .limit(1);
+              meetingAgentId = (agents?.[0] as { id: string } | undefined)?.id ?? null;
+            }
+
+            if (meetingAgentId) {
               await supabase
                 .from('domain_agent_sources')
                 .upsert({

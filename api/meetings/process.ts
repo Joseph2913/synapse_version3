@@ -724,23 +724,37 @@ Return an empty array if no genuine cross-source connections exist.`;
     }
 
     // ── LINK TO MEETING DOMAIN AGENT (fire-and-forget) ───────────────────────
-    // Find the user's meeting domain agent (playlist_id IS NULL, name matches meeting pattern)
-    // and create a source association so the agent ingests this meeting.
+    // Resolve the meeting agent via integration_id in the source metadata,
+    // falling back to any integration-linked agent for this user.
     try {
-      const { data: meetingAgents } = await supabase
-        .from('domain_agents')
-        .select('id')
-        .eq('user_id', meeting.user_id)
-        .is('playlist_id', null)
-        .eq('is_active', true)
-        .limit(5);
+      const meetingMeta = meeting.metadata as Record<string, unknown> | null;
+      const integrationId = meetingMeta?.integration_id as string | undefined;
 
-      // Find the meeting agent — it's the one without a playlist_id
-      // In the future we could add a `source_type_filter` column to domain_agents,
-      // but for now playlist_id=null agents are meeting/non-playlist agents
-      if (meetingAgents && meetingAgents.length > 0) {
-        const meetingAgentId = meetingAgents[0]!.id;
+      let meetingAgentId: string | null = null;
 
+      if (integrationId) {
+        // Resolve via integration → domain_agent_id
+        const { data: integration } = await supabase
+          .from('user_integrations')
+          .select('domain_agent_id')
+          .eq('id', integrationId)
+          .maybeSingle();
+        meetingAgentId = (integration as { domain_agent_id: string | null } | null)?.domain_agent_id ?? null;
+      }
+
+      // Fallback: find any meeting agent (integration_id IS NOT NULL) for this user
+      if (!meetingAgentId) {
+        const { data: agents } = await supabase
+          .from('domain_agents')
+          .select('id')
+          .eq('user_id', meeting.user_id)
+          .not('integration_id', 'is', null)
+          .eq('is_active', true)
+          .limit(1);
+        meetingAgentId = (agents?.[0] as { id: string } | undefined)?.id ?? null;
+      }
+
+      if (meetingAgentId) {
         await supabase
           .from('domain_agent_sources')
           .upsert({
@@ -750,13 +764,9 @@ Return an empty array if no genuine cross-source connections exist.`;
             association_type: 'primary',
           }, { onConflict: 'agent_id,source_id', ignoreDuplicates: true });
 
-        // Mark agent as stale so cron rebuilds its expertise index
         await supabase
           .from('domain_agents')
-          .update({
-            index_stale: true,
-            last_ingestion_at: new Date().toISOString(),
-          })
+          .update({ index_stale: true, last_ingestion_at: new Date().toISOString() })
           .eq('id', meetingAgentId);
 
         console.log(`[meetings/process] Linked source ${meeting.id} to meeting agent ${meetingAgentId}`);
