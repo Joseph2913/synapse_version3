@@ -2721,6 +2721,106 @@ export async function fetchAgentSignalsOut(agentId: string): Promise<AgentSignal
   return (data ?? []) as AgentSignalRow[]
 }
 
+export async function fetchAgentSignalsIn(agentId: string): Promise<AgentSignalRow[]> {
+  const { data, error } = await supabase
+    .from('agent_signals')
+    .select('*')
+    .eq('target_agent_id', agentId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (error) throw error
+  return (data ?? []) as AgentSignalRow[]
+}
+
+export async function fetchAgentSkillAssignments(agentId: string): Promise<AgentSkillAssignment[]> {
+  const { data, error } = await supabase
+    .from('domain_agent_skills')
+    .select(`
+      id, agent_id, skill_id, match_method, relevance, ingested, assigned_at,
+      skill:knowledge_skills!skill_id (id, name, title, description, domain, tags, confidence, status, usage_count, source_count)
+    `)
+    .eq('agent_id', agentId)
+    .order('relevance', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    ...row,
+    skill: Array.isArray(row.skill) ? row.skill[0] : row.skill,
+  })) as AgentSkillAssignment[]
+}
+
+// ─── Signal Enrichment (resolve bridge entities, edges, trigger sources) ────
+
+export interface BridgeEntityInfo {
+  id: string
+  label: string
+  entity_type: string
+  description: string | null
+}
+
+export interface BridgeEdgeInfo {
+  id: string
+  relation_type: string
+  evidence: string | null
+  weight: number | null
+}
+
+export interface TriggerSourceInfo {
+  id: string
+  title: string | null
+  source_type: string | null
+}
+
+export interface EnrichedSignalContext {
+  bridgeEntities: BridgeEntityInfo[]
+  bridgeEdge: BridgeEdgeInfo | null
+  triggerSource: TriggerSourceInfo | null
+}
+
+export async function enrichSignalsContext(signals: AgentSignalRow[]): Promise<Map<string, EnrichedSignalContext>> {
+  const result = new Map<string, EnrichedSignalContext>()
+  if (signals.length === 0) return result
+
+  // Collect all IDs to resolve
+  const entityIds = new Set<string>()
+  const edgeIds = new Set<string>()
+  const sourceIds = new Set<string>()
+
+  for (const s of signals) {
+    for (const eid of (s.bridge_entity_ids || [])) entityIds.add(eid)
+    if (s.bridge_edge_id) edgeIds.add(s.bridge_edge_id)
+    if (s.trigger_source_id) sourceIds.add(s.trigger_source_id)
+  }
+
+  // Fetch all in parallel
+  const [entitiesRes, edgesRes, sourcesRes] = await Promise.all([
+    entityIds.size > 0
+      ? supabase.from('knowledge_nodes').select('id, label, entity_type, description').in('id', [...entityIds].slice(0, 200))
+      : Promise.resolve({ data: [], error: null }),
+    edgeIds.size > 0
+      ? supabase.from('knowledge_edges').select('id, relation_type, evidence, weight').in('id', [...edgeIds].slice(0, 100))
+      : Promise.resolve({ data: [], error: null }),
+    sourceIds.size > 0
+      ? supabase.from('knowledge_sources').select('id, title, source_type').in('id', [...sourceIds].slice(0, 100))
+      : Promise.resolve({ data: [], error: null }),
+  ])
+
+  const entityMap = new Map((entitiesRes.data ?? []).map((e: Record<string, unknown>) => [e.id as string, e as unknown as BridgeEntityInfo]))
+  const edgeMap = new Map((edgesRes.data ?? []).map((e: Record<string, unknown>) => [e.id as string, e as unknown as BridgeEdgeInfo]))
+  const sourceMap = new Map((sourcesRes.data ?? []).map((s: Record<string, unknown>) => [s.id as string, s as unknown as TriggerSourceInfo]))
+
+  for (const s of signals) {
+    const bridgeEntities = (s.bridge_entity_ids || []).map(id => entityMap.get(id)).filter((e): e is BridgeEntityInfo => !!e)
+    const bridgeEdge = s.bridge_edge_id ? edgeMap.get(s.bridge_edge_id) ?? null : null
+    const triggerSource = s.trigger_source_id ? sourceMap.get(s.trigger_source_id) ?? null : null
+
+    result.set(s.id, { bridgeEntities, bridgeEdge, triggerSource })
+  }
+
+  return result
+}
+
 export async function fetchGlobalSignals(limit = 10): Promise<(AgentSignalRow & { source_agent_name?: string; target_agent_name?: string })[]> {
   const { data, error } = await supabase
     .from('agent_signals')
@@ -2763,4 +2863,129 @@ export async function fetchAgentCounts(agentId: string): Promise<{
     signalsOut: sRes.count ?? 0,
     gaps: gRes.count ?? 0,
   }
+}
+
+// ─── Agent Skills (domain_agent_skills junction) ────────────────────────────
+
+export interface AgentSkillAssignment {
+  id: string
+  agent_id: string
+  skill_id: string
+  match_method: 'source_overlap' | 'gemini_match' | 'manual'
+  relevance: number
+  ingested: boolean
+  assigned_at: string
+  skill?: {
+    id: string
+    name: string
+    title: string
+    description: string
+    domain: string | null
+    tags: string[]
+    confidence: number
+    status: string
+    usage_count: number
+    source_count: number
+  }
+}
+
+export async function fetchAgentSkills(): Promise<AgentSkillAssignment[]> {
+  const { data, error } = await supabase
+    .from('domain_agent_skills')
+    .select(`
+      id, agent_id, skill_id, match_method, relevance, ingested, assigned_at,
+      skill:knowledge_skills!skill_id (id, name, title, description, domain, tags, confidence, status, usage_count, source_count)
+    `)
+    .order('relevance', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    ...row,
+    skill: Array.isArray(row.skill) ? row.skill[0] : row.skill,
+  })) as AgentSkillAssignment[]
+}
+
+// ─── Council Briefing Data ──────────────────────────────────────────────────
+
+export interface BriefingInsight {
+  id: string
+  agent_id: string
+  insight_type: 'tension' | 'convergence' | 'novel_connection'
+  claim: string
+  evidence_summary: string | null
+  confidence: number | null
+  related_entity_ids: string[]
+  created_at: string
+}
+
+export interface BriefingSignal {
+  id: string
+  source_agent_id: string
+  target_agent_id: string
+  reason: string
+  status: string
+  processing_result: string | null
+  bridge_entity_ids: string[]
+  extracted_entity_ids: string[]
+  processed_at: string | null
+  created_at: string
+}
+
+export interface BriefingSkillAssignment {
+  id: string
+  agent_id: string
+  match_method: 'source_overlap' | 'gemini_match' | 'manual'
+  relevance: number
+  assigned_at: string
+  skill_title: string
+  skill_description: string
+  skill_status: string
+}
+
+export async function fetchBriefingInsights(limit = 30): Promise<BriefingInsight[]> {
+  const { data, error } = await supabase
+    .from('agent_insights')
+    .select('id, agent_id, insight_type, claim, evidence_summary, confidence, related_entity_ids, created_at')
+    .eq('status', 'active')
+    .order('confidence', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return (data ?? []) as BriefingInsight[]
+}
+
+export async function fetchBriefingSignals(limit = 30): Promise<BriefingSignal[]> {
+  const { data, error } = await supabase
+    .from('agent_signals')
+    .select('id, source_agent_id, target_agent_id, reason, status, processing_result, bridge_entity_ids, extracted_entity_ids, processed_at, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return (data ?? []) as BriefingSignal[]
+}
+
+export async function fetchBriefingSkillAssignments(limit = 30): Promise<BriefingSkillAssignment[]> {
+  const { data, error } = await supabase
+    .from('domain_agent_skills')
+    .select('id, agent_id, match_method, relevance, assigned_at, skill:knowledge_skills!skill_id (title, description, status)')
+    .order('relevance', { ascending: false })
+    .order('assigned_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return (data ?? []).map((row: Record<string, unknown>) => {
+    const skill = (Array.isArray(row.skill) ? row.skill[0] : row.skill) as Record<string, unknown> | null
+    return {
+      id: row.id as string,
+      agent_id: row.agent_id as string,
+      match_method: row.match_method as 'source_overlap' | 'gemini_match' | 'manual',
+      relevance: row.relevance as number,
+      assigned_at: row.assigned_at as string,
+      skill_title: (skill?.title as string) || 'Unknown',
+      skill_description: (skill?.description as string) || '',
+      skill_status: (skill?.status as string) || 'draft',
+    }
+  })
 }

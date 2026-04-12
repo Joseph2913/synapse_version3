@@ -1,0 +1,636 @@
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { ArrowLeft, GripVertical, ChevronDown, ChevronRight, MessageSquare } from 'lucide-react'
+import {
+  fetchAgentWithPlaylist,
+  fetchAgentQuestions,
+  fetchAgentInsights,
+  fetchAgentGaps,
+  fetchAgentSignalsOut,
+  fetchAgentSignalsIn,
+  fetchAgentSkillAssignments,
+  fetchDomainAgents,
+  enrichSignalsContext,
+  type AgentSkillAssignment,
+  type EnrichedSignalContext,
+} from '../services/supabase'
+import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow, HealthStatus } from '../types/database'
+
+// ─── CONSTANTS ──────────────────────────────────────────────────────────────
+
+const DEFAULT_LEFT_PCT = 64
+const MIN_LEFT_PCT = 50
+const MAX_LEFT_PCT = 75
+const TOP_N = 5
+
+const HEALTH_CONFIG: Record<HealthStatus, { bg: string; text: string; label: string }> = {
+  strong: { bg: '#dcfce7', text: '#15803d', label: 'Strong' },
+  growing: { bg: '#d1fae5', text: '#047857', label: 'Growing' },
+  thin: { bg: '#fef3c7', text: '#b45309', label: 'Thin' },
+  stale: { bg: '#fee2e2', text: '#dc2626', label: 'Stale' },
+  initialising: { bg: '#f3f4f6', text: '#6b7280', label: 'Init' },
+}
+
+const INSIGHT_TYPE_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
+  tension: { bg: '#fef3c7', text: '#b45309', label: 'TENSION' },
+  convergence: { bg: '#dcfce7', text: '#15803d', label: 'CONVERGENCE' },
+  novel_connection: { bg: '#e0e7ff', text: '#4338ca', label: 'CONNECTION' },
+}
+
+const QUESTION_TYPE_COLORS: Record<string, string> = {
+  gap_driven: '#d63a00', frontier: '#0d9488', cross_domain: '#7c3aed', user_defined: '#6b7280',
+}
+
+interface ExpertiseIndex {
+  summary?: string
+  core_themes?: string[]
+  reasoning_approach?: string
+  strongest_areas?: Array<{ topic: string; source_count: number; key_entities: string[] }>
+  weakest_areas?: Array<{ topic: string; reason: string }>
+}
+
+// ─── HELPERS ────────────────────────────────────────────────────────────────
+
+function timeAgo(dateStr: string): string {
+  const s = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  if (s < 604800) return `${Math.floor(s / 86400)}d ago`
+  return new Date(dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+}
+
+function formatCount(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+// ─── SMALL COMPONENTS ───────────────────────────────────────────────────────
+
+const sectionLabelBase: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)',
+  textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-secondary)',
+}
+
+function SectionHeader({ label, count, total, expanded, onToggle }: {
+  label: string; count?: number; total: number; expanded: boolean; onToggle: () => void
+}) {
+  return (
+    <div style={{ ...sectionLabelBase, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, marginTop: 20 }}>
+      {label}
+      {count != null && (
+        <span style={{ fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-body)', padding: '1px 7px', borderRadius: 10, background: 'var(--color-bg-inset)', color: 'var(--color-text-secondary)' }}>
+          {count}
+        </span>
+      )}
+      {total > TOP_N && (
+        <button type="button" onClick={onToggle} style={{
+          marginLeft: 'auto', fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)',
+          color: 'var(--color-accent-500)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
+        }}>
+          {expanded ? 'Show less' : `View all ${total}`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function HealthBadge({ status }: { status: HealthStatus }) {
+  const c = HEALTH_CONFIG[status] || HEALTH_CONFIG.initialising
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)', padding: '2px 8px', borderRadius: 20, background: c.bg, color: c.text }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.text }} />
+      {c.label}
+    </span>
+  )
+}
+
+function InsightTypeBadge({ type }: { type: string }) {
+  const c = INSIGHT_TYPE_CONFIG[type] ?? INSIGHT_TYPE_CONFIG.novel_connection!
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-body)', textTransform: 'uppercase' as const, padding: '2px 8px', borderRadius: 4, background: c!.bg, color: c!.text, letterSpacing: '0.02em', flexShrink: 0 }}>
+      {c!.label}
+    </span>
+  )
+}
+
+// ─── LEFT: IDENTITY ─────────────────────────────────────────────────────────
+
+function IdentitySection({ agent, expertise, playlistName }: { agent: DomainAgent; expertise: ExpertiseIndex; playlistName: string | null }) {
+  return (
+    <div style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '16px 20px' }}>
+      <div style={{ fontSize: 13, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.6, marginBottom: 12 }}>
+        {agent.description || expertise.summary || 'No description available.'}
+      </div>
+      {expertise.reasoning_approach && (
+        <div style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)', marginBottom: 12 }}>
+          <span style={{ fontWeight: 600 }}>Reasoning:</span> {expertise.reasoning_approach}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 16, fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>
+        <span>{agent.source_count} sources</span>
+        <span>{formatCount(agent.entity_count)} entities</span>
+        {playlistName && <span>Playlist: {playlistName}</span>}
+        {agent.last_index_rebuild_at && <span>Rebuilt: {timeAgo(agent.last_index_rebuild_at)}</span>}
+      </div>
+    </div>
+  )
+}
+
+// ─── LEFT: EXPERTISE ────────────────────────────────────────────────────────
+
+function ExpertiseSection({ expertise }: { expertise: ExpertiseIndex }) {
+  const strongest = expertise.strongest_areas || []
+  const weakest = expertise.weakest_areas || []
+  if (strongest.length === 0 && weakest.length === 0) return null
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      {strongest.length > 0 && (
+        <div style={{ flex: 1, background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '14px 18px' }}>
+          <div style={{ ...sectionLabelBase, marginBottom: 8 }}>Strongest Areas</div>
+          {strongest.map(a => (
+            <div key={a.topic} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>{a.topic}</div>
+              <div style={{ fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>{a.source_count} sources</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {weakest.length > 0 && (
+        <div style={{ flex: 1, background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '14px 18px' }}>
+          <div style={{ ...sectionLabelBase, marginBottom: 8 }}>Gaps in Knowledge</div>
+          {weakest.map(a => (
+            <div key={a.topic} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>{a.topic}</div>
+              <div style={{ fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>{a.reason}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── RIGHT: INSIGHT CARD ────────────────────────────────────────────────────
+
+function InsightActivityCard({ insight }: { insight: AgentInsightRow }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px', marginBottom: 6 }}>
+      <div onClick={() => insight.evidence_summary && setExpanded(!expanded)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, cursor: insight.evidence_summary ? 'pointer' : 'default' }}>
+        <InsightTypeBadge type={insight.insight_type} />
+        <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)' }}>
+          {timeAgo(insight.created_at)}
+        </span>
+        {insight.evidence_summary && (expanded ? <ChevronDown size={12} style={{ color: 'var(--color-text-secondary)' }} /> : <ChevronRight size={12} style={{ color: 'var(--color-text-secondary)' }} />)}
+      </div>
+      <div style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5 }}>
+        &ldquo;{insight.claim}&rdquo;
+      </div>
+      {expanded && insight.evidence_summary && (
+        <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--color-bg-inset)', borderRadius: 8, fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5 }}>
+          {insight.evidence_summary}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── RIGHT: SIGNAL CARD (with expandable metadata) ──────────────────────────
+
+function SignalActivityCard({ signal, agentNameMap, agentId, context }: {
+  signal: AgentSignalRow; agentNameMap: Map<string, string>; agentId: string; context?: EnrichedSignalContext
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const isOutgoing = signal.source_agent_id === agentId
+  const otherName = agentNameMap.get(isOutgoing ? signal.target_agent_id : signal.source_agent_id) || 'Unknown'
+  const senderName = agentNameMap.get(signal.source_agent_id) || 'Unknown'
+  const isPending = signal.status === 'pending'
+  const extractedCount = signal.extracted_entity_ids?.length || 0
+
+  const statusLabel = isPending ? 'Pending' : signal.processing_result === 'targeted_extraction'
+    ? `Extracted ${extractedCount} entities` : signal.processing_result === 'full_ingestion' ? 'Full ingestion' : 'Acknowledged'
+
+  const directionBorder = isOutgoing ? 'rgba(37,99,235,0.12)' : 'rgba(214,58,0,0.12)'
+  const directionLabel = isOutgoing ? 'SENT' : 'RECEIVED'
+  const directionColor = isOutgoing ? '#2563eb' : '#d63a00'
+  const directionBg = isOutgoing ? 'rgba(37,99,235,0.06)' : 'rgba(214,58,0,0.06)'
+
+  const triggerTitle = context?.triggerSource?.title || null
+  const triggerType = context?.triggerSource?.source_type || null
+  const entity1 = context?.bridgeEntities?.[0]
+  const entity2 = context?.bridgeEntities?.[1]
+  const edgeRelation = context?.bridgeEdge?.relation_type || null
+
+  // Collapsed summary: direction + other agent + trigger source
+  const collapsedSummary = triggerTitle
+    ? `While ingesting "${triggerTitle}"${triggerType ? ` (${triggerType})` : ''}, the ${senderName} agent found a cross-domain connection.`
+    : signal.reason
+
+  return (
+    <div style={{
+      background: 'var(--color-bg-card)',
+      border: `1px solid ${directionBorder}`,
+      borderLeft: `3px solid ${directionColor}`,
+      borderRadius: 10, padding: '10px 14px', marginBottom: 6,
+    }}>
+      {/* Header: direction badge + other agent + status */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <span style={{
+          fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-body)', textTransform: 'uppercase' as const,
+          padding: '1px 6px', borderRadius: 4, letterSpacing: '0.04em',
+          background: directionBg, color: directionColor,
+        }}>
+          {directionLabel}
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>
+          {isOutgoing ? `→ ${otherName}` : `← ${otherName}`}
+        </span>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)', flexShrink: 0 }}>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: isPending ? 'var(--color-text-placeholder)' : directionColor }} />
+          {statusLabel} · {timeAgo(signal.processed_at || signal.created_at)}
+        </span>
+      </div>
+
+      {/* Collapsed summary */}
+      <div style={{
+        fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5,
+        overflow: 'hidden', textOverflow: 'ellipsis',
+        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+      }}>
+        {collapsedSummary}
+      </div>
+
+      {/* Expand toggle */}
+      <button type="button" onClick={() => setExpanded(!expanded)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4, marginTop: 6,
+          fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)',
+          color: 'var(--color-accent-500)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
+        }}>
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {expanded ? 'Hide details' : 'Show details'}
+      </button>
+
+      {/* Expanded: full bridge entity context */}
+      {expanded && (
+        <div style={{ marginTop: 8, padding: '12px 14px', background: 'var(--color-bg-inset)', borderRadius: 8, fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.6 }}>
+
+          {/* Trigger source */}
+          {triggerTitle && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+                Source
+              </div>
+              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                {triggerTitle}
+                {triggerType && <span style={{ fontWeight: 400, color: 'var(--color-text-secondary)' }}> ({triggerType})</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Bridge entities */}
+          {(entity1 || entity2) && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+                Connection Found
+              </div>
+
+              {entity1 && (
+                <div style={{ marginBottom: 6, padding: '6px 10px', background: 'var(--color-bg-card)', borderRadius: 6, border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{entity1.label}</span>
+                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}> ({entity1.entity_type})</span>
+                  {entity1.description && (
+                    <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>{entity1.description}</div>
+                  )}
+                </div>
+              )}
+
+              {edgeRelation && (
+                <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--color-text-placeholder)', padding: '2px 0' }}>
+                  {edgeRelation.replace(/_/g, ' ')}
+                </div>
+              )}
+
+              {entity2 && (
+                <div style={{ padding: '6px 10px', background: 'var(--color-bg-card)', borderRadius: 6, border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{entity2.label}</span>
+                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}> ({entity2.entity_type})</span>
+                  {entity2.description && (
+                    <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>{entity2.description}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Evidence quote */}
+          {signal.reason && signal.reason !== 'Cross-domain edge detected during ingestion' && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+                Evidence
+              </div>
+              <div style={{ fontStyle: 'italic', color: 'var(--color-text-body)' }}>
+                &ldquo;{signal.reason}&rdquo;
+              </div>
+            </div>
+          )}
+
+          {/* Outcome */}
+          {!isPending && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+                Outcome
+              </div>
+              <div>
+                {signal.processing_result === 'targeted_extraction'
+                  ? `${isOutgoing ? otherName : 'This agent'} performed a targeted extraction and added ${extractedCount} new entities.`
+                  : signal.processing_result === 'full_ingestion'
+                    ? `${isOutgoing ? otherName : 'This agent'} ingested the full source into their domain.`
+                    : `${isOutgoing ? otherName : 'This agent'} acknowledged the connection without additional ingestion.`}
+              </div>
+            </div>
+          )}
+
+          {isPending && (
+            <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', fontStyle: 'italic' }}>
+              Awaiting next recalibration cycle.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── MAIN VIEW ──────────────────────────────────────────────────────────────
+
+export function AgentProfileView() {
+  const { agentId } = useParams<{ agentId: string }>()
+  const navigate = useNavigate()
+
+  const [agent, setAgent] = useState<DomainAgent | null>(null)
+  const [playlistName, setPlaylistName] = useState<string | null>(null)
+  const [questions, setQuestions] = useState<AgentStandingQuestion[]>([])
+  const [insights, setInsights] = useState<AgentInsightRow[]>([])
+  const [gaps, setGaps] = useState<AgentGapRow[]>([])
+  const [signalsOut, setSignalsOut] = useState<AgentSignalRow[]>([])
+  const [signalsIn, setSignalsIn] = useState<AgentSignalRow[]>([])
+  const [signalContextMap, setSignalContextMap] = useState<Map<string, EnrichedSignalContext>>(new Map())
+  const [skills, setSkills] = useState<AgentSkillAssignment[]>([])
+  const [allAgents, setAllAgents] = useState<DomainAgent[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Expand toggles
+  const [themesExpanded, setThemesExpanded] = useState(false)
+  const [skillsExpanded, setSkillsExpanded] = useState(false)
+  const [questionsExpanded, setQuestionsExpanded] = useState(false)
+  const [gapsExpanded, setGapsExpanded] = useState(false)
+  const [insightsExpanded, setInsightsExpanded] = useState(false)
+  const [signalsExpanded, setSignalsExpanded] = useState(false)
+
+  // Resizable
+  const [leftWidthPct, setLeftWidthPct] = useState(DEFAULT_LEFT_PCT)
+  const [isDragging, setIsDragging] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const dragStartX = useRef(0)
+  const dragStartPct = useRef(DEFAULT_LEFT_PCT)
+
+  const handleDividerMouseDown = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    dragStartX.current = event.clientX
+    dragStartPct.current = leftWidthPct
+    setIsDragging(true)
+    const onMove = (e: MouseEvent) => {
+      if (!containerRef.current) return
+      const w = containerRef.current.getBoundingClientRect().width
+      setLeftWidthPct(Math.min(MAX_LEFT_PCT, Math.max(MIN_LEFT_PCT, dragStartPct.current + ((e.clientX - dragStartX.current) / w) * 100)))
+    }
+    const onUp = () => { setIsDragging(false); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [leftWidthPct])
+
+  const agentNameMap = useMemo(() => new Map(allAgents.map(a => [a.id, a.name])), [allAgents])
+
+  const loadData = useCallback(async () => {
+    if (!agentId) return
+    setLoading(true)
+    try {
+      const [agentData, questionsData, insightsData, gapsData, signalsOutData, signalsInData, skillsData, agentsData] = await Promise.all([
+        fetchAgentWithPlaylist(agentId), fetchAgentQuestions(agentId), fetchAgentInsights(agentId),
+        fetchAgentGaps(agentId), fetchAgentSignalsOut(agentId), fetchAgentSignalsIn(agentId),
+        fetchAgentSkillAssignments(agentId), fetchDomainAgents(),
+      ])
+      setAgent(agentData.agent); setPlaylistName(agentData.playlistName)
+      setQuestions(questionsData); setInsights(insightsData); setGaps(gapsData)
+      setSignalsOut(signalsOutData); setSignalsIn(signalsInData)
+      setSkills(skillsData); setAllAgents(agentsData)
+
+      // Enrich signals with bridge entities and trigger sources
+      const allSigs = [...signalsOutData, ...signalsInData]
+      if (allSigs.length > 0) {
+        const ctx = await enrichSignalsContext(allSigs)
+        setSignalContextMap(ctx)
+      }
+    } catch (err) { console.error('[AgentProfile] Load failed:', err) }
+    finally { setLoading(false) }
+  }, [agentId])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  const expertise = (agent?.expertise_index || {}) as ExpertiseIndex
+  const coreThemes = expertise.core_themes || []
+  const openQuestions = questions.filter(q => q.status === 'open' || q.status === 'partially_addressed')
+
+  // Merge and deduplicate signals, sort by recency
+  const allSignals = useMemo(() => {
+    const seen = new Set<string>()
+    return [...signalsOut, ...signalsIn]
+      .filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true })
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  }, [signalsOut, signalsIn])
+
+  // Sliced lists
+  const themesToShow = themesExpanded ? coreThemes : coreThemes.slice(0, TOP_N)
+  const skillsToShow = skillsExpanded ? skills : skills.slice(0, TOP_N)
+  const questionsToShow = questionsExpanded ? openQuestions : openQuestions.slice(0, TOP_N)
+  const gapsToShow = gapsExpanded ? gaps : gaps.slice(0, TOP_N)
+  const insightsToShow = insightsExpanded ? insights : insights.slice(0, TOP_N)
+  const signalsToShow = signalsExpanded ? allSignals : allSignals.slice(0, TOP_N)
+
+  // ─── RENDER ─────────────────────────────────────────────────────────────────
+
+  if (loading || !agent) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ height: 44, background: 'var(--color-bg-card)', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0 }} />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)', fontFamily: 'var(--font-body)' }}>Loading agent...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Header bar */}
+      <div style={{
+        height: 44, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 10,
+        background: 'var(--color-bg-card)', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
+      }}>
+        <button type="button" onClick={() => navigate('/council')} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, background: 'transparent', border: 'none',
+          cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)',
+        }}>
+          <ArrowLeft size={14} /> Council
+        </button>
+        <div style={{ width: 1, height: 24, background: 'var(--border-subtle)' }} />
+        <span style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--font-display)', color: 'var(--color-text-primary)', letterSpacing: '-0.01em' }}>
+          {agent.name}
+        </span>
+        <HealthBadge status={agent.health_status} />
+        <span style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>
+          {skills.length} skills · {agent.source_count} sources · {formatCount(agent.entity_count)} entities
+        </span>
+        <button type="button" onClick={() => navigate(`/ask?agent=${agentId}`)} style={{
+          marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '5px 13px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+          fontFamily: 'var(--font-body)', cursor: 'pointer',
+          border: '1px solid rgba(214,58,0,0.15)', background: 'var(--color-accent-50)', color: 'var(--color-accent-500)',
+        }}>
+          <MessageSquare size={12} /> Chat with expert
+        </button>
+      </div>
+
+      {/* Main: 2:1 split */}
+      <div ref={containerRef} className="flex flex-1 overflow-hidden"
+        style={{ background: 'var(--color-bg-content)', userSelect: isDragging ? 'none' : undefined, cursor: isDragging ? 'col-resize' : undefined }}>
+
+        {/* LEFT: Static profile (2/3) */}
+        <div style={{
+          width: `${leftWidthPct}%`, height: '100%', overflowY: 'auto', overflowX: 'hidden',
+          flexShrink: 0, transition: isDragging ? 'none' : 'width 0.2s ease', padding: '16px 24px 40px',
+        }}>
+          <IdentitySection agent={agent} expertise={expertise} playlistName={playlistName} />
+
+          <SectionHeader label="Expertise Index" total={0} expanded={false} onToggle={() => {}} />
+          <ExpertiseSection expertise={expertise} />
+
+          {coreThemes.length > 0 && (
+            <>
+              <SectionHeader label="Core Themes" count={coreThemes.length} total={coreThemes.length} expanded={themesExpanded} onToggle={() => setThemesExpanded(v => !v)} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {themesToShow.map(t => (
+                  <span key={t} style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)', padding: '3px 10px', borderRadius: 20, background: 'rgba(0,0,0,0.04)', color: 'var(--color-text-body)' }}>{t}</span>
+                ))}
+              </div>
+            </>
+          )}
+
+          {skills.length > 0 && (
+            <>
+              <SectionHeader label="Skills" count={skills.length} total={skills.length} expanded={skillsExpanded} onToggle={() => setSkillsExpanded(v => !v)} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {skillsToShow.map(s => (
+                  <div key={s.skill_id} style={{
+                    background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)',
+                    borderRadius: 10, padding: '8px 12px', minWidth: 140, maxWidth: 220, flex: '0 0 auto',
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.skill?.title || s.skill_id}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '0px 5px', borderRadius: 10 }}>+{s.relevance.toFixed(1)}</span>
+                      {s.skill?.status || 'draft'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {openQuestions.length > 0 && (
+            <>
+              <SectionHeader label="Standing Questions" count={openQuestions.length} total={openQuestions.length} expanded={questionsExpanded} onToggle={() => setQuestionsExpanded(v => !v)} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {questionsToShow.map(q => (
+                  <div key={q.id} style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: QUESTION_TYPE_COLORS[q.question_type] || '#6b7280', flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>{q.question_type.replace('_', ' ')}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)' }}>
+                        P{q.priority}{q.status === 'partially_addressed' && ' · partial'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5 }}>{q.question}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {gaps.length > 0 && (
+            <>
+              <SectionHeader label="Knowledge Gaps" count={gaps.length} total={gaps.length} expanded={gapsExpanded} onToggle={() => setGapsExpanded(v => !v)} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {gapsToShow.map(g => (
+                  <div key={g.id} style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>{g.topic}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-body)', padding: '1px 7px', borderRadius: 10, background: g.severity === 'significant' ? '#fee2e2' : g.severity === 'moderate' ? '#fef3c7' : '#f3f4f6', color: g.severity === 'significant' ? '#dc2626' : g.severity === 'moderate' ? '#b45309' : '#6b7280' }}>
+                        {g.severity}
+                      </span>
+                    </div>
+                    {g.description && <div style={{ fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)', marginTop: 4 }}>{g.description}</div>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Drag handle */}
+        <div onMouseDown={handleDividerMouseDown} className="flex items-center justify-center shrink-0"
+          style={{ width: 12, cursor: 'col-resize', background: isDragging ? 'rgba(214,58,0,0.04)' : 'transparent', transition: 'background 0.15s ease' }}
+          onMouseEnter={e => { if (!isDragging) e.currentTarget.style.background = 'rgba(0,0,0,0.02)' }}
+          onMouseLeave={e => { if (!isDragging) e.currentTarget.style.background = 'transparent' }}>
+          <GripVertical size={14} style={{ color: isDragging ? 'var(--color-accent-500)' : 'var(--color-text-placeholder)', transition: 'color 0.15s ease' }} />
+        </div>
+
+        {/* RIGHT: Recent activity (1/3) */}
+        <div style={{
+          flex: 1, height: '100%', overflow: 'hidden', minWidth: 0,
+          background: 'var(--color-bg-card)', display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '16px 20px 40px' }}>
+
+            {/* Insights */}
+            {insights.length > 0 && (
+              <>
+                <SectionHeader label="Insights Surfaced" count={insights.length} total={insights.length} expanded={insightsExpanded} onToggle={() => setInsightsExpanded(v => !v)} />
+                {insightsToShow.map(ins => <InsightActivityCard key={ins.id} insight={ins} />)}
+              </>
+            )}
+
+            {/* Signals */}
+            {allSignals.length > 0 && (
+              <>
+                <SectionHeader label="Cross-Agent Signals" count={allSignals.length} total={allSignals.length} expanded={signalsExpanded} onToggle={() => setSignalsExpanded(v => !v)} />
+                {signalsToShow.map(sig => (
+                  <SignalActivityCard key={sig.id} signal={sig} agentNameMap={agentNameMap} agentId={agentId!} context={signalContextMap.get(sig.id)} />
+                ))}
+              </>
+            )}
+
+            {insights.length === 0 && allSignals.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '48px 0', fontSize: 13, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>
+                No recent activity for this agent
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -7,7 +7,8 @@ import { AskView } from '../views/AskView'
 import { IngestView } from '../views/IngestView'
 import { OrientView } from '../views/OrientView'
 import { SignalsView } from '../views/SignalsView'
-import { CouncilView } from '../views/CouncilView'
+import { CouncilOverviewView } from '../views/CouncilOverviewView'
+import { AgentProfileView } from '../views/AgentProfileView'
 import OnboardingDemoPage from '../views/OnboardingDemoPage'
 
 const SourcesView = lazy(() => import('../views/SourcesView'))
@@ -28,7 +29,8 @@ const router = createBrowserRouter([
       { path: '/pipeline', element: <Navigate to="/sources" replace /> },
       { path: '/orient', element: <OrientView /> },
       { path: '/signals', element: <SignalsView /> },
-      { path: '/council', element: <CouncilView /> },
+      { path: '/council', element: <CouncilOverviewView /> },
+      { path: '/council/:agentId', element: <AgentProfileView /> },
       { path: '/skills', element: <Navigate to="/signals?mode=skills" replace /> },
       { path: '/anchors', element: <Navigate to="/signals?mode=anchors" replace /> },
       { path: '*', element: <Navigate to="/" replace /> },
