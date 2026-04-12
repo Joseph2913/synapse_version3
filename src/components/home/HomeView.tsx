@@ -1,16 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Database, GitBranch, Anchor, Zap, Youtube, FileText, BookOpen, StickyNote, Video, Globe, Mail, MessageSquare } from 'lucide-react'
+import { Database, GitBranch, Anchor, Zap, Youtube, FileText, BookOpen, StickyNote, Video, Globe, Mail, ArrowUpRight, Search, MessageSquare, Users } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { useHomeDashboard } from '../../hooks/useHomeDashboard'
 import { useAuth } from '../../hooks/useAuth'
 import { PROVIDER_CONFIG } from '../../config/sourceTypes'
-import { supabase } from '../../services/supabase'
+import { supabase, fetchGlobalInsights, fetchGlobalSignals, fetchDomainAgents, fetchTopSkillsWithAgents } from '../../services/supabase'
 import { RecentSourcesPanel } from './RecentSourcesPanel'
-import { SignalsToggleCard } from './SignalsToggleCard'
-import { OrientSummaryPanel } from './OrientSummaryPanel'
-import { buildSourceChatContext } from '../../config/chatEntryContexts'
-import type { KnowledgeNode, KnowledgeSkill, KnowledgeSource } from '../../types/database'
+import { buildSourceChatContext, buildInsightChatContext, buildSignalChatContext, buildSkillChatContext } from '../../config/chatEntryContexts'
+import type { KnowledgeSource, AgentInsightRow, AgentSignalRow } from '../../types/database'
 
 // Fixed layout — no resizing on dashboard
 
@@ -112,11 +110,383 @@ function useMeetingProviders(): ResolvedSource[] {
   return resolved
 }
 
+// ── Row components with hover slide-in actions (matching SourceFeedItem) ─────
+
+function HoverActionOverlay({ onExplore, onChat }: { onExplore: () => void; onChat: () => void }) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onExplore() }}
+        className="flex flex-col items-center justify-center cursor-pointer"
+        style={{ width: 66, height: '100%', background: 'transparent', border: 'none', gap: 4, color: 'var(--color-text-secondary)', transition: 'color 0.15s ease, background 0.15s ease', borderRadius: 6 }}
+        onMouseEnter={e => { e.currentTarget.style.color = 'var(--color-accent-500)'; e.currentTarget.style.background = 'var(--color-accent-50)' }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--color-text-secondary)'; e.currentTarget.style.background = 'transparent' }}
+      >
+        <Search size={16} />
+        <span className="font-body" style={{ fontSize: 9, fontWeight: 600 }}>Explore</span>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onChat() }}
+        className="flex flex-col items-center justify-center cursor-pointer"
+        style={{ width: 66, height: '100%', background: 'transparent', border: 'none', gap: 4, color: 'var(--color-text-secondary)', transition: 'color 0.15s ease, background 0.15s ease', borderRadius: 6 }}
+        onMouseEnter={e => { e.currentTarget.style.color = 'var(--color-accent-500)'; e.currentTarget.style.background = 'var(--color-accent-50)' }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--color-text-secondary)'; e.currentTarget.style.background = 'transparent' }}
+      >
+        <MessageSquare size={16} />
+        <span className="font-body" style={{ fontSize: 9, fontWeight: 600 }}>Chat</span>
+      </button>
+    </>
+  )
+}
+
+function InsightRow({ insight, isLast }: { insight: AgentInsightRow; isLast: boolean }) {
+  const [hovered, setHovered] = useState(false)
+  const navigate = useNavigate()
+
+  const handleChat = () => {
+    const context = buildInsightChatContext(insight)
+    navigate('/ask', { state: { chatContext: context } })
+  }
+
+  return (
+    <div
+      className="relative overflow-hidden"
+      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', flex: '1 1 0' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        onClick={() => navigate('/council')}
+        className="flex w-full text-left bg-transparent cursor-pointer border-none"
+        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
+      >
+        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-accent-50)' }}>
+          <Zap size={15} style={{ color: 'var(--color-accent-500)' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-display text-text-primary" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.4, marginBottom: 3, display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {insight.claim}
+          </div>
+          <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {insight.evidence_summary ?? ''}
+          </div>
+        </div>
+      </button>
+      <div
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0, width: 144,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
+          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
+          transition: 'transform 0.2s ease',
+          background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)',
+        }}
+      >
+        <HoverActionOverlay onExplore={() => navigate('/council')} onChat={handleChat} />
+      </div>
+    </div>
+  )
+}
+
+function SignalRow({ signal, isLast }: { signal: AgentSignalRow & { source_name?: string; target_name?: string }; isLast: boolean }) {
+  const [hovered, setHovered] = useState(false)
+  const navigate = useNavigate()
+
+  const handleChat = () => {
+    const context = buildSignalChatContext(signal, signal.source_name ?? 'Unknown', signal.target_name ?? 'Unknown')
+    navigate('/ask', { state: { chatContext: context } })
+  }
+
+  return (
+    <div
+      className="relative overflow-hidden"
+      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', flex: '1 1 0' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        onClick={() => navigate('/council')}
+        className="flex w-full text-left bg-transparent cursor-pointer border-none"
+        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
+      >
+        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: '#fef2f2' }}>
+          <ArrowUpRight size={15} style={{ color: '#ef4444' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-body text-text-primary" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.4, marginBottom: 3 }}>
+            {signal.source_name} → {signal.target_name}
+          </div>
+          <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {signal.reason}
+          </div>
+        </div>
+      </button>
+      <div
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0, width: 144,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
+          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
+          transition: 'transform 0.2s ease',
+          background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)',
+        }}
+      >
+        <HoverActionOverlay onExplore={() => navigate('/council')} onChat={handleChat} />
+      </div>
+    </div>
+  )
+}
+
+interface TopSkill {
+  id: string
+  name: string
+  title: string
+  description: string
+  source_count: number
+  agent_name: string | null
+}
+
+function SkillRow({ skill, isLast }: { skill: TopSkill; isLast: boolean }) {
+  const [hovered, setHovered] = useState(false)
+  const navigate = useNavigate()
+
+  const handleChat = () => {
+    const context = buildSkillChatContext(skill)
+    navigate('/ask', { state: { chatContext: context } })
+  }
+
+  return (
+    <div
+      className="relative overflow-hidden"
+      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', flex: '1 1 0' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        onClick={() => navigate('/explore')}
+        className="flex w-full text-left bg-transparent cursor-pointer border-none"
+        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
+      >
+        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: '#f0fdf4' }}>
+          <Anchor size={15} style={{ color: '#15803d' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center" style={{ gap: 8, marginBottom: 3 }}>
+            <span className="font-display text-text-primary truncate" style={{ fontSize: 13, fontWeight: 700 }}>
+              {skill.title || skill.name}
+            </span>
+            {skill.agent_name && (
+              <span className="font-body shrink-0" style={{ fontSize: 10, color: 'var(--color-text-placeholder)' }}>
+                {skill.agent_name}
+              </span>
+            )}
+            <span className="font-body shrink-0" style={{ fontSize: 10, color: 'var(--color-text-placeholder)' }}>
+              {skill.source_count} sources
+            </span>
+          </div>
+          <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {skill.description}
+          </div>
+        </div>
+      </button>
+      <div
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0, width: 144,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
+          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
+          transition: 'transform 0.2s ease',
+          background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)',
+        }}
+      >
+        <HoverActionOverlay onExplore={() => navigate('/explore')} onChat={handleChat} />
+      </div>
+    </div>
+  )
+}
+
+// ── Home Insights Card ──────────────────────────────────────────────────────
+
+type InsightsTab = 'insights' | 'signals' | 'skills'
+
+function HomeInsightsCard() {
+  const navigate = useNavigate()
+  const [activeTab, setActiveTab] = useState<InsightsTab>('insights')
+  const [insights, setInsights] = useState<AgentInsightRow[]>([])
+  const [signals, setSignals] = useState<(AgentSignalRow & { source_name?: string; target_name?: string })[]>([])
+  const [topSkills, setTopSkills] = useState<TopSkill[]>([])
+  const [dataLoading, setDataLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const [insData, sigData, agents, skillsData] = await Promise.all([
+          fetchGlobalInsights(5),
+          fetchGlobalSignals(5, true),
+          fetchDomainAgents(),
+          fetchTopSkillsWithAgents(5),
+        ])
+        if (cancelled) return
+        const nameMap = new Map(agents.map(a => [a.id, a.name]))
+        setInsights(insData)
+        setSignals(sigData.map(s => ({
+          ...s,
+          source_name: nameMap.get(s.source_agent_id) ?? 'Unknown',
+          target_name: nameMap.get(s.target_agent_id) ?? 'Unknown',
+        })))
+        setTopSkills(skillsData)
+      } catch { /* ignore */ }
+      finally { if (!cancelled) setDataLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  const tabs: { key: InsightsTab; label: string }[] = [
+    { key: 'insights', label: 'Insights' },
+    { key: 'signals', label: 'Signals' },
+    { key: 'skills', label: 'Skills' },
+  ]
+
+  return (
+    <div className="bg-bg-card border border-border-subtle overflow-hidden flex flex-col flex-1" style={{ borderRadius: 12, minHeight: 0 }}>
+      {/* Header */}
+      <div
+        className="flex items-center justify-between shrink-0"
+        style={{ padding: '12px 20px' }}
+      >
+        <div className="flex items-center" style={{ gap: 10 }}>
+          <div
+            className="shrink-0 flex items-center justify-center"
+            style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--color-accent-50)' }}
+          >
+            <Users size={14} style={{ color: 'var(--color-accent-500)' }} />
+          </div>
+          <span className="font-display text-text-primary" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.01em' }}>
+            Council
+          </span>
+
+          <div
+            className="flex items-center"
+            style={{
+              background: 'var(--color-bg-inset)',
+              borderRadius: 6,
+              padding: 2,
+              gap: 1,
+              marginLeft: 4,
+            }}
+          >
+            {tabs.map(tab => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className="font-body cursor-pointer border-none"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '3px 10px',
+                  borderRadius: 6,
+                  background: activeTab === tab.key ? 'var(--color-bg-card)' : 'transparent',
+                  color: activeTab === tab.key ? 'var(--color-accent-500)' : 'var(--color-text-secondary)',
+                  boxShadow: activeTab === tab.key ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => navigate(activeTab === 'insights' ? '/council' : activeTab === 'signals' ? '/council' : '/explore')}
+          className="font-body cursor-pointer bg-transparent border-none"
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--color-accent-500)',
+            padding: '4px 12px',
+            borderRadius: 6,
+            border: '1px solid rgba(214,58,0,0.15)',
+            background: 'var(--color-accent-50)',
+          }}
+        >
+          View all →
+        </button>
+      </div>
+
+      {/* Content — rows stretch to fill, matching left column row height */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {dataLoading ? (
+          <div className="flex flex-col flex-1">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center" style={{ flex: '1 1 0', gap: 14, padding: '14px 20px', borderBottom: i < 4 ? '1px solid var(--border-subtle)' : 'none' }}>
+                <div className="bg-bg-inset animate-pulse" style={{ width: 36, height: 36, borderRadius: 9 }} />
+                <div className="flex-1">
+                  <div className="bg-bg-inset animate-pulse" style={{ height: 13, borderRadius: 4, marginBottom: 6 }} />
+                  <div className="bg-bg-inset animate-pulse" style={{ height: 11, borderRadius: 4, width: '70%' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : activeTab === 'insights' ? (
+          insights.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
+              <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
+                No insights yet. Insights emerge as advisors analyse your knowledge.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col flex-1">
+              {insights.map((ins, i) => (
+                <InsightRow key={ins.id} insight={ins} isLast={i === insights.length - 1} />
+              ))}
+            </div>
+          )
+        ) : activeTab === 'signals' ? (
+          signals.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
+              <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
+                No cross-agent signals yet. Signals appear when advisors share overlapping knowledge.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col flex-1">
+              {signals.map((sig, i) => (
+                <SignalRow key={sig.id} signal={sig} isLast={i === signals.length - 1} />
+              ))}
+            </div>
+          )
+        ) : (
+          topSkills.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
+              <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
+                No skills yet. Skills emerge after multiple ingestions.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col flex-1">
+              {topSkills.map((skill, i) => (
+                <SkillRow key={skill.id} skill={skill} isLast={i === topSkills.length - 1} />
+              ))}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function HomeView() {
   const { user } = useAuth()
-  const { setRightPanelContent } = useGraphContext()
+  useGraphContext() // maintain context subscription
   const dashboard = useHomeDashboard()
   const meetingProviders = useMeetingProviders()
 
@@ -135,8 +505,7 @@ export function HomeView() {
     const context = buildSourceChatContext({ id: source.id, title: source.title, summary: source.summary })
     navigate('/ask', { state: { chatContext: context } })
   }
-  const handleAnchorClick = (node: KnowledgeNode) => { setRightPanelContent({ type: 'node', data: node }) }
-  const handleSkillClick = (_skill: KnowledgeSkill) => { navigate('/signals?mode=skills') }
+
 
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] ?? user?.email?.split('@')[0] ?? ''
   const stats = dashboard.stats
@@ -148,11 +517,11 @@ export function HomeView() {
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-content)' }}>
-      {/* ══════ SCROLLABLE PAGE — no control bar ══════ */}
-      <div className="flex-1 overflow-y-auto">
+      {/* ══════ PAGE CONTENT — fills viewport ══════ */}
+      <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* ── HERO CARD ── */}
-        <div style={{ padding: '20px 36px 0 36px' }}>
+        <div className="shrink-0" style={{ padding: '20px 36px 0 36px' }}>
           <div
             className="bg-bg-card border border-border-subtle animate-[fadeUp_0.4s_ease]"
             style={{ borderRadius: 14, animationFillMode: 'both' }}
@@ -247,10 +616,10 @@ export function HomeView() {
           </div>
         </div>
 
-        {/* ══════ FIXED TWO-COLUMN LAYOUT — stretch to match heights ══════ */}
-        <div className="flex items-stretch" style={{ padding: '20px 36px 36px 36px', gap: 20 }}>
-          {/* Left column: Recent Sources — stretches to match right column height */}
-          <div className="animate-[fadeUp_0.4s_ease] flex flex-col" style={{ flex: '0 0 60%', animationDelay: '0.05s', animationFillMode: 'both' }}>
+        {/* ══════ TWO-COLUMN LAYOUT — fills remaining viewport height ══════ */}
+        <div className="flex items-stretch flex-1 min-h-0" style={{ padding: '20px 36px 36px 36px', gap: 20 }}>
+          {/* Left column: Recent Sources — fills available height */}
+          <div className="animate-[fadeUp_0.4s_ease] flex flex-col min-h-0" style={{ flex: '0 0 60%', animationDelay: '0.05s', animationFillMode: 'both' }}>
             <RecentSourcesPanel
               sources={dashboard.recentSources}
               entityCounts={dashboard.sourceEntityCounts}
@@ -263,50 +632,9 @@ export function HomeView() {
             />
           </div>
 
-          {/* Right column: Quick Ask → Orient → Signals */}
-          <div className="flex-1 flex flex-col" style={{ gap: 12, minWidth: 0 }}>
-            {/* Want to chat? */}
-            <div className="animate-[fadeUp_0.4s_ease]" style={{ animationDelay: '0.05s', animationFillMode: 'both' }}>
-              <button
-                type="button"
-                onClick={() => navigate('/ask')}
-                className="flex items-center w-full bg-bg-card border border-border-subtle cursor-pointer hover:bg-bg-hover transition-all duration-150"
-                style={{ borderRadius: 12, padding: '12px 18px', gap: 10 }}
-              >
-                <div
-                  className="shrink-0 flex items-center justify-center"
-                  style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--color-accent-50)' }}
-                >
-                  <MessageSquare size={13} style={{ color: 'var(--color-accent-500)' }} />
-                </div>
-                <div className="flex-1 text-left">
-                  <span className="font-body text-text-primary" style={{ fontSize: 13, fontWeight: 600 }}>
-                    Want to chat?
-                  </span>
-                  <span className="font-body text-text-secondary" style={{ fontSize: 12, marginLeft: 6 }}>
-                    Ask your knowledge base anything →
-                  </span>
-                </div>
-              </button>
-            </div>
-
-            {/* Orient summary */}
-            <div className="animate-[fadeUp_0.4s_ease]" style={{ animationDelay: '0.1s', animationFillMode: 'both' }}>
-              <OrientSummaryPanel />
-            </div>
-
-            {/* Signals */}
-            <div className="animate-[fadeUp_0.4s_ease]" style={{ animationDelay: '0.15s', animationFillMode: 'both' }}>
-              <SignalsToggleCard
-                anchors={dashboard.recentAnchors}
-                anchorConnectionCounts={dashboard.anchorConnectionCounts}
-                skills={dashboard.recentSkills}
-                loading={dashboard.loading.signals}
-                error={dashboard.errors.signals}
-                onAnchorClick={handleAnchorClick}
-                onSkillClick={handleSkillClick}
-              />
-            </div>
+          {/* Right column: Insights / Signals / Skills toggle card */}
+          <div className="flex-1 flex flex-col min-h-0 animate-[fadeUp_0.4s_ease]" style={{ minWidth: 0, animationDelay: '0.05s', animationFillMode: 'both' }}>
+            <HomeInsightsCard />
           </div>
         </div>
       </div>

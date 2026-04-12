@@ -30,7 +30,7 @@ export function SignalsToggleCard({
   const [activeTab, setActiveTab] = useState<Tab>('anchors')
 
   return (
-    <div className="bg-bg-card border border-border-subtle overflow-hidden" style={{ borderRadius: 12 }}>
+    <div className="bg-bg-card border border-border-subtle overflow-hidden flex flex-col flex-1" style={{ borderRadius: 12, minHeight: 0 }}>
       {/* Header — compact, no border */}
       <div
         className="flex items-center justify-between"
@@ -122,7 +122,7 @@ export function SignalsToggleCard({
             </p>
           </div>
         ) : (
-          <div>
+          <div className="flex-1 overflow-y-auto">
             {anchors.map((anchor, i) => (
               <button
                 key={anchor.id}
@@ -150,7 +150,7 @@ export function SignalsToggleCard({
             </p>
           </div>
         ) : (
-          <div>
+          <div className="flex-1 overflow-y-auto">
             {skills.map((skill, i) => (
               <button
                 key={skill.id}

@@ -25,6 +25,10 @@ export type ChatEntryPoint =
   | 'orient_digest_drilldown'   // "Dig deeper" from digest viewer
   // Anchors (PRD-B)
   | 'anchors_explore'           // "Explore with AI" from anchor detail
+  // Council (Advisory Council)
+  | 'council_insight_chat'      // "Chat about insight" from Home council card
+  | 'council_signal_chat'       // "Chat about signal" from Home council card
+  | 'council_skill_chat'        // "Chat about skill" from Home council card
   // Legacy aliases (backward compat with existing ragRouter)
   | 'entity_explore'
   | 'entity_find_similar'

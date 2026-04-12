@@ -2750,6 +2750,47 @@ export async function fetchAgentSkillAssignments(agentId: string): Promise<Agent
   })) as AgentSkillAssignment[]
 }
 
+export async function fetchTopSkillsWithAgents(limit = 5): Promise<Array<{
+  id: string
+  name: string
+  title: string
+  description: string
+  source_count: number
+  agent_name: string | null
+}>> {
+  // Get top skills by source_count
+  const { data: skills, error } = await supabase
+    .from('knowledge_skills')
+    .select('id, name, title, description, source_count')
+    .eq('status', 'active')
+    .order('source_count', { ascending: false })
+    .limit(limit)
+
+  if (error || !skills) return []
+
+  // Try to find which agent owns each skill
+  const skillIds = skills.map(s => s.id)
+  const { data: assignments } = await supabase
+    .from('domain_agent_skills')
+    .select('skill_id, agent:domain_agents!agent_id(name)')
+    .in('skill_id', skillIds)
+
+  const skillAgentMap = new Map<string, string>()
+  for (const row of (assignments ?? []) as Array<{ skill_id: string; agent: { name: string } | { name: string }[] | null }>) {
+    const agentData = Array.isArray(row.agent) ? row.agent[0] : row.agent
+    if (agentData?.name) skillAgentMap.set(row.skill_id, agentData.name)
+  }
+
+  return skills.map(s => ({
+    id: s.id,
+    name: s.name,
+    title: s.title,
+    description: s.description,
+    source_count: s.source_count,
+    agent_name: skillAgentMap.get(s.id) ?? null,
+  }))
+}
+
 // ─── Signal Enrichment (resolve bridge entities, edges, trigger sources) ────
 
 export interface BridgeEntityInfo {
@@ -2821,10 +2862,16 @@ export async function enrichSignalsContext(signals: AgentSignalRow[]): Promise<M
   return result
 }
 
-export async function fetchGlobalSignals(limit = 10): Promise<(AgentSignalRow & { source_agent_name?: string; target_agent_name?: string })[]> {
-  const { data, error } = await supabase
+export async function fetchGlobalSignals(limit = 10, actionedOnly = false): Promise<(AgentSignalRow & { source_agent_name?: string; target_agent_name?: string })[]> {
+  let query = supabase
     .from('agent_signals')
     .select('*')
+
+  if (actionedOnly) {
+    query = query.in('status', ['extracted', 'acknowledged', 'processing'])
+  }
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -2833,15 +2880,28 @@ export async function fetchGlobalSignals(limit = 10): Promise<(AgentSignalRow & 
 }
 
 export async function fetchGlobalInsights(limit = 10): Promise<(AgentInsightRow & { agent_name?: string })[]> {
+  // Fetch active insights from the last 30 days, pull more than needed so we can rank client-side
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
   const { data, error } = await supabase
     .from('agent_insights')
     .select('*')
     .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(limit)
+    .gte('created_at', thirtyDaysAgo)
+    .limit(50)
 
   if (error) throw error
-  return (data ?? []) as AgentInsightRow[]
+  const insights = (data ?? []) as AgentInsightRow[]
+
+  // Rank by relevance: confidence + entity count + source count
+  const scored = insights.map(ins => {
+    const entityScore = (ins.related_entity_ids?.length ?? 0) * 2
+    const sourceScore = (ins.related_source_ids?.length ?? 0) * 3
+    const confidenceScore = (ins.confidence ?? 0) * 10
+    return { ...ins, _score: entityScore + sourceScore + confidenceScore }
+  })
+
+  scored.sort((a, b) => b._score - a._score)
+  return scored.slice(0, limit)
 }
 
 export async function fetchAgentCounts(agentId: string): Promise<{
