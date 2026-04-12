@@ -5,10 +5,15 @@ interface LayoutCluster extends ClusterData {
   position: { cx: number; cy: number; r: number }
 }
 
+// Deterministic pseudo-random based on index — same input always gives same output
+function seededJitter(i: number, seed: number): number {
+  const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453
+  return x - Math.floor(x) // 0–1
+}
+
 /**
- * Computes cluster bubble positions with maximum spacing.
- * ALL anchors (root and sub) participate in the same force simulation.
- * Sub-anchors start near their parent but are otherwise free to move.
+ * Computes cluster bubble positions with prominence-based sizing and placement.
+ * Fully deterministic — no Math.random() — so positions are stable across re-renders.
  */
 export function useClusterLayout(
   clusters: ClusterData[],
@@ -18,81 +23,68 @@ export function useClusterLayout(
   return useMemo(() => {
     if (!clusters.length || width === 0 || height === 0) return []
 
-    const allMaxCount = Math.max(...clusters.map(c => c.entityCount), 1)
-    const minR = 12
-    const maxR = Math.min(width, height) * 0.04
+    // ── Prominence scoring ────────────────────────────────────────────────
+    const scores = clusters.map(c => {
+      const connections = c.crossClusterEdges.reduce((sum, e) => sum + e.totalWeight, 0)
+      return c.entityCount + c.subAnchorIds.length * 10 + connections * 2
+    })
+    const maxScore = Math.max(...scores, 1)
+    const prominence = scores.map(s => s / maxScore)
 
-    function computeR(entityCount: number) {
-      return minR + Math.sqrt(entityCount / allMaxCount) * (maxR - minR)
+    // ── Radius: prominent nodes are bigger ────────────────────────────────
+    const minR = 5
+    const maxR = Math.min(width, height) * 0.025
+    function computeR(p: number) {
+      return minR + p * (maxR - minR)
     }
 
-    // Separate roots and subs for initial positioning
-    const rootClusters = clusters.filter(c => !c.anchor.isSubAnchor)
-    const subClusters = clusters.filter(c => c.anchor.isSubAnchor)
+    // ── Sort by prominence descending ─────────────────────────────────────
+    const indexed = clusters.map((c, i) => ({
+      cluster: c,
+      prominence: prominence[i]!,
+      r: computeR(prominence[i]!),
+      origIdx: i,
+    }))
+    indexed.sort((a, b) => b.prominence - a.prominence)
 
-    // Grid-based initial positions for root anchors
-    const cols = Math.ceil(Math.sqrt(rootClusters.length * (width / height))) || 1
-    const rows = Math.ceil(rootClusters.length / cols) || 1
-    const cellW = width / (cols + 1)
-    const cellH = height / (rows + 1)
+    const cx = width / 2
+    const cy = height / 2
+    const maxDist = Math.min(width, height) * 0.42
 
-    const rootNodes = rootClusters.map((c, i) => {
-      const col = i % cols
-      const row = Math.floor(i / cols)
+    // ── Initial positions: prominent → centre, peripheral → outer ring ────
+    const allNodes = indexed.map((item, i) => {
+      const distFromCentre = (1 - item.prominence) * maxDist
+      const angle = i * 2.39996322972865 // golden angle
+      // Deterministic jitter so nodes don't stack on the exact spiral
+      const jx = (seededJitter(item.origIdx, 1) - 0.5) * 30
+      const jy = (seededJitter(item.origIdx, 2) - 0.5) * 30
       return {
-        cluster: c,
-        x: cellW * (col + 1) + (Math.random() - 0.5) * cellW * 0.3,
-        y: cellH * (row + 1) + (Math.random() - 0.5) * cellH * 0.3,
+        cluster: item.cluster,
+        x: cx + Math.cos(angle) * distFromCentre + jx,
+        y: cy + Math.sin(angle) * distFromCentre + jy,
         vx: 0,
         vy: 0,
-        r: computeR(c.entityCount),
-        parentId: null as string | null,
+        r: item.r,
+        prominence: item.prominence,
       }
     })
 
-    // Sub-anchors start offset from their parent's initial position
-    const rootPosMap = new Map(rootNodes.map(n => [n.cluster.anchor.id, { x: n.x, y: n.y }]))
-    const subNodes = subClusters.map((c, i) => {
-      const parentPos = rootPosMap.get(c.anchor.parentAnchorId!) ?? { x: width / 2, y: height / 2 }
-      const angle = (i * 2.4) // golden angle spread
-      const offset = 100 + Math.random() * 40
-      return {
-        cluster: c,
-        x: parentPos.x + Math.cos(angle) * offset,
-        y: parentPos.y + Math.sin(angle) * offset,
-        vx: 0,
-        vy: 0,
-        r: computeR(c.entityCount),
-        parentId: c.anchor.parentAnchorId ?? null,
-      }
-    })
-
-    // All nodes in one simulation
-    const allNodes = [...rootNodes, ...subNodes]
-
-    for (let tick = 0; tick < 200; tick++) {
-      const damping = 0.8
+    // ── Force simulation ──────────────────────────────────────────────────
+    for (let tick = 0; tick < 250; tick++) {
+      const damping = 0.78
 
       for (const n of allNodes) {
-        // Gentle centering for all
-        n.vx += (width / 2 - n.x) * 0.001
-        n.vy += (height / 2 - n.y) * 0.001
+        // Gravity toward prominence-based home ring
+        const homeR = (1 - n.prominence) * maxDist
+        const angle = Math.atan2(n.y - cy, n.x - cx)
+        const homeX = cx + Math.cos(angle) * homeR
+        const homeY = cy + Math.sin(angle) * homeR
+        n.vx += (homeX - n.x) * 0.0004
+        n.vy += (homeY - n.y) * 0.0004
 
-        // Sub-anchors: very gentle gravity toward parent — keep them nearby but clearly separated
-        if (n.parentId) {
-          const parent = allNodes.find(p => p.cluster.anchor.id === n.parentId)
-          if (parent) {
-            const dx = parent.x - n.x
-            const dy = parent.y - n.y
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            // Only pull if further than ideal separation (parent.r + n.r + 40)
-            const idealSep = parent.r + n.r + 40
-            if (dist > idealSep) {
-              n.vx += dx * 0.004
-              n.vy += dy * 0.004
-            }
-          }
-        }
+        // Gentle centering bias
+        n.vx += (cx - n.x) * 0.0003
+        n.vy += (cy - n.y) * 0.0003
       }
 
       // Repulsion between all pairs
@@ -103,7 +95,7 @@ export function useClusterLayout(
           const dx = b.x - a.x
           const dy = b.y - a.y
           const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          const idealDist = Math.max(a.r + b.r + 60, 90)
+          const idealDist = Math.max(a.r + b.r + 40, 50)
           if (dist < idealDist) {
             const force = (idealDist - dist) * 0.04
             a.vx -= (dx / dist) * force
@@ -120,11 +112,13 @@ export function useClusterLayout(
       }
     }
 
-    // Boundary clamping
+    // Soft boundary clamp
     for (const n of allNodes) {
-      const pad = n.r + 20
-      n.x = Math.max(pad, Math.min(width - pad, n.x))
-      n.y = Math.max(pad, Math.min(height - pad, n.y))
+      const pad = n.r + 4
+      if (n.x < pad) n.x = pad
+      if (n.x > width - pad) n.x = width - pad
+      if (n.y < pad) n.y = pad
+      if (n.y > height - pad) n.y = height - pad
     }
 
     return allNodes.map(n => ({

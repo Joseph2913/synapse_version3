@@ -42,23 +42,13 @@ const MAX_ZOOM = 4.0
 
 interface Camera { zoom: number; panX: number; panY: number }
 
-// Live node positions for floating + drag
+// Live node positions for drag interactions
 interface LiveNode {
   id: string
   x: number
   y: number
   vx: number
   vy: number
-  // Gentle floating drift
-  floatPhase: number
-  floatSpeedX: number
-  floatSpeedY: number
-  floatAmpX: number
-  floatAmpY: number
-  // PRD-22: hierarchy tethering
-  parentAnchorId: string | null
-  homeX: number
-  homeY: number
 }
 
 export function LandscapeView({
@@ -104,8 +94,12 @@ export function LandscapeView({
     return () => obs.disconnect()
   }, [])
 
-  // Static layout (initial positions)
-  const layoutClusters = useClusterLayout(clusters, size.width, size.height)
+  // Only show root anchors — memoize to keep a stable reference
+  const rootClusters = useMemo(
+    () => clusters.filter(c => !c.anchor.isSubAnchor),
+    [clusters]
+  )
+  const layoutClusters = useClusterLayout(rootClusters, size.width, size.height)
 
   // ── Live floating positions ──────────────────────────────────────────────
   const liveNodesRef = useRef<LiveNode[]>([])
@@ -113,6 +107,7 @@ export function LandscapeView({
   const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
   const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
   const rafRef = useRef<number>(0)
+  const startAnimRef = useRef<(() => void) | null>(null)
 
   // Initialize live nodes when layout changes — all nodes get the same floating params
   useEffect(() => {
@@ -122,35 +117,29 @@ export function LandscapeView({
       y: c.position.cy,
       vx: 0,
       vy: 0,
-      floatPhase: Math.random() * Math.PI * 2,
-      floatSpeedX: 0.25 + Math.random() * 0.35,
-      floatSpeedY: 0.18 + Math.random() * 0.25,
-      floatAmpX: 0.12 + Math.random() * 0.2,
-      floatAmpY: 0.1 + Math.random() * 0.16,
-      parentAnchorId: c.anchor.parentAnchorId ?? null,
-      homeX: c.position.cx,
-      homeY: c.position.cy,
     }))
+    // Sync positions immediately
+    const newPos = new Map<string, { x: number; y: number }>()
+    for (const c of layoutClusters) newPos.set(c.anchor.id, { x: c.position.cx, y: c.position.cy })
+    setLivePositions(newPos)
   }, [layoutClusters])
 
-  // Animation loop — gentle floating for ALL nodes + directional drag drift
+  // Animation loop — only runs when a node is being dragged (nodes are static otherwise)
   useEffect(() => {
-    let lastTime = performance.now()
+    let running = false
 
-    const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05)
-      lastTime = now
+    const tick = () => {
       const nodes = liveNodesRef.current
-      if (nodes.length === 0) { rafRef.current = requestAnimationFrame(tick); return }
-
-      const w = sizeRef.current.width
-      const h = sizeRef.current.height
+      if (nodes.length === 0) return
 
       const nodeMap = new Map<string, LiveNode>()
       for (const n of nodes) nodeMap.set(n.id, n)
 
+      let anyMoving = false
+
       // Directional drag drift — connected nodes follow in same direction
       if (dragRef.current && dragPrevPos.current) {
+        anyMoving = true
         const dragNode = nodeMap.get(dragRef.current.id)
         if (dragNode) {
           const moveDx = dragNode.x - dragPrevPos.current.x
@@ -161,7 +150,6 @@ export function LandscapeView({
               for (const [connId, weight] of connections) {
                 const connNode = nodeMap.get(connId)
                 if (!connNode) continue
-                // Very subtle — barely perceptible drift in the same direction
                 const strength = 0.0005 + weight * 0.004
                 connNode.vx += moveDx * strength
                 connNode.vy += moveDy * strength
@@ -179,44 +167,47 @@ export function LandscapeView({
           continue
         }
 
-        // Sub-anchors: gentle gravity toward parent, but only if far enough away
-        if (n.parentAnchorId) {
-          const parent = nodeMap.get(n.parentAnchorId)
-          if (parent) {
-            const dx = parent.x - n.x
-            const dy = parent.y - n.y
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            // Only pull if beyond a comfortable separation distance
-            if (dist > 80) {
-              n.vx += dx * 0.002 * dt
-              n.vy += dy * 0.002 * dt
-            }
-          }
+        // Damping — settle to a stop
+        n.vx *= 0.9
+        n.vy *= 0.9
+
+        // Kill tiny velocities so nodes fully stop
+        if (Math.abs(n.vx) < 0.01) n.vx = 0
+        if (Math.abs(n.vy) < 0.01) n.vy = 0
+
+        if (n.vx !== 0 || n.vy !== 0) {
+          n.x += n.vx
+          n.y += n.vy
+          anyMoving = true
         }
-
-        // Boundary soft push
-        const pad = 30
-        if (n.x < pad) n.vx += (pad - n.x) * 0.01
-        if (n.x > w - pad) n.vx -= (n.x - (w - pad)) * 0.01
-        if (n.y < pad) n.vy += (pad - n.y) * 0.01
-        if (n.y > h - pad) n.vy -= (n.y - (h - pad)) * 0.01
-
-        // Damping
-        n.vx *= 0.97
-        n.vy *= 0.97
-
-        n.x += n.vx
-        n.y += n.vy
       }
 
       const newPos = new Map<string, { x: number; y: number }>()
       for (const n of nodes) newPos.set(n.id, { x: n.x, y: n.y })
       setLivePositions(newPos)
 
-      rafRef.current = requestAnimationFrame(tick)
+      if (anyMoving || dragRef.current) {
+        rafRef.current = requestAnimationFrame(tick)
+      } else {
+        running = false
+      }
     }
 
-    rafRef.current = requestAnimationFrame(tick)
+    // Expose a way to kick the animation when drag starts
+    startAnimRef.current = () => {
+      if (!running) {
+        running = true
+        rafRef.current = requestAnimationFrame(tick)
+      }
+    }
+
+    // Initial position sync (one frame)
+    rafRef.current = requestAnimationFrame(() => {
+      const newPos = new Map<string, { x: number; y: number }>()
+      for (const n of liveNodesRef.current) newPos.set(n.id, { x: n.x, y: n.y })
+      setLivePositions(newPos)
+    })
+
     return () => cancelAnimationFrame(rafRef.current)
   }, [])
 
@@ -234,6 +225,7 @@ export function LandscapeView({
 
     dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y }
     dragPrevPos.current = { x: node.x, y: node.y }
+    startAnimRef.current?.()
 
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current || !svgRef.current) return
@@ -260,42 +252,6 @@ export function LandscapeView({
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [])
-
-  // Position suggested clusters around the periphery
-  const positionedSuggested = useMemo(() => {
-    if (!suggestedClusters?.length || layoutClusters.length === 0) return []
-    const SUGGESTED_RADIUS = 10
-    const results: Array<SuggestedClusterData & { cx: number; cy: number; r: number }> = []
-
-    suggestedClusters.forEach((candidate, i) => {
-      const angle = (i / suggestedClusters.length) * Math.PI * 2
-      const ringRadius = Math.min(size.width, size.height) * 0.42
-
-      let cx = size.width / 2 + Math.cos(angle) * ringRadius
-      let cy = size.height / 2 + Math.sin(angle) * ringRadius
-
-      for (const lc of layoutClusters) {
-        const pos = livePositions.get(lc.anchor.id) ?? { x: lc.position.cx, y: lc.position.cy }
-        const dx = cx - pos.x
-        const dy = cy - pos.y
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        const minDist = lc.position.r + SUGGESTED_RADIUS + 30
-        if (dist < minDist && dist > 0) {
-          const push = (minDist - dist) / dist
-          cx += dx * push * 0.5
-          cy += dy * push * 0.5
-        }
-      }
-
-      const pad = SUGGESTED_RADIUS + 15
-      cx = Math.max(pad, Math.min(size.width - pad, cx))
-      cy = Math.max(pad, Math.min(size.height - pad, cy))
-
-      results.push({ ...candidate, cx, cy, r: SUGGESTED_RADIUS })
-    })
-
-    return results
-  }, [suggestedClusters, layoutClusters, size.width, size.height, livePositions])
 
   const layoutClustersRef = useRef(layoutClusters)
   useEffect(() => { layoutClustersRef.current = layoutClusters }, [layoutClusters])
@@ -349,13 +305,20 @@ export function LandscapeView({
   const zoomOut = useCallback(() => { zoomAround(0.8, sizeRef.current.width / 2, sizeRef.current.height / 2) }, [zoomAround])
   const resetCamera = useCallback(() => { setCamera({ zoom: 1, panX: 0, panY: 0 }) }, [])
   const resetNodes = useCallback(() => {
+    const clusterMap = new Map(layoutClusters.map(c => [c.anchor.id, c]))
     for (const n of liveNodesRef.current) {
-      n.x = n.homeX
-      n.y = n.homeY
+      const c = clusterMap.get(n.id)
+      if (c) {
+        n.x = c.position.cx
+        n.y = c.position.cy
+      }
       n.vx = 0
       n.vy = 0
     }
-  }, [])
+    const newPos = new Map<string, { x: number; y: number }>()
+    for (const n of liveNodesRef.current) newPos.set(n.id, { x: n.x, y: n.y })
+    setLivePositions(newPos)
+  }, [layoutClusters])
 
   // Wheel zoom
   useEffect(() => {
@@ -444,44 +407,6 @@ export function LandscapeView({
           onMouseLeave={handleSvgMouseUp}
         >
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
-            {/* 0. Hierarchy tether lines — sub-anchors to their parents */}
-            {layoutClusters
-              .filter(c => c.anchor.isSubAnchor && c.anchor.parentAnchorId)
-              .map(subCluster => {
-                const parent = layoutClusters.find(
-                  c => c.anchor.id === subCluster.anchor.parentAnchorId
-                )
-                if (!parent) return null
-
-                const subPos = livePositions.get(subCluster.anchor.id)
-                const parentPos = livePositions.get(parent.anchor.id)
-                const sx = subPos?.x ?? subCluster.position.cx
-                const sy = subPos?.y ?? subCluster.position.cy
-                const px = parentPos?.x ?? parent.position.cx
-                const py = parentPos?.y ?? parent.position.cy
-
-                const dx   = sx - px
-                const dy   = sy - py
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1
-                const ex   = px + (dx / dist) * parent.position.r
-                const ey   = py + (dy / dist) * parent.position.r
-
-                const color = getEntityColor(parent.anchor.entityType)
-
-                return (
-                  <line
-                    key={`tether-${subCluster.anchor.id}`}
-                    x1={sx} y1={sy}
-                    x2={ex} y2={ey}
-                    stroke={color}
-                    strokeWidth={2}
-                    strokeOpacity={0.4}
-                    strokeDasharray="6 4"
-                    style={{ pointerEvents: 'none' }}
-                  />
-                )
-              })}
-
             {/* 1. Cross-cluster edges */}
             {showCrossEdges && layoutClusters.map(cluster => {
               const pos1 = livePositions.get(cluster.anchor.id)
@@ -539,63 +464,7 @@ export function LandscapeView({
               )
             })}
 
-            {/* 2b. Ghost tethers */}
-            {positionedSuggested.map(sc => {
-              const nearest = layoutClusters[0]
-              if (!nearest) return null
-              const pos = livePositions.get(nearest.anchor.id)
-              return (
-                <line
-                  key={`suggested-tether-${sc.candidateId}`}
-                  x1={sc.cx} y1={sc.cy}
-                  x2={pos?.x ?? nearest.position.cx} y2={pos?.y ?? nearest.position.cy}
-                  stroke="rgba(245,158,11,0.06)"
-                  strokeWidth={0.5}
-                  strokeDasharray="3 5"
-                  style={{ pointerEvents: 'none' }}
-                />
-              )
-            })}
-
-            {/* 2c. Ghost cluster bubbles */}
-            {positionedSuggested.map(sc => {
-              const ghostCluster: ClusterData & { compositeScore: number } = {
-                anchor: { id: sc.nodeId, label: sc.label, entityType: sc.entityType, description: null, entityCount: sc.mentionCount, parentAnchorId: null, isSubAnchor: false },
-                entityCount: sc.mentionCount,
-                directEntityCount: sc.mentionCount,
-                inheritedEntityCount: 0,
-                typeDistribution: [],
-                position: { cx: 0, cy: 0, r: sc.r },
-                crossClusterEdges: [],
-                subAnchorIds: [],
-                compositeScore: sc.compositeScore,
-              }
-              return (
-                <g
-                  key={`suggested-${sc.candidateId}`}
-                  transform={`translate(${sc.cx}, ${sc.cy})`}
-                  onClick={() => onSuggestedClusterClick?.(sc)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <ClusterBubble
-                    cluster={ghostCluster}
-                    dimmed={false}
-                    isSuggested={true}
-                    duplicateCount={sc.duplicateCount}
-                    cameraZoom={camera.zoom}
-                    onHover={(c, e) => {
-                      if (c) {
-                        setTooltip({
-                          data: { kind: 'suggested', candidateId: sc.candidateId, label: sc.label, entityType: sc.entityType, reasoning: sc.reasoningText, score: sc.compositeScore, velocity: sc.velocityDirection },
-                          x: e.clientX, y: e.clientY,
-                        })
-                      } else { setTooltip(null) }
-                    }}
-                    onClick={() => {}}
-                  />
-                </g>
-              )
-            })}
+            {/* Suggested clusters moved to bottom-left panel */}
 
             {/* 3. Unclustered zone */}
             {unclustered.length > 0 && (
@@ -717,6 +586,14 @@ export function LandscapeView({
         )
       })()}
 
+      {/* Suggested anchors panel — bottom-left corner */}
+      {suggestedClusters && suggestedClusters.length > 0 && (
+        <SuggestedAnchorsPanel
+          suggestions={suggestedClusters}
+          onAdd={onSuggestedClusterClick}
+        />
+      )}
+
       {/* Tooltip */}
       {tooltip && <NodeTooltip tooltip={tooltip.data} x={tooltip.x} y={tooltip.y} />}
 
@@ -739,6 +616,137 @@ export function LandscapeView({
           />
         )
       })()}
+    </div>
+  )
+}
+
+function SuggestedAnchorsPanel({
+  suggestions,
+  onAdd,
+}: {
+  suggestions: SuggestedClusterData[]
+  onAdd?: (candidate: SuggestedClusterData) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
+
+  const visible = suggestions.filter(s => !dismissed.has(s.candidateId))
+  if (visible.length === 0) return null
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        bottom: 16,
+        left: 16,
+        zIndex: 20,
+        width: expanded ? 240 : 'auto',
+        background: 'rgba(255,255,255,0.95)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 10,
+        overflow: 'hidden',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+      }}
+    >
+      {/* Header — always visible */}
+      <button
+        type="button"
+        onClick={() => setExpanded(prev => !prev)}
+        className="flex items-center gap-2 w-full"
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          padding: '8px 12px',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ fontSize: 11, color: '#d97706', fontWeight: 700, fontFamily: 'var(--font-body)' }}>
+          ✦
+        </span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-primary)', fontFamily: 'var(--font-body)', flex: 1 }}>
+          {visible.length} suggested anchor{visible.length !== 1 ? 's' : ''}
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--color-text-secondary)', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }}>
+          ▾
+        </span>
+      </button>
+
+      {/* Expanded list */}
+      {expanded && (
+        <div style={{ maxHeight: 240, overflowY: 'auto', padding: '0 8px 8px' }}>
+          {visible.map(s => {
+            const color = getEntityColor(s.entityType)
+            return (
+              <div
+                key={s.candidateId}
+                className="flex items-center gap-2"
+                style={{
+                  padding: '6px 6px',
+                  borderRadius: 6,
+                  marginBottom: 2,
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: color, flexShrink: 0,
+                }} />
+                <span style={{
+                  flex: 1, fontSize: 10, fontWeight: 500,
+                  color: 'var(--color-text-primary)',
+                  fontFamily: 'var(--font-body)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {s.label}
+                </span>
+                <span style={{
+                  fontSize: 8, color: 'var(--color-text-secondary)',
+                  fontFamily: 'var(--font-body)', flexShrink: 0,
+                }}>
+                  {Math.round(s.compositeScore * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onAdd?.(s)}
+                  title="Review"
+                  style={{
+                    background: 'var(--color-accent-50)',
+                    border: '1px solid rgba(214,58,0,0.15)',
+                    borderRadius: 4,
+                    padding: '2px 6px',
+                    fontSize: 9,
+                    fontWeight: 600,
+                    color: 'var(--color-accent-500)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-body)',
+                    flexShrink: 0,
+                  }}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissed(prev => new Set(prev).add(s.candidateId))}
+                  title="Dismiss"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: '2px 4px',
+                    fontSize: 12,
+                    color: 'var(--color-text-secondary)',
+                    cursor: 'pointer',
+                    lineHeight: 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

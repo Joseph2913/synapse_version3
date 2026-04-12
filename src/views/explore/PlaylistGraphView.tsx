@@ -2,9 +2,10 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ListMusic, Loader2 } from 'lucide-react'
 import { usePlaylistLayout } from '../../hooks/usePlaylistLayout'
 import { useAuth } from '../../hooks/useAuth'
-import { fetchPlaylistGraph } from '../../services/exploreQueries'
+import { fetchPlaylistGraph, fetchSourceGraph } from '../../services/exploreQueries'
 import { SourceDetailCard } from '../../components/explore/SourceDetailCard'
 import { PlaylistDetailPanel } from '../../components/explore/PlaylistDetailPanel'
+import { getSourceConfig } from '../../config/sourceTypes'
 import type {
   PlaylistNode,
   PlaylistEdge,
@@ -57,6 +58,15 @@ const PLAYLIST_ICON_KEYWORDS: [string[], PlaylistIconDef][] = [
   // Psychology / Mind
   [['psychology', 'mind', 'cognitive', 'behavior', 'therapy'],
     { path: 'M13 1.07V9h7c0-4.08-3.05-7.44-7-7.93zM4 15c0 4.42 3.58 8 8 8s8-3.58 8-8v-4H4v4zm7-13.93C7.05 1.56 4 4.92 4 9h7V1.07z' }], // Brain-half
+  // Meeting / Transcripts
+  [['meeting'],
+    { path: 'M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z' }], // Chat bubble
+  // Document
+  [['document'],
+    { path: 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6zm2-6h8v2H8v-2zm0-3h8v2H8v-2z' }], // Document
+  // Research
+  [['research'],
+    { path: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z' }], // Magnifying glass
 ]
 
 /** Resolve an SVG icon path based on playlist name keywords */
@@ -132,10 +142,18 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
   const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
   const rafRef = useRef<number>(0)
 
-  // Playlist color map
+  // Playlist/cluster color map — use source-type colors for virtual clusters
   const playlistColorMap = useMemo(() => {
     const map = new Map<string, string>()
-    playlists.forEach((p, i) => map.set(p.id, getPlaylistColor(i)))
+    let colorIdx = 0
+    playlists.forEach(p => {
+      if (p.id.startsWith('__type__')) {
+        const sourceType = p.id.replace('__type__', '')
+        map.set(p.id, getSourceConfig(sourceType).color)
+      } else {
+        map.set(p.id, getPlaylistColor(colorIdx++))
+      }
+    })
     return map
   }, [playlists])
 
@@ -217,16 +235,27 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
   }, [playlistCenterPositions, videosByPlaylist, videoPositions])
 
   // Cross-playlist video edges only
-  const crossPlaylistVideoEdges = useMemo(() => {
-    // Build sourceId → playlistId lookup
-    const sourceToPlaylist = new Map<string, string>()
-    for (const v of videos) sourceToPlaylist.set(v.sourceId, v.playlistId)
-    return videoEdges.filter(e => {
-      const pA = sourceToPlaylist.get(e.fromSourceId)
-      const pB = sourceToPlaylist.get(e.toSourceId)
-      return pA && pB && pA !== pB
-    })
-  }, [videos, videoEdges])
+  // Classify edges: intra-cluster (same playlist/type) vs cross-cluster
+  const sourceToPlaylist = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const v of videos) map.set(v.sourceId, v.playlistId)
+    return map
+  }, [videos])
+
+  const classifiedEdges = useMemo(() => {
+    return videoEdges
+      .filter(e => sourceToPlaylist.has(e.fromSourceId) && sourceToPlaylist.has(e.toSourceId))
+      .map(e => ({
+        ...e,
+        isCrossCluster: sourceToPlaylist.get(e.fromSourceId) !== sourceToPlaylist.get(e.toSourceId),
+      }))
+  }, [videoEdges, sourceToPlaylist])
+
+  // Keep cross-cluster subset for stats
+  const crossPlaylistVideoEdges = useMemo(
+    () => classifiedEdges.filter(e => e.isCrossCluster),
+    [classifiedEdges]
+  )
 
   // Hovered video's connected video IDs (for highlighting)
   const hoveredConnections = useMemo(() => {
@@ -405,13 +434,74 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
     if (!user) return
     let cancelled = false
     setLoading(true)
-    fetchPlaylistGraph(user.id)
-      .then(data => {
+
+    Promise.all([
+      fetchPlaylistGraph(user.id),
+      fetchSourceGraph(user.id),
+    ])
+      .then(([playlistData, sourceData]) => {
         if (cancelled) return
-        setPlaylists(data.playlists)
-        setPlaylistEdges(data.playlistEdges)
-        setVideos(data.videos)
-        setVideoEdges(data.videoEdges)
+        // 1. Set playlist data as-is
+        setPlaylists(playlistData.playlists)
+        setPlaylistEdges(playlistData.playlistEdges)
+
+        // 2. Get YouTube source IDs already covered by playlists
+        const playlistVideoIds = new Set(playlistData.videos.map(v => v.sourceId))
+
+        // 3. Group non-YouTube sources by type into virtual playlists
+        const nonYouTubeSources = sourceData.sources.filter(
+          s => s.sourceType !== 'YouTube' && !playlistVideoIds.has(s.id)
+        )
+
+        const groupedByType = new Map<string, typeof nonYouTubeSources>()
+        for (const s of nonYouTubeSources) {
+          const key = s.sourceType || 'Other'
+          const list = groupedByType.get(key) ?? []
+          list.push(s)
+          groupedByType.set(key, list)
+        }
+
+        // Create virtual PlaylistNodes for each source type
+        const virtualPlaylists: PlaylistNode[] = []
+        const virtualVideos: PlaylistVideoNode[] = []
+
+        for (const [sourceType, sources] of groupedByType) {
+          const virtualId = `__type__${sourceType}`
+          virtualPlaylists.push({
+            id: virtualId,
+            playlistName: sourceType,
+            playlistUrl: '',
+            synapseCode: null,
+            isActive: true,
+            videoCount: sources.length,
+          })
+          for (const s of sources) {
+            virtualVideos.push({
+              sourceId: s.id,
+              videoTitle: s.title,
+              videoUrl: '',
+              thumbnailUrl: null,
+              playlistId: virtualId,
+              entityCount: s.entityCount,
+              publishedAt: s.createdAt,
+            })
+          }
+        }
+
+        // Convert source edges into PlaylistVideoEdge format
+        // Include edges where at least one end is a non-YouTube source
+        const nonYouTubeIds = new Set(nonYouTubeSources.map(s => s.id))
+        const sourceEdgesAsVideoEdges: PlaylistVideoEdge[] = sourceData.edges
+          .filter(e => nonYouTubeIds.has(e.fromSourceId) || nonYouTubeIds.has(e.toSourceId))
+          .map(e => ({
+            fromSourceId: e.fromSourceId,
+            toSourceId: e.toSourceId,
+            sharedEntityCount: e.totalWeight,
+          }))
+
+        setPlaylists(prev => [...prev, ...virtualPlaylists])
+        setVideos([...playlistData.videos, ...virtualVideos])
+        setVideoEdges([...playlistData.videoEdges, ...sourceEdgesAsVideoEdges])
       })
       .catch(err => console.warn('PlaylistGraphView fetch error:', err))
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -576,7 +666,7 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
       <div ref={containerRef} className="relative w-full h-full flex items-center justify-center">
         <span className="flex items-center gap-2" style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--color-text-secondary)' }}>
           <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-          Loading playlists…
+          Loading sources…
         </span>
       </div>
     )
@@ -589,10 +679,10 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         <div className="flex flex-col items-center gap-3" style={{ maxWidth: 320, textAlign: 'center' }}>
           <ListMusic size={32} style={{ color: 'var(--color-text-placeholder)' }} />
           <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-            No playlists connected
+            No sources yet
           </h3>
           <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
-            Connect YouTube playlists in Automate to see cross-playlist connections.
+            Ingest content to see your sources clustered by type and playlist.
           </p>
         </div>
       </div>
@@ -643,8 +733,8 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
               })
             })}
 
-            {/* 2. Cross-playlist video edges — prominent connecting lines */}
-            {showEdges && crossPlaylistVideoEdges.map(edge => {
+            {/* 2. All source edges — intra-cluster (subtle) + cross-cluster (prominent) */}
+            {showEdges && classifiedEdges.map(edge => {
               const fromLive = livePositions.get(`v:${edge.fromSourceId}`)
               const toLive = livePositions.get(`v:${edge.toSourceId}`)
               const fromPos = fromLive ?? videoPositions.get(edge.fromSourceId)
@@ -653,17 +743,33 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
 
               const isHighlighted = hoveredVideoId === edge.fromSourceId || hoveredVideoId === edge.toSourceId
               const hasHover = !!hoveredVideoId
-              const maxShared = Math.max(...crossPlaylistVideoEdges.map(e => e.sharedEntityCount), 1)
+              const maxShared = Math.max(...classifiedEdges.map(e => e.sharedEntityCount), 1)
               const weightNorm = edge.sharedEntityCount / maxShared
-              const baseWidth = 0.8 + weightNorm * 1.5
+
+              // Cross-cluster edges are thicker and more visible; intra-cluster are subtler
+              const baseWidth = edge.isCrossCluster
+                ? 0.8 + weightNorm * 1.5
+                : 0.4 + weightNorm * 0.8
+              const baseOpacity = edge.isCrossCluster ? 0.15 : 0.07
+
+              // When hovering, highlighted edges pop, others fade
+              let stroke = 'rgba(120,130,145,1)'
+              let strokeWidth = baseWidth
+              let strokeOpacity = hasHover ? 0.03 : baseOpacity
+
+              if (isHighlighted) {
+                stroke = edge.isCrossCluster ? 'var(--color-accent-500)' : playlistColorMap.get(sourceToPlaylist.get(edge.fromSourceId)!) ?? 'var(--color-accent-500)'
+                strokeWidth = edge.isCrossCluster ? 2 : 1.5
+                strokeOpacity = edge.isCrossCluster ? 0.6 : 0.45
+              }
 
               return (
                 <line
                   key={`ve-${edge.fromSourceId}-${edge.toSourceId}`}
                   x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
-                  stroke={isHighlighted ? 'var(--color-accent-500)' : 'rgba(120,130,145,1)'}
-                  strokeWidth={isHighlighted ? 2 : baseWidth}
-                  strokeOpacity={isHighlighted ? 0.6 : hasHover ? 0.04 : 0.15}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  strokeOpacity={strokeOpacity}
                   style={{ transition: 'stroke-opacity 0.15s ease, stroke-width 0.15s ease' }}
                 />
               )
@@ -798,7 +904,7 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
                         userSelect: 'none',
                       }}
                     >
-                      {pVideos.length} videos
+                      {pVideos.length} {playlist.id.startsWith('__type__') ? 'sources' : 'videos'}
                     </text>
                   </g>
                 </g>
@@ -819,10 +925,12 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         const color = playlistColorMap.get(hVideo.playlistId) ?? '#94a3b8'
         const playlist = playlists.find(p => p.id === hVideo.playlistId)
 
-        // Count cross-playlist connections for this video
+        // Count connections for this video
+        const totalConns = hoveredConnections.size
         const crossConns = crossPlaylistVideoEdges.filter(
           e => e.fromSourceId === hVideo.sourceId || e.toSourceId === hVideo.sourceId
         ).length
+        const intraConns = totalConns - crossConns
 
         const screenX = pos.x * camera.zoom + camera.panX
         const screenY = pos.y * camera.zoom + camera.panY
@@ -856,7 +964,8 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
             <div className="flex items-center gap-2">
               <span className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)' }}>
                 {hVideo.entityCount} entities
-                {crossConns > 0 && ` · ${crossConns} cross-playlist connections`}
+                {intraConns > 0 && ` · ${intraConns} within cluster`}
+                {crossConns > 0 && ` · ${crossConns} cross-cluster`}
               </span>
             </div>
             {playlist && (
@@ -923,18 +1032,21 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
           <svg width={8} height={8} viewBox="0 0 8 8" style={{ flexShrink: 0, transition: 'transform 0.15s ease', transform: legendOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>
             <path d="M2 1l4 3-4 3z" fill="currentColor" />
           </svg>
-          Playlists ({playlists.length})
+          Sources ({playlists.length})
         </button>
         {legendOpen && (
           <div style={{ padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 240, overflowY: 'auto' }}>
-            {playlists.map((p, i) => (
-              <div key={p.id} className="flex items-center gap-2">
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: `${getPlaylistColor(i)}22`, border: `1.5px solid ${getPlaylistColor(i)}`, flexShrink: 0 }} />
-                <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
-                  {p.playlistName}
-                </span>
-              </div>
-            ))}
+            {playlists.map(p => {
+              const color = playlistColorMap.get(p.id) ?? '#6b7280'
+              return (
+                <div key={p.id} className="flex items-center gap-2">
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: `${color}22`, border: `1.5px solid ${color}`, flexShrink: 0 }} />
+                  <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
+                    {p.playlistName}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -952,10 +1064,10 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
         }}
       >
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
-          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{playlists.length}</strong> playlists
+          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{playlists.length}</strong> clusters
         </span>
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
-          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{videos.length}</strong> videos
+          <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{videos.length}</strong> sources
         </span>
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
           <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{crossPlaylistVideoEdges.length}</strong> cross-connections

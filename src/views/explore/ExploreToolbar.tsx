@@ -33,8 +33,6 @@ interface ExploreToolbarProps {
   onToggleConnType?: (type: SourceConnectionType) => void
   // Clear all
   onClearAllFilters?: () => void
-  // Suggested cluster notification
-  suggestedCount?: number
 }
 
 const PILL_BASE: React.CSSProperties = {
@@ -76,7 +74,6 @@ export function ExploreToolbar({
   onToggleNeighborhoodEdgeType,
   onToggleConnType,
   onClearAllFilters,
-  suggestedCount,
 }: ExploreToolbarProps) {
   const [anchorOpen, setAnchorOpen] = useState(false)
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -298,30 +295,6 @@ export function ExploreToolbar({
           </>
         )}
 
-        {/* Suggested clusters notification */}
-        {(suggestedCount ?? 0) > 0 && viewMode === 'anchors' && (
-          <>
-            <Divider />
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '4px 10px', borderRadius: 20,
-              background: 'rgba(245,158,11,0.08)',
-              border: '1px solid rgba(245,158,11,0.25)',
-              flexShrink: 0,
-            }}>
-              <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: '#d97706' }}>
-                ✦ {suggestedCount} new cluster{suggestedCount !== 1 ? 's' : ''} detected
-              </span>
-              <button
-                type="button"
-                onClick={() => { window.location.href = '/anchors' }}
-                style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: '#d97706', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
-              >
-                Review →
-              </button>
-            </div>
-          </>
-        )}
       </div>
 
       {/* ── CENTER: Anchors / Sources tab toggle (absolutely centered) ── */}
@@ -332,9 +305,9 @@ export function ExploreToolbar({
         borderRadius: 22, padding: 3,
         border: '1px solid var(--border-subtle)',
       }}>
-        {(['anchors', 'sources', 'playlists'] as const).map(mode => {
+        {(['anchors', 'sources'] as const).map(mode => {
           const isActive = viewMode === mode
-          const labels = { anchors: 'Anchors', sources: 'Sources', playlists: 'Playlists' }
+          const labels: Record<string, string> = { anchors: 'Anchors', sources: 'Sources' }
           return (
             <button
               key={mode}

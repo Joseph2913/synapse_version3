@@ -3,12 +3,11 @@ import { Loader2, AlertCircle, Compass, RefreshCw } from 'lucide-react'
 import { ExploreToolbar } from './explore/ExploreToolbar'
 import { LandscapeView } from './explore/LandscapeView'
 import { NeighborhoodView } from './explore/NeighborhoodView'
-import { SourceGraphView } from './explore/SourceGraphView'
 import { PlaylistGraphView } from './explore/PlaylistGraphView'
 
 import { useExploreData } from '../hooks/useExploreData'
 import { useExploreFilters } from '../hooks/useExploreFilters'
-import type { ClusterData, EntityNode, SourceNode, SourceEdge } from '../types/explore'
+import type { ClusterData, EntityNode } from '../types/explore'
 import type { EntityEdge } from '../services/exploreQueries'
 import { useAuth } from '../hooks/useAuth'
 import { fetchCandidatesWithNodes } from '../services/anchorCandidates'
@@ -78,9 +77,6 @@ export function ExploreView() {
       window.removeEventListener('synapse:anchor-suggestions-changed', onSuggestionsChanged)
     }
   }, [user])
-
-  // Source graph data
-  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
 
   // Neighborhood edge-type visibility (lifted so toolbar can control it)
   const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Set<string>>(
@@ -153,7 +149,7 @@ export function ExploreView() {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSelectedEntityId(null)
-        setSelectedSourceId(null)
+        // (source selection handled within PlaylistGraphView)
       }
     }
     document.addEventListener('keydown', handler)
@@ -163,7 +159,7 @@ export function ExploreView() {
   // Mode switching: clear selection
   const handleViewModeChange = useCallback((mode: typeof viewMode) => {
     setSelectedEntityId(null)
-    setSelectedSourceId(null)
+    // (source selection handled within PlaylistGraphView)
     setViewMode(mode)
   }, [setViewMode, setSelectedEntityId])
 
@@ -172,7 +168,7 @@ export function ExploreView() {
     setSelectedClusterId(prev => prev === cluster.anchor.id ? null : cluster.anchor.id)
     setSelectedSuggestedId(null)
     setSelectedEntityId(null)
-    setSelectedSourceId(null)
+    // (source selection handled within PlaylistGraphView)
   }, [setSelectedEntityId])
 
   const handleClusterDoubleClick = useCallback((cluster: ClusterData) => {
@@ -187,14 +183,6 @@ export function ExploreView() {
   const handleSelectEntity = useCallback((entity: EntityNode | null) => {
     setSelectedEntityId(entity?.id ?? null)
   }, [setSelectedEntityId])
-
-  const handleSelectSource = useCallback((source: SourceNode | null) => {
-    setSelectedSourceId(source?.id ?? null)
-  }, [])
-
-  const handleSourcesLoaded = useCallback((_sources: SourceNode[], _edges: SourceEdge[]) => {
-    // Sources loaded — no further processing needed
-  }, [])
 
   const handleEntitiesLoaded = useCallback((_entities: EntityNode[]) => {
     // Entities available for neighborhood view context
@@ -211,7 +199,7 @@ export function ExploreView() {
   const handleSuggestedClusterClick = useCallback((candidate: SuggestedClusterData) => {
     setSelectedSuggestedId(candidate.candidateId)
     setSelectedEntityId(null)
-    setSelectedSourceId(null)
+    // (source selection handled within PlaylistGraphView)
   }, [setSelectedEntityId])
 
   // Toolbar props
@@ -230,7 +218,6 @@ export function ExploreView() {
     onSetSourceAnchorFilter: setSourceAnchorFilter,
     onToggleConnType: toggleConnType,
     onClearAllFilters: clearAllFilters,
-    suggestedCount: suggestedClusterData.length,
   }
 
   return (
@@ -283,19 +270,8 @@ export function ExploreView() {
             onEdgesLoaded={handleEdgesLoaded}
           />
         </div>
-      ) : viewMode === 'sources' ? (
-        /* ── SOURCE GRAPH: Full-screen canvas ── */
-        <div className="flex-1 overflow-hidden relative">
-          <SourceGraphView
-            filters={filters}
-            selectedSourceId={selectedSourceId}
-            onSelectSource={handleSelectSource}
-            onSourcesLoaded={handleSourcesLoaded}
-            showEdges={showEdges}
-          />
-        </div>
-      ) : viewMode === 'playlists' ? (
-        /* ── PLAYLIST GRAPH: Cross-playlist video connections ── */
+      ) : viewMode === 'sources' || viewMode === 'playlists' ? (
+        /* ── COMBINED SOURCE GRAPH: Playlists + other source types ── */
         <div className="flex-1 overflow-hidden relative">
           <PlaylistGraphView showEdges={showEdges} />
         </div>
