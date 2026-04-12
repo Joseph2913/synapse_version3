@@ -401,6 +401,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           updated_at: new Date().toISOString(),
         }).eq('id', item.id);
 
+        // ── Link meeting sources to meeting domain agent ──────────────────────
+        if (sourceType === 'Meeting' && sourceId) {
+          try {
+            const { data: meetingAgents } = await supabase
+              .from('domain_agents')
+              .select('id')
+              .eq('user_id', item.user_id)
+              .is('playlist_id', null)
+              .eq('is_active', true)
+              .limit(1);
+
+            if (meetingAgents && meetingAgents.length > 0) {
+              const meetingAgentId = (meetingAgents[0] as { id: string }).id;
+
+              await supabase
+                .from('domain_agent_sources')
+                .upsert({
+                  user_id: item.user_id,
+                  agent_id: meetingAgentId,
+                  source_id: sourceId,
+                  association_type: 'primary',
+                }, { onConflict: 'agent_id,source_id', ignoreDuplicates: true });
+
+              await supabase
+                .from('domain_agents')
+                .update({ index_stale: true, last_ingestion_at: new Date().toISOString() })
+                .eq('id', meetingAgentId);
+
+              console.log(`[microsoft/extract] Linked meeting source ${sourceId} to agent ${meetingAgentId}`);
+            }
+          } catch (agentErr) {
+            console.warn('[microsoft/extract] Meeting agent link failed (non-fatal):', agentErr);
+          }
+        }
+
         processed++;
       } catch (err) {
         console.error(`[microsoft/extract-knowledge] Error processing ${item.id}:`, err);

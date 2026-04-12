@@ -723,6 +723,48 @@ Return an empty array if no genuine cross-source connections exist.`;
       });
     }
 
+    // ── LINK TO MEETING DOMAIN AGENT (fire-and-forget) ───────────────────────
+    // Find the user's meeting domain agent (playlist_id IS NULL, name matches meeting pattern)
+    // and create a source association so the agent ingests this meeting.
+    try {
+      const { data: meetingAgents } = await supabase
+        .from('domain_agents')
+        .select('id')
+        .eq('user_id', meeting.user_id)
+        .is('playlist_id', null)
+        .eq('is_active', true)
+        .limit(5);
+
+      // Find the meeting agent — it's the one without a playlist_id
+      // In the future we could add a `source_type_filter` column to domain_agents,
+      // but for now playlist_id=null agents are meeting/non-playlist agents
+      if (meetingAgents && meetingAgents.length > 0) {
+        const meetingAgentId = meetingAgents[0]!.id;
+
+        await supabase
+          .from('domain_agent_sources')
+          .upsert({
+            user_id: meeting.user_id,
+            agent_id: meetingAgentId,
+            source_id: meeting.id,
+            association_type: 'primary',
+          }, { onConflict: 'agent_id,source_id', ignoreDuplicates: true });
+
+        // Mark agent as stale so cron rebuilds its expertise index
+        await supabase
+          .from('domain_agents')
+          .update({
+            index_stale: true,
+            last_ingestion_at: new Date().toISOString(),
+          })
+          .eq('id', meetingAgentId);
+
+        console.log(`[meetings/process] Linked source ${meeting.id} to meeting agent ${meetingAgentId}`);
+      }
+    } catch (agentErr) {
+      console.warn('[meetings/process] Meeting agent link failed (non-fatal):', agentErr);
+    }
+
     // Save extraction session record
     await supabase.from('extraction_sessions').insert({
       user_id: meeting.user_id,
