@@ -984,6 +984,95 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // ─── Assign created/updated skills to domain agents (source overlap) ─────
+
+  let agentAssignments = 0;
+
+  if (!dryRun && (created > 0 || updated > 0)) {
+    try {
+      // Collect skill names that were created or updated in this batch
+      const affectedSkillNames = details
+        .filter(d => d.action === 'created' || d.action === 'updated')
+        .map(d => d.skillName)
+        .filter((n): n is string => !!n);
+
+      if (affectedSkillNames.length > 0 && targetUserId) {
+        // Fetch the full skill rows (we need IDs and source_ids)
+        const { data: affectedSkills } = await supabase
+          .from('knowledge_skills')
+          .select('id, user_id, name, source_ids')
+          .eq('user_id', targetUserId)
+          .in('name', affectedSkillNames);
+
+        // Fetch active agents and their source links
+        const { data: agents } = await supabase
+          .from('domain_agents')
+          .select('id, user_id')
+          .eq('user_id', targetUserId)
+          .eq('is_active', true);
+
+        const { data: agentSourceLinks } = await supabase
+          .from('domain_agent_sources')
+          .select('agent_id, source_id')
+          .eq('user_id', targetUserId);
+
+        if (affectedSkills?.length && agents?.length && agentSourceLinks?.length) {
+          // Build source_id → agent_ids map
+          const sourceToAgentIds = new Map<string, Set<string>>();
+          for (const link of agentSourceLinks) {
+            let set = sourceToAgentIds.get(link.source_id);
+            if (!set) { set = new Set(); sourceToAgentIds.set(link.source_id, set); }
+            set.add(link.agent_id);
+          }
+
+          const assignmentRows: Array<{
+            agent_id: string; skill_id: string; user_id: string;
+            match_method: string; relevance: number; ingested: boolean;
+          }> = [];
+
+          for (const skill of affectedSkills) {
+            if (!skill.source_ids?.length) continue;
+            const matchedAgentIds = new Set<string>();
+            for (const sid of skill.source_ids) {
+              const aIds = sourceToAgentIds.get(sid);
+              if (aIds) for (const aid of aIds) matchedAgentIds.add(aid);
+            }
+            for (const agentId of matchedAgentIds) {
+              assignmentRows.push({
+                agent_id: agentId,
+                skill_id: skill.id,
+                user_id: skill.user_id,
+                match_method: 'source_overlap',
+                relevance: 1.0,
+                ingested: false,
+              });
+            }
+          }
+
+          if (assignmentRows.length > 0) {
+            const { data: inserted } = await supabase
+              .from('domain_agent_skills')
+              .upsert(assignmentRows, { onConflict: 'agent_id,skill_id', ignoreDuplicates: true })
+              .select('id');
+
+            agentAssignments = inserted?.length ?? 0;
+
+            // Mark affected agents as stale so cron recalibrates
+            const staleAgentIds = [...new Set(assignmentRows.map(r => r.agent_id))];
+            if (staleAgentIds.length > 0) {
+              await supabase
+                .from('domain_agents')
+                .update({ index_stale: true, last_ingestion_at: new Date().toISOString() })
+                .in('id', staleAgentIds);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[skills/backfill] Agent assignment failed (non-fatal):', String(err));
+    }
+  }
+
   // ─── Count remaining ────────────────────────────────────────────────────────
 
   let remainingQuery = supabase
@@ -1019,6 +1108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totalSkillsCreated: created,
       totalSkillsUpdated: updated,
       totalSkillsInLibrary: totalSkills ?? 0,
+      agentAssignments,
     },
     durationMs: Date.now() - startTime,
   });
