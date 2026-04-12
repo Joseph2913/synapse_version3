@@ -2969,6 +2969,46 @@ function jsonRpcResult(id: string | number | null, result: unknown): JsonRpcResp
   return { jsonrpc: '2.0', id, result }
 }
 
+// ─── Query Logging (fire-and-forget) ────────────────────────────────────────
+
+function logMcpQuery(
+  userId: string,
+  toolName: string,
+  queryText: string,
+  resultCount: number,
+  topRelevance: number | null
+): void {
+  const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  sb.from('mcp_query_log')
+    .insert({ user_id: userId, tool_name: toolName, query_text: queryText, result_count: resultCount, top_relevance: topRelevance })
+    .then(() => {})
+    .catch(err => console.warn('[mcp] Query log insert failed:', err))
+}
+
+function extractResultCount(text: string): { count: number; topRelevance: number | null } {
+  // "Found N entities" or "N matching skills"
+  const foundMatch = text.match(/Found (\d+) entities/)
+  if (foundMatch) return { count: parseInt(foundMatch[1]!), topRelevance: null }
+
+  const skillMatch = text.match(/(\d+) matching skills/)
+  if (skillMatch) return { count: parseInt(skillMatch[1]!), topRelevance: null }
+
+  // "No entities found" / "No sources found" / "No matching skills"
+  if (text.includes('No entities found') || text.includes('No sources found') || text.includes('No matching skills')) {
+    return { count: 0, topRelevance: null }
+  }
+
+  // For ask_synapse, check if answer contains "Sources:" section
+  const sourceMatch = text.match(/\*\*Sources:\*\*\n([\s\S]*?)(?:\n\n|\*\*Entities)/);
+  if (sourceMatch) {
+    const lines = sourceMatch[1]!.split('\n').filter(l => l.trim().startsWith('-'))
+    const relevanceMatch = sourceMatch[1]!.match(/relevance: (\d+)%/)
+    return { count: lines.length, topRelevance: relevanceMatch ? parseInt(relevanceMatch[1]!) / 100 : null }
+  }
+
+  return { count: -1, topRelevance: null } // Unknown — don't log
+}
+
 async function handleMcpRequest(
   body: JsonRpcRequest,
   userId: string,
@@ -3001,35 +3041,39 @@ async function handleMcpRequest(
 
       try {
         switch (toolName) {
-          case 'ask_synapse':
-            return jsonRpcResult(
-              reqId,
-              await handleAskSynapse(
-                {
-                  query: toolArgs.query as string,
-                  max_results: toolArgs.max_results as number | undefined,
-                  source_ids: toolArgs.source_ids as string[] | undefined,
-                  source_type: toolArgs.source_type as string | undefined,
-                },
-                userId,
-                sb
-              )
+          case 'ask_synapse': {
+            const askResult = await handleAskSynapse(
+              {
+                query: toolArgs.query as string,
+                max_results: toolArgs.max_results as number | undefined,
+                source_ids: toolArgs.source_ids as string[] | undefined,
+                source_type: toolArgs.source_type as string | undefined,
+              },
+              userId,
+              sb
             )
+            const askText = (askResult.content?.[0] as { text?: string })?.text ?? ''
+            const askStats = extractResultCount(askText)
+            if (askStats.count >= 0) logMcpQuery(userId, 'ask_synapse', toolArgs.query as string, askStats.count, askStats.topRelevance)
+            return jsonRpcResult(reqId, askResult)
+          }
 
-          case 'search_entities':
-            return jsonRpcResult(
-              reqId,
-              await handleSearchEntities(
-                {
-                  query: toolArgs.query as string,
-                  entity_type: toolArgs.entity_type as string | undefined,
-                  limit: toolArgs.limit as number | undefined,
-                  source_id: toolArgs.source_id as string | undefined,
-                },
-                userId,
-                sb
-              )
+          case 'search_entities': {
+            const entResult = await handleSearchEntities(
+              {
+                query: toolArgs.query as string,
+                entity_type: toolArgs.entity_type as string | undefined,
+                limit: toolArgs.limit as number | undefined,
+                source_id: toolArgs.source_id as string | undefined,
+              },
+              userId,
+              sb
             )
+            const entText = (entResult.content?.[0] as { text?: string })?.text ?? ''
+            const entStats = extractResultCount(entText)
+            if (entStats.count >= 0) logMcpQuery(userId, 'search_entities', toolArgs.query as string, entStats.count, entStats.topRelevance)
+            return jsonRpcResult(reqId, entResult)
+          }
 
           case 'get_entity':
             return jsonRpcResult(
@@ -3081,23 +3125,27 @@ async function handleMcpRequest(
               )
             )
 
-          case 'search_sources':
-            return jsonRpcResult(
-              reqId,
-              await handleSearchSources(
-                {
-                  query: toolArgs.query as string | undefined,
-                  source_type: toolArgs.source_type as string | undefined,
-                  date_from: toolArgs.date_from as string | undefined,
-                  date_to: toolArgs.date_to as string | undefined,
-                  participant: toolArgs.participant as string | undefined,
-                  limit: toolArgs.limit as number | undefined,
-                  sort: toolArgs.sort as string | undefined,
-                },
-                userId,
-                sb
-              )
+          case 'search_sources': {
+            const srcResult = await handleSearchSources(
+              {
+                query: toolArgs.query as string | undefined,
+                source_type: toolArgs.source_type as string | undefined,
+                date_from: toolArgs.date_from as string | undefined,
+                date_to: toolArgs.date_to as string | undefined,
+                participant: toolArgs.participant as string | undefined,
+                limit: toolArgs.limit as number | undefined,
+                sort: toolArgs.sort as string | undefined,
+              },
+              userId,
+              sb
             )
+            if (toolArgs.query) {
+              const srcText = (srcResult.content?.[0] as { text?: string })?.text ?? ''
+              const srcStats = extractResultCount(srcText)
+              if (srcStats.count >= 0) logMcpQuery(userId, 'search_sources', toolArgs.query as string, srcStats.count, srcStats.topRelevance)
+            }
+            return jsonRpcResult(reqId, srcResult)
+          }
 
           case 'get_meeting_brief':
             return jsonRpcResult(
@@ -3181,19 +3229,21 @@ async function handleMcpRequest(
               )
             )
 
-          case 'search_skills':
-            return jsonRpcResult(
-              reqId,
-              await handleSearchSkills(
-                {
-                  query: toolArgs.query as string,
-                  max_results: toolArgs.max_results as number | undefined,
-                },
-                userId,
-                sb,
-                sessionId
-              )
+          case 'search_skills': {
+            const skResult = await handleSearchSkills(
+              {
+                query: toolArgs.query as string,
+                max_results: toolArgs.max_results as number | undefined,
+              },
+              userId,
+              sb,
+              sessionId
             )
+            const skText = (skResult.content?.[0] as { text?: string })?.text ?? ''
+            const skStats = extractResultCount(skText)
+            if (skStats.count >= 0) logMcpQuery(userId, 'search_skills', toolArgs.query as string, skStats.count, skStats.topRelevance)
+            return jsonRpcResult(reqId, skResult)
+          }
 
           case 'consult_council':
             return jsonRpcResult(

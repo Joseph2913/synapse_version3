@@ -1085,6 +1085,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     phaseResults.push({ phase: '5_health', success: false, detail: msg, duration_ms: Date.now() - startTime });
   }
 
+  // Phase 6: Detect demand gaps from MCP query logs (fire-and-forget)
+  try {
+    const appUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000';
+
+    fetch(`${appUrl}/api/council/detect-demand-gaps`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${CRON_SECRET ?? ''}`,
+      },
+      body: JSON.stringify({ lookbackHours: 24 }),
+    }).catch(err => {
+      console.warn('[council-cron] Demand gap detection trigger failed (non-fatal):', err);
+    });
+    console.log('[council-cron] Phase 6: demand gap detection triggered (fire-and-forget)');
+  } catch {
+    // Non-fatal
+  }
+
   const totalDuration = Date.now() - startTime;
   const allSuccess = phaseResults.every(p => p.success);
 
