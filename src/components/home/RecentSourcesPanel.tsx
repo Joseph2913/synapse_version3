@@ -11,6 +11,7 @@ interface RecentSourcesPanelProps {
   onSourceClick: (source: KnowledgeSource) => void
   onExploreSource?: (source: KnowledgeSource) => void
   onChatWithSource?: (source: KnowledgeSource) => void
+  onGraphSource?: (source: KnowledgeSource) => void
   stretch?: boolean
 }
 
@@ -22,6 +23,7 @@ export function RecentSourcesPanel({
   onSourceClick,
   onExploreSource,
   onChatWithSource,
+  onGraphSource,
   stretch,
 }: RecentSourcesPanelProps) {
   const navigate = useNavigate()
@@ -122,6 +124,7 @@ export function RecentSourcesPanel({
               onClick={() => onSourceClick(source)}
               onExplore={onExploreSource}
               onChat={onChatWithSource}
+              onGraph={onGraphSource}
               stretch={stretch}
             />
           ))}

@@ -94,6 +94,7 @@ interface LiveNode {
 
 interface PlaylistGraphViewProps {
   showEdges?: boolean
+  initialSourceId?: string | null
 }
 
 /** Video node radius — scaled by entity count (compact) */
@@ -107,7 +108,7 @@ function playlistCenterRadius(videoCount: number): number {
   return 12 + Math.min(videoCount * 0.4, 12)
 }
 
-export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) {
+export function PlaylistGraphView({ showEdges = true, initialSourceId }: PlaylistGraphViewProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -507,6 +508,30 @@ export function PlaylistGraphView({ showEdges = true }: PlaylistGraphViewProps) 
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [user])
+
+  // Auto-select source from URL param (e.g. navigating from Home → Graph button)
+  const hasAutoSelectedRef = useRef(false)
+  useEffect(() => {
+    if (!initialSourceId || loading || hasAutoSelectedRef.current) return
+    if (videos.length === 0 || videoPositions.size === 0) return
+    const match = videos.find(v => v.sourceId === initialSourceId)
+    if (match) {
+      hasAutoSelectedRef.current = true
+      setExploringVideoId(match.sourceId)
+      setHoveredVideoId(match.sourceId)
+
+      // Center camera on the selected source
+      const pos = videoPositions.get(match.sourceId)
+      if (pos && size.width > 0 && size.height > 0) {
+        const zoom = 1.5
+        setCamera({
+          zoom,
+          panX: size.width / 2 - pos.x * zoom,
+          panY: size.height / 2 - pos.y * zoom,
+        })
+      }
+    }
+  }, [initialSourceId, loading, videos, videoPositions, size])
 
   // ─── Camera helpers ────────────────────────────────────────────────────────
 

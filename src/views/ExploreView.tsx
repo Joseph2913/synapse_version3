@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Loader2, AlertCircle, Compass, RefreshCw } from 'lucide-react'
 import { ExploreToolbar } from './explore/ExploreToolbar'
 import { LandscapeView } from './explore/LandscapeView'
@@ -29,6 +30,7 @@ interface SuggestedClusterData {
 }
 
 export function ExploreView() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data, loading, error, refetch } = useExploreData()
   const {
     viewMode,
@@ -50,6 +52,22 @@ export function ExploreView() {
   } = useExploreFilters()
 
   const { user } = useAuth()
+
+  // Read URL params on mount — e.g. /explore?viewMode=sources&sourceId=abc
+  // Store in a ref so the value persists after we clean up the URL
+  const initialSourceIdRef = useRef(searchParams.get('sourceId'))
+  useEffect(() => {
+    const urlViewMode = searchParams.get('viewMode')
+    const urlSourceId = searchParams.get('sourceId')
+    if (urlSourceId) initialSourceIdRef.current = urlSourceId
+    if (urlViewMode === 'sources' || urlViewMode === 'playlists') {
+      setViewMode(urlViewMode as 'sources')
+    }
+    // Clean URL params after consuming
+    if (searchParams.has('viewMode') || searchParams.has('sourceId')) {
+      setSearchParams(new URLSearchParams(), { replace: true })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Suggested anchor candidates — for ghost cluster rendering
   const [suggestedCandidates, setSuggestedCandidates] = useState<AnchorCandidateWithNode[]>([])
@@ -273,7 +291,7 @@ export function ExploreView() {
       ) : viewMode === 'sources' || viewMode === 'playlists' ? (
         /* ── COMBINED SOURCE GRAPH: Playlists + other source types ── */
         <div className="flex-1 overflow-hidden relative">
-          <PlaylistGraphView showEdges={showEdges} />
+          <PlaylistGraphView showEdges={showEdges} initialSourceId={initialSourceIdRef.current} />
         </div>
       ) : null}
     </div>

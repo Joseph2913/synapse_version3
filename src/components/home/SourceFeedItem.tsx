@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRight, Search, MessageSquare } from 'lucide-react'
+import { ChevronRight, Search, MessageSquare, GitFork } from 'lucide-react'
 import { ProviderIcon } from '../shared/ProviderIcon'
 import type { KnowledgeSource } from '../../types/database'
 
@@ -9,6 +9,7 @@ interface SourceFeedItemProps {
   onClick: () => void
   onExplore?: (source: KnowledgeSource) => void
   onChat?: (source: KnowledgeSource) => void
+  onGraph?: (source: KnowledgeSource) => void
   stretch?: boolean
 }
 
@@ -24,7 +25,7 @@ function formatRelativeTime(dateStr: string): string {
   return `${Math.floor(days / 30)}mo ago`
 }
 
-export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat, stretch }: SourceFeedItemProps) {
+export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat, onGraph, stretch }: SourceFeedItemProps) {
   const provider = (source.metadata as Record<string, unknown> | null)?.provider as string | undefined
   const summary = source.summary ?? null
   const [hovered, setHovered] = useState(false)
@@ -116,12 +117,12 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
           top: 0,
           right: 0,
           bottom: 0,
-          width: 144,
+          width: 210,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           gap: 2,
-          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
+          transform: hovered ? 'translateX(0)' : 'translateX(210px)',
           transition: 'transform 0.2s ease',
           background: 'var(--color-bg-card)',
           borderLeft: '1px solid var(--border-subtle)',
@@ -187,6 +188,37 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
         >
           <MessageSquare size={16} />
           <span className="font-body" style={{ fontSize: 9, fontWeight: 600 }}>Chat</span>
+        </button>
+
+        {/* Graph view */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onGraph?.(source)
+          }}
+          className="flex flex-col items-center justify-center cursor-pointer"
+          style={{
+            width: 66,
+            height: '100%',
+            background: 'transparent',
+            border: 'none',
+            gap: 4,
+            color: 'var(--color-text-secondary)',
+            transition: 'color 0.15s ease, background 0.15s ease',
+            borderRadius: 6,
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.color = 'var(--color-accent-500)'
+            e.currentTarget.style.background = 'var(--color-accent-50)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.color = 'var(--color-text-secondary)'
+            e.currentTarget.style.background = 'transparent'
+          }}
+        >
+          <GitFork size={16} />
+          <span className="font-body" style={{ fontSize: 9, fontWeight: 600 }}>Graph</span>
         </button>
       </div>
     </div>

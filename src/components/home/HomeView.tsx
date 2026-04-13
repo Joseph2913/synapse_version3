@@ -5,7 +5,7 @@ import { useGraphContext } from '../../hooks/useGraphContext'
 import { useHomeDashboard } from '../../hooks/useHomeDashboard'
 import { useAuth } from '../../hooks/useAuth'
 import { PROVIDER_CONFIG } from '../../config/sourceTypes'
-import { supabase, fetchGlobalInsights, fetchGlobalSignals, fetchDomainAgents, fetchTopSkillsWithAgents } from '../../services/supabase'
+import { supabase, fetchDomainAgents, fetchAgentCounts } from '../../services/supabase'
 import { RecentSourcesPanel } from './RecentSourcesPanel'
 import { buildSourceChatContext, buildInsightChatContext, buildSignalChatContext, buildSkillChatContext } from '../../config/chatEntryContexts'
 import type { KnowledgeSource, AgentInsightRow, AgentSignalRow } from '../../types/database'
@@ -141,7 +141,7 @@ function HoverActionOverlay({ onExplore, onChat }: { onExplore: () => void; onCh
   )
 }
 
-function InsightRow({ insight, isLast }: { insight: AgentInsightRow; isLast: boolean }) {
+export function InsightRow({ insight, isLast }: { insight: AgentInsightRow; isLast: boolean }) {
   const [hovered, setHovered] = useState(false)
   const navigate = useNavigate()
 
@@ -187,7 +187,7 @@ function InsightRow({ insight, isLast }: { insight: AgentInsightRow; isLast: boo
   )
 }
 
-function SignalRow({ signal, isLast }: { signal: AgentSignalRow & { source_name?: string; target_name?: string }; isLast: boolean }) {
+export function SignalRow({ signal, isLast }: { signal: AgentSignalRow & { source_name?: string; target_name?: string }; isLast: boolean }) {
   const [hovered, setHovered] = useState(false)
   const navigate = useNavigate()
 
@@ -243,7 +243,7 @@ function SignalRow({ signal, isLast }: { signal: AgentSignalRow & { source_name?
   )
 }
 
-interface TopSkill {
+export interface TopSkill {
   id: string
   name: string
   title: string
@@ -252,7 +252,7 @@ interface TopSkill {
   agent_name: string | null
 }
 
-function SkillRow({ skill, isLast }: { skill: TopSkill; isLast: boolean }) {
+export function SkillRow({ skill, isLast }: { skill: TopSkill; isLast: boolean }) {
   const [hovered, setHovered] = useState(false)
   const navigate = useNavigate()
 
@@ -311,49 +311,139 @@ function SkillRow({ skill, isLast }: { skill: TopSkill; isLast: boolean }) {
   )
 }
 
-// ── Home Insights Card ──────────────────────────────────────────────────────
+// ── Home Council Card — Agent-centric view ──────────────────────────────────
 
-type InsightsTab = 'insights' | 'signals' | 'skills'
+const HEALTH_BADGE: Record<string, { bg: string; text: string; label: string }> = {
+  strong:       { bg: '#dcfce7', text: '#15803d', label: 'Strong' },
+  growing:      { bg: '#d1fae5', text: '#047857', label: 'Growing' },
+  thin:         { bg: '#fef3c7', text: '#b45309', label: 'Thin' },
+  stale:        { bg: '#fee2e2', text: '#dc2626', label: 'Stale' },
+  initialising: { bg: '#f3f4f6', text: '#6b7280', label: 'Init' },
+}
+
+interface AgentSummary {
+  id: string
+  name: string
+  description: string | null
+  health_status: string
+  source_count: number
+  entity_count: number
+  insights: number
+  signalsOut: number
+}
+
+function AgentRow({ agent, isLast }: { agent: AgentSummary; isLast: boolean }) {
+  const [hovered, setHovered] = useState(false)
+  const navigate = useNavigate()
+  const health = HEALTH_BADGE[agent.health_status] ?? HEALTH_BADGE.initialising!
+
+  const handleChat = () => {
+    const context: import('../../types/chatRouting').ChatEntryContext = {
+      autoQuery: `As my "${agent.name}" advisor, give me a briefing. What are the most important insights, open questions, and cross-domain connections in your domain right now?`,
+      systemDirective: `The user wants a briefing from their "${agent.name}" domain advisor. This advisor covers: ${agent.description ?? 'their domain'}. It has ${agent.source_count} sources and ${agent.entity_count} entities. Provide a concise but substantive briefing covering: (1) the most important recent insights or patterns, (2) any open questions or gaps, (3) notable cross-domain connections to other advisors. Speak as this advisor — use "I" and reflect its reasoning style.`,
+      queryConfig: { mindset: 'analytical', toolMode: 'deep' },
+      entryPoint: 'council_insight_chat',
+      displayLabel: `Advisor: ${agent.name}`,
+    }
+    navigate('/ask', { state: { chatContext: context } })
+  }
+
+  return (
+    <div
+      className="relative overflow-hidden"
+      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', flex: '1 1 0' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        onClick={() => navigate('/council')}
+        className="flex w-full text-left bg-transparent cursor-pointer border-none"
+        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
+      >
+        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-accent-50)' }}>
+          <Users size={15} style={{ color: 'var(--color-accent-500)' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center" style={{ gap: 8, marginBottom: 3 }}>
+            <span className="font-display text-text-primary truncate" style={{ fontSize: 13, fontWeight: 700 }}>
+              {agent.name}
+            </span>
+            <span
+              className="font-body shrink-0"
+              style={{ fontSize: 9, fontWeight: 600, padding: '1px 7px', borderRadius: 20, background: health.bg, color: health.text }}
+            >
+              {health.label}
+            </span>
+          </div>
+          <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {agent.description ?? ''}
+          </div>
+          <div className="flex items-center" style={{ gap: 10, marginTop: 4 }}>
+            <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-placeholder)' }}>
+              {agent.source_count} sources
+            </span>
+            {agent.insights > 0 && (
+              <span className="font-body" style={{ fontSize: 10, color: '#b45309' }}>
+                {agent.insights} insights
+              </span>
+            )}
+            {agent.signalsOut > 0 && (
+              <span className="font-body" style={{ fontSize: 10, color: 'var(--color-accent-500)' }}>
+                {agent.signalsOut} signals
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
+      <div
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0, width: 144,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
+          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
+          transition: 'transform 0.2s ease',
+          background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)',
+        }}
+      >
+        <HoverActionOverlay onExplore={() => navigate('/council')} onChat={handleChat} />
+      </div>
+    </div>
+  )
+}
 
 function HomeInsightsCard() {
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<InsightsTab>('insights')
-  const [insights, setInsights] = useState<AgentInsightRow[]>([])
-  const [signals, setSignals] = useState<(AgentSignalRow & { source_name?: string; target_name?: string })[]>([])
-  const [topSkills, setTopSkills] = useState<TopSkill[]>([])
+  const [agents, setAgents] = useState<AgentSummary[]>([])
   const [dataLoading, setDataLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const [insData, sigData, agents, skillsData] = await Promise.all([
-          fetchGlobalInsights(5),
-          fetchGlobalSignals(5, true),
-          fetchDomainAgents(),
-          fetchTopSkillsWithAgents(5),
-        ])
+        const rawAgents = await fetchDomainAgents()
         if (cancelled) return
-        const nameMap = new Map(agents.map(a => [a.id, a.name]))
-        setInsights(insData)
-        setSignals(sigData.map(s => ({
-          ...s,
-          source_name: nameMap.get(s.source_agent_id) ?? 'Unknown',
-          target_name: nameMap.get(s.target_agent_id) ?? 'Unknown',
+
+        // Fetch counts for top agents (limit to 5 by source_count — already sorted from fetchDomainAgents)
+        const top = rawAgents.slice(0, 5)
+        const counts = await Promise.all(top.map(a => fetchAgentCounts(a.id)))
+        if (cancelled) return
+
+        setAgents(top.map((a, i) => ({
+          id: a.id,
+          name: a.name,
+          description: a.description,
+          health_status: a.health_status,
+          source_count: a.source_count,
+          entity_count: a.entity_count,
+          insights: counts[i]!.insights,
+          signalsOut: counts[i]!.signalsOut,
         })))
-        setTopSkills(skillsData)
       } catch { /* ignore */ }
       finally { if (!cancelled) setDataLoading(false) }
     }
     load()
     return () => { cancelled = true }
   }, [])
-
-  const tabs: { key: InsightsTab; label: string }[] = [
-    { key: 'insights', label: 'Insights' },
-    { key: 'signals', label: 'Signals' },
-    { key: 'skills', label: 'Skills' },
-  ]
 
   return (
     <div className="bg-bg-card border border-border-subtle overflow-hidden flex flex-col flex-1" style={{ borderRadius: 12, minHeight: 0 }}>
@@ -372,43 +462,11 @@ function HomeInsightsCard() {
           <span className="font-display text-text-primary" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.01em' }}>
             Council
           </span>
-
-          <div
-            className="flex items-center"
-            style={{
-              background: 'var(--color-bg-inset)',
-              borderRadius: 6,
-              padding: 2,
-              gap: 1,
-              marginLeft: 4,
-            }}
-          >
-            {tabs.map(tab => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setActiveTab(tab.key)}
-                className="font-body cursor-pointer border-none"
-                style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  padding: '3px 10px',
-                  borderRadius: 6,
-                  background: activeTab === tab.key ? 'var(--color-bg-card)' : 'transparent',
-                  color: activeTab === tab.key ? 'var(--color-accent-500)' : 'var(--color-text-secondary)',
-                  boxShadow: activeTab === tab.key ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
         </div>
 
         <button
           type="button"
-          onClick={() => navigate(activeTab === 'insights' ? '/council' : activeTab === 'signals' ? '/council' : '/explore')}
+          onClick={() => navigate('/council')}
           className="font-body cursor-pointer bg-transparent border-none"
           style={{
             fontSize: 12,
@@ -424,7 +482,7 @@ function HomeInsightsCard() {
         </button>
       </div>
 
-      {/* Content — rows stretch to fill, matching left column row height */}
+      {/* Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {dataLoading ? (
           <div className="flex flex-col flex-1">
@@ -438,48 +496,18 @@ function HomeInsightsCard() {
               </div>
             ))}
           </div>
-        ) : activeTab === 'insights' ? (
-          insights.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
-              <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
-                No insights yet. Insights emerge as advisors analyse your knowledge.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col flex-1">
-              {insights.map((ins, i) => (
-                <InsightRow key={ins.id} insight={ins} isLast={i === insights.length - 1} />
-              ))}
-            </div>
-          )
-        ) : activeTab === 'signals' ? (
-          signals.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
-              <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
-                No cross-agent signals yet. Signals appear when advisors share overlapping knowledge.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col flex-1">
-              {signals.map((sig, i) => (
-                <SignalRow key={sig.id} signal={sig} isLast={i === signals.length - 1} />
-              ))}
-            </div>
-          )
+        ) : agents.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
+            <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
+              No advisors yet. Connect YouTube playlists to build your council.
+            </p>
+          </div>
         ) : (
-          topSkills.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
-              <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
-                No skills yet. Skills emerge after multiple ingestions.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col flex-1">
-              {topSkills.map((skill, i) => (
-                <SkillRow key={skill.id} skill={skill} isLast={i === topSkills.length - 1} />
-              ))}
-            </div>
-          )
+          <div className="flex flex-col flex-1">
+            {agents.map((agent, i) => (
+              <AgentRow key={agent.id} agent={agent} isLast={i === agents.length - 1} />
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -504,6 +532,9 @@ export function HomeView() {
   }
   const handleExploreSource = (source: KnowledgeSource) => {
     navigate(`/sources?sourceId=${source.id}`)
+  }
+  const handleGraphSource = (source: KnowledgeSource) => {
+    navigate(`/explore?viewMode=sources&sourceId=${source.id}`)
   }
   const handleChatWithSource = (source: KnowledgeSource) => {
     const context = buildSourceChatContext({ id: source.id, title: source.title, summary: source.summary })
@@ -632,6 +663,7 @@ export function HomeView() {
               onSourceClick={handleSourceClick}
               onExploreSource={handleExploreSource}
               onChatWithSource={handleChatWithSource}
+              onGraphSource={handleGraphSource}
               stretch
             />
           </div>
