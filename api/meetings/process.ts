@@ -724,26 +724,40 @@ Return an empty array if no genuine cross-source connections exist.`;
     }
 
     // ── LINK TO MEETING DOMAIN AGENT (fire-and-forget) ───────────────────────
-    // Resolve the meeting agent via integration_id in the source metadata,
-    // falling back to any integration-linked agent for this user.
+    // Resolve meeting agent(s) via:
+    // 1. Integration ID → agent_integration_links (supports multi-integration agents)
+    // 2. Integration ID → user_integrations.domain_agent_id (direct link)
+    // 3. Fallback: any integration-linked agent for this user
     try {
       const meetingMeta = meeting.metadata as Record<string, unknown> | null;
       const integrationId = meetingMeta?.integration_id as string | undefined;
 
-      let meetingAgentId: string | null = null;
+      const agentIds = new Set<string>();
 
       if (integrationId) {
-        // Resolve via integration → domain_agent_id
-        const { data: integration } = await supabase
-          .from('user_integrations')
-          .select('domain_agent_id')
-          .eq('id', integrationId)
-          .maybeSingle();
-        meetingAgentId = (integration as { domain_agent_id: string | null } | null)?.domain_agent_id ?? null;
+        // Check junction table first (supports multiple agents per integration)
+        const { data: links } = await supabase
+          .from('agent_integration_links')
+          .select('agent_id')
+          .eq('integration_id', integrationId);
+        for (const link of (links ?? []) as Array<{ agent_id: string }>) {
+          agentIds.add(link.agent_id);
+        }
+
+        // Also check direct link on user_integrations
+        if (agentIds.size === 0) {
+          const { data: integration } = await supabase
+            .from('user_integrations')
+            .select('domain_agent_id')
+            .eq('id', integrationId)
+            .maybeSingle();
+          const directId = (integration as { domain_agent_id: string | null } | null)?.domain_agent_id;
+          if (directId) agentIds.add(directId);
+        }
       }
 
-      // Fallback: find any meeting agent (integration_id IS NOT NULL) for this user
-      if (!meetingAgentId) {
+      // Fallback: find any integration-linked agent for this user
+      if (agentIds.size === 0) {
         const { data: agents } = await supabase
           .from('domain_agents')
           .select('id')
@@ -751,15 +765,16 @@ Return an empty array if no genuine cross-source connections exist.`;
           .not('integration_id', 'is', null)
           .eq('is_active', true)
           .limit(1);
-        meetingAgentId = (agents?.[0] as { id: string } | undefined)?.id ?? null;
+        const fallbackId = (agents?.[0] as { id: string } | undefined)?.id;
+        if (fallbackId) agentIds.add(fallbackId);
       }
 
-      if (meetingAgentId) {
+      for (const agentId of agentIds) {
         await supabase
           .from('domain_agent_sources')
           .upsert({
             user_id: meeting.user_id,
-            agent_id: meetingAgentId,
+            agent_id: agentId,
             source_id: meeting.id,
             association_type: 'primary',
           }, { onConflict: 'agent_id,source_id', ignoreDuplicates: true });
@@ -767,9 +782,9 @@ Return an empty array if no genuine cross-source connections exist.`;
         await supabase
           .from('domain_agents')
           .update({ index_stale: true, last_ingestion_at: new Date().toISOString() })
-          .eq('id', meetingAgentId);
+          .eq('id', agentId);
 
-        console.log(`[meetings/process] Linked source ${meeting.id} to meeting agent ${meetingAgentId}`);
+        console.log(`[meetings/process] Linked source ${meeting.id} to agent ${agentId}`);
       }
     } catch (agentErr) {
       console.warn('[meetings/process] Meeting agent link failed (non-fatal):', agentErr);

@@ -401,24 +401,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           updated_at: new Date().toISOString(),
         }).eq('id', item.id);
 
-        // ── Link meeting sources to meeting domain agent ──────────────────────
+        // ── Link meeting sources to domain agent(s) ─────────────────────────────
         if (sourceType === 'Meeting' && sourceId) {
           try {
-            // Resolve via Microsoft integration → domain_agent_id
-            let meetingAgentId: string | null = null;
+            const agentIds = new Set<string>();
 
+            // Check junction table for agents linked to Microsoft integrations
             const { data: msIntegrations } = await supabase
               .from('user_integrations')
-              .select('domain_agent_id')
+              .select('id')
               .eq('user_id', item.user_id)
-              .eq('integration_slug', 'microsoft')
-              .not('domain_agent_id', 'is', null)
-              .limit(1);
+              .eq('integration_slug', 'microsoft');
 
-            meetingAgentId = (msIntegrations?.[0] as { domain_agent_id: string } | undefined)?.domain_agent_id ?? null;
+            for (const msInt of (msIntegrations ?? []) as Array<{ id: string }>) {
+              const { data: links } = await supabase
+                .from('agent_integration_links')
+                .select('agent_id')
+                .eq('integration_id', msInt.id);
+              for (const link of (links ?? []) as Array<{ agent_id: string }>) {
+                agentIds.add(link.agent_id);
+              }
+            }
 
-            // Fallback: any meeting agent for this user
-            if (!meetingAgentId) {
+            // Fallback: direct domain_agent_id on user_integrations
+            if (agentIds.size === 0) {
+              for (const msInt of (msIntegrations ?? []) as Array<{ id: string }>) {
+                const { data: int } = await supabase
+                  .from('user_integrations')
+                  .select('domain_agent_id')
+                  .eq('id', msInt.id)
+                  .maybeSingle();
+                const directId = (int as { domain_agent_id: string | null } | null)?.domain_agent_id;
+                if (directId) agentIds.add(directId);
+              }
+            }
+
+            // Fallback: any integration-linked agent
+            if (agentIds.size === 0) {
               const { data: agents } = await supabase
                 .from('domain_agents')
                 .select('id')
@@ -426,15 +445,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 .not('integration_id', 'is', null)
                 .eq('is_active', true)
                 .limit(1);
-              meetingAgentId = (agents?.[0] as { id: string } | undefined)?.id ?? null;
+              const fallbackId = (agents?.[0] as { id: string } | undefined)?.id;
+              if (fallbackId) agentIds.add(fallbackId);
             }
 
-            if (meetingAgentId) {
+            for (const agentId of agentIds) {
               await supabase
                 .from('domain_agent_sources')
                 .upsert({
                   user_id: item.user_id,
-                  agent_id: meetingAgentId,
+                  agent_id: agentId,
                   source_id: sourceId,
                   association_type: 'primary',
                 }, { onConflict: 'agent_id,source_id', ignoreDuplicates: true });
@@ -442,9 +462,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               await supabase
                 .from('domain_agents')
                 .update({ index_stale: true, last_ingestion_at: new Date().toISOString() })
-                .eq('id', meetingAgentId);
+                .eq('id', agentId);
 
-              console.log(`[microsoft/extract] Linked meeting source ${sourceId} to agent ${meetingAgentId}`);
+              console.log(`[microsoft/extract] Linked meeting source ${sourceId} to agent ${agentId}`);
             }
           } catch (agentErr) {
             console.warn('[microsoft/extract] Meeting agent link failed (non-fatal):', agentErr);
