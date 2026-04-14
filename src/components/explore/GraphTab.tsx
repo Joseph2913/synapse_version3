@@ -49,32 +49,55 @@ function StatsOverlay({ stats }: { stats: Record<string, number> }) {
   )
 }
 
-// ─── Legend Overlay (bottom-left) ─────────────────────────────────────────────
+// ─── Legend Overlay (bottom-left, collapsed by default) ──────────────────────
 
 function LegendOverlay({ level }: { level: GraphLevel }) {
+  const [open, setOpen] = useState(false)
+
+  const rows = level === 'anchors' ? (
+    <>
+      <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.2)" />} label="Anchor" />
+      <LegendRow icon={<line x1="0" y1="5" x2="14" y2="5" stroke="rgba(0,0,0,0.15)" strokeWidth="2" />} label="Shared connections" />
+      <div className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+        Size = entity count
+      </div>
+    </>
+  ) : (level === 'sources' || level === 'all_sources') ? (
+    <>
+      <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.2)" />} label="Source" />
+      <LegendRow icon={<line x1="0" y1="5" x2="14" y2="5" stroke="rgba(0,0,0,0.15)" strokeWidth="2" />} label="Shared entities" />
+    </>
+  ) : level === 'entities' ? (
+    <>
+      <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.15)" />} label="Entity" />
+      <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.15)" stroke="rgba(214,58,0,0.2)" />} label="Cross-source bridge" />
+      <LegendRow icon={<line x1="0" y1="5" x2="14" y2="5" stroke="rgba(214,58,0,0.2)" strokeWidth="1" strokeDasharray="3 3" />} label="Cross-source edge" />
+    </>
+  ) : null
+
   return (
-    <div style={{ ...overlayStyle, bottom: 16, left: 16 }}>
-      {level === 'anchors' && (
-        <>
-          <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.2)" />} label="Anchor" />
-          <LegendRow icon={<line x1="0" y1="5" x2="14" y2="5" stroke="rgba(0,0,0,0.15)" strokeWidth="2" />} label="Shared connections" />
-          <div className="font-body" style={{ fontSize: 9, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-            Size = entity count
-          </div>
-        </>
-      )}
-      {(level === 'sources' || level === 'all_sources') && (
-        <>
-          <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.2)" />} label="Source" />
-          <LegendRow icon={<line x1="0" y1="5" x2="14" y2="5" stroke="rgba(0,0,0,0.15)" strokeWidth="2" />} label="Shared entities" />
-        </>
-      )}
-      {level === 'entities' && (
-        <>
-          <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.15)" />} label="Entity" />
-          <LegendRow icon={<circle cx="5" cy="5" r="4" fill="rgba(100,100,100,0.15)" stroke="rgba(214,58,0,0.2)" />} label="Cross-source bridge" />
-          <LegendRow icon={<line x1="0" y1="5" x2="14" y2="5" stroke="rgba(214,58,0,0.2)" strokeWidth="1" strokeDasharray="3 3" />} label="Cross-source edge" />
-        </>
+    <div style={{ ...overlayStyle, bottom: 16, left: 16, padding: 0, overflow: 'hidden', pointerEvents: 'all' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        className="flex items-center gap-1.5 w-full cursor-pointer"
+        style={{
+          padding: '6px 10px',
+          background: 'none', border: 'none',
+          fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700,
+          color: 'var(--color-text-secondary)', letterSpacing: '0.06em',
+          textTransform: 'uppercase' as const,
+        }}
+      >
+        <svg width={8} height={8} viewBox="0 0 8 8" style={{ flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+          <path d="M2 1l4 3-4 3z" fill="currentColor" />
+        </svg>
+        Legend
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 8px' }}>
+          {rows}
+        </div>
       )}
     </div>
   )

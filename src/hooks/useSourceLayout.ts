@@ -9,9 +9,9 @@ export interface SourcePosition {
 
 /** Source dot radius — standardized to match entity sizing */
 export function dotRadius(entityCount: number, maxEntityCount: number = 50): number {
-  if (entityCount <= 0) return 6
-  const minR = 6
-  const maxR = 18
+  if (entityCount <= 0) return 4
+  const minR = 4
+  const maxR = 28
   return minR + Math.sqrt(entityCount / Math.max(maxEntityCount, 1)) * (maxR - minR)
 }
 

@@ -923,7 +923,7 @@ async function phase5_updateHealth(supabase: SupabaseClient): Promise<PhaseResul
 
   const { data: agents, error: agErr } = await supabase
     .from('domain_agents')
-    .select('id, user_id, expertise_index, source_count, last_ingestion_at, last_index_rebuild_at, health_status');
+    .select('id, user_id, expertise_index, source_count, last_ingestion_at, last_index_rebuild_at, health_status, index_stale');
 
   if (agErr) {
     return { phase: '5_health', success: false, detail: agErr.message, duration_ms: Date.now() - phaseStart };
@@ -954,21 +954,12 @@ async function phase5_updateHealth(supabase: SupabaseClient): Promise<PhaseResul
       .eq('status', 'active')
       .eq('severity', 'significant');
 
-    let newHealth: string;
+    // Refresh denormalised counts first — the stored source_count may be stale/zero
+    const { count: freshSourceCount } = await supabase
+      .from('domain_agent_sources')
+      .select('id', { count: 'exact', head: true })
+      .eq('agent_id', agent.id);
 
-    if (!hasExpertise) {
-      newHealth = 'initialising';
-    } else if ((lastIngestion > 0 && now - lastIngestion > THIRTY_DAYS) || (lastRebuild > 0 && now - lastRebuild > FOURTEEN_DAYS)) {
-      newHealth = 'stale';
-    } else if (sourceCount > 15 && (significantGaps ?? 0) <= 1) {
-      newHealth = 'strong';
-    } else if (sourceCount >= 5 || (sourceCount > 15 && lastRebuild > 0 && now - lastRebuild < SEVEN_DAYS)) {
-      newHealth = 'growing';
-    } else {
-      newHealth = 'thin';
-    }
-
-    // Also refresh denormalised counts
     const { count: entityCount } = await supabase
       .from('knowledge_nodes')
       .select('id', { count: 'exact', head: true })
@@ -981,16 +972,34 @@ async function phase5_updateHealth(supabase: SupabaseClient): Promise<PhaseResul
           .then(r => ((r.data ?? []) as Array<{ source_id: string }>).map(d => d.source_id))
       );
 
-    const { count: freshSourceCount } = await supabase
-      .from('domain_agent_sources')
-      .select('id', { count: 'exact', head: true })
-      .eq('agent_id', agent.id);
+    const actualSourceCount = freshSourceCount ?? sourceCount;
+
+    let newHealth: string;
+
+    if (!hasExpertise) {
+      newHealth = 'initialising';
+      // Re-flag for rebuild if stuck in Init with sources assigned
+      if (actualSourceCount > 0 && !agent.index_stale) {
+        await supabase
+          .from('domain_agents')
+          .update({ index_stale: true })
+          .eq('id', agent.id);
+      }
+    } else if ((lastIngestion > 0 && now - lastIngestion > THIRTY_DAYS) || (lastRebuild > 0 && now - lastRebuild > FOURTEEN_DAYS)) {
+      newHealth = 'stale';
+    } else if (actualSourceCount > 15 && (significantGaps ?? 0) <= 1) {
+      newHealth = 'strong';
+    } else if (actualSourceCount >= 5 || (actualSourceCount > 15 && lastRebuild > 0 && now - lastRebuild < SEVEN_DAYS)) {
+      newHealth = 'growing';
+    } else {
+      newHealth = 'thin';
+    }
 
     await supabase
       .from('domain_agents')
       .update({
         health_status: newHealth,
-        source_count: freshSourceCount ?? sourceCount,
+        source_count: actualSourceCount,
         entity_count: entityCount ?? 0,
         updated_at: new Date().toISOString(),
       })

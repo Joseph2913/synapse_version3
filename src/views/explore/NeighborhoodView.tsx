@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowLeft, ChevronRight } from 'lucide-react'
+import { ArrowLeft, ChevronRight, ChevronDown, Anchor } from 'lucide-react'
 import { NodeTooltip } from '../../components/explore/NodeTooltip'
 import { EntityDetailCard } from '../../components/explore/EntityDetailCard'
 import { useEntityLayout } from '../../hooks/useEntityLayout'
+import type { AnchorHub } from '../../hooks/useEntityLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchClusterEntities, fetchEntityEdges } from '../../services/exploreQueries'
 import { getEntityColor, ENTITY_TYPE_COLORS } from '../../config/entityTypes'
@@ -76,7 +77,8 @@ export function NeighborhoodView({
   // PRD-23: Parent mode — show sub-anchor entities
   const isParentMode = cluster.subAnchorIds.length > 0
   const [activeSubAnchorId, setActiveSubAnchorId] = useState<string | null>(null)
-  useEffect(() => { setActiveSubAnchorId(null) }, [cluster.anchor.id])
+  const [subAnchorDropdownOpen, setSubAnchorDropdownOpen] = useState(false)
+  useEffect(() => { setActiveSubAnchorId(null); setSubAnchorDropdownOpen(false) }, [cluster.anchor.id])
 
   // Synthetic co-source edges
   const coSourceEdgesForLayout = useMemo((): EntityEdge[] => {
@@ -125,8 +127,21 @@ export function NeighborhoodView({
     [edges, coSourceEdgesForLayout, coTagEdgesForLayout]
   )
 
+  // Build anchor hub data for clustered layout
+  const anchorHubs: AnchorHub[] = useMemo(() => {
+    if (!isParentMode) return []
+    return cluster.subAnchorIds
+      .map(subId => {
+        const sub = allClusters.find(c => c.anchor.id === subId)
+        if (!sub) return null
+        const count = entities.filter(e => e.originAnchorId === subId).length
+        return { id: subId, label: sub.anchor.label, entityCount: count }
+      })
+      .filter((h): h is AnchorHub => h !== null && h.entityCount > 0)
+  }, [isParentMode, cluster.subAnchorIds, allClusters, entities])
+
   // Static layout (initial positions from force simulation)
-  const layoutPositions = useEntityLayout(entities, allEdgesForLayout, size.width, size.height)
+  const layoutPositions = useEntityLayout(entities, allEdgesForLayout, size.width, size.height, anchorHubs.length > 1 ? anchorHubs : undefined)
 
   // Hovered entity
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null)
@@ -146,20 +161,36 @@ export function NeighborhoodView({
   const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
   const rafRef = useRef<number>(0)
 
-  // Compute node radii per spec Section 3 (connection count based)
+  // Compute node radii — smaller circles for dense anchor views
   const nodeRadii = useMemo(() => {
     const maxConn = Math.max(...entities.map(e => e.connectionCount), 1)
-    const minR = 6
-    const maxR = Math.min(size.width, size.height) * 0.025
+    // Scale down radii when entity count is high
+    const densityScale = entities.length > 200 ? 0.5 : entities.length > 100 ? 0.65 : entities.length > 50 ? 0.8 : 1
+    const minR = 3 * densityScale + 1.5
+    const maxR = Math.min(size.width, size.height) * 0.018 * densityScale + 2
     const radii = new Map<string, number>()
     for (const entity of entities) {
       const isAnchor = entity.isAnchor && entity.clusters.includes(cluster.anchor.id)
       let r = minR + Math.sqrt(entity.connectionCount / maxConn) * (maxR - minR)
-      if (isAnchor) r *= 1.5 // Anchor entity renders 1.5× larger
+      if (isAnchor) r *= 1.3
       radii.set(entity.id, r)
     }
     return radii
   }, [entities, size.width, size.height, cluster.anchor.id])
+
+  // Hub → child entity IDs mapping for group drag
+  const hubChildrenRef = useRef(new Map<string, Set<string>>())
+  useEffect(() => {
+    const map = new Map<string, Set<string>>()
+    for (const hub of anchorHubs) {
+      const children = new Set<string>()
+      for (const e of entities) {
+        if (e.originAnchorId === hub.id) children.add(e.id)
+      }
+      map.set(hub.id, children)
+    }
+    hubChildrenRef.current = map
+  }, [anchorHubs, entities])
 
   // Connectivity map for directional drag drift
   const connectivityRef = useRef(new Map<string, Map<string, number>>())
@@ -199,6 +230,41 @@ export function NeighborhoodView({
     }))
   }, [layoutPositions, nodeRadii])
 
+  // Auto-fit camera to content when layout is first computed
+  const hasAutoFitRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (layoutPositions.size === 0 || size.width === 0 || size.height === 0) return
+    // Only auto-fit once per cluster
+    if (hasAutoFitRef.current === cluster.anchor.id) return
+    hasAutoFitRef.current = cluster.anchor.id
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const [id, pos] of layoutPositions) {
+      const r = nodeRadii.get(id) ?? pos.radius
+      minX = Math.min(minX, pos.x - r)
+      maxX = Math.max(maxX, pos.x + r)
+      minY = Math.min(minY, pos.y - r)
+      maxY = Math.max(maxY, pos.y + r)
+    }
+
+    const contentW = maxX - minX
+    const contentH = maxY - minY
+    const padding = 40
+    const scaleX = (size.width - padding * 2) / contentW
+    const scaleY = (size.height - padding * 2) / contentH
+    // Fit to content but floor at 0.55 so it never looks too tiny
+    const fitZoom = Math.max(0.55, Math.min(scaleX, scaleY, 1.0))
+    const fitZoomClamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fitZoom))
+
+    // Center the content
+    const contentCenterX = (minX + maxX) / 2
+    const contentCenterY = (minY + maxY) / 2
+    const panX = size.width / 2 - contentCenterX * fitZoomClamped
+    const panY = size.height / 2 - contentCenterY * fitZoomClamped
+
+    setCamera({ zoom: fitZoomClamped, panX, panY })
+  }, [layoutPositions, nodeRadii, size.width, size.height, cluster.anchor.id])
+
   // Animation loop — drag drift + boundary push (no auto-floating)
   useEffect(() => {
     const tick = () => {
@@ -233,8 +299,11 @@ export function NeighborhoodView({
         }
       }
 
+      // When dragging a hub, freeze its children too
+      const draggedHubChildren = dragRef.current ? hubChildrenRef.current.get(dragRef.current.id) : null
+
       for (const n of nodes) {
-        if (dragRef.current?.id === n.id) {
+        if (dragRef.current?.id === n.id || (draggedHubChildren && draggedHubChildren.has(n.id))) {
           n.vx = 0
           n.vy = 0
           continue
@@ -291,14 +360,40 @@ export function NeighborhoodView({
       const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
       const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
       if (n) {
-        n.x = wx - dragRef.current.offsetX
-        n.y = wy - dragRef.current.offsetY
+        const newX = wx - dragRef.current.offsetX
+        const newY = wy - dragRef.current.offsetY
+        const dx = newX - n.x
+        const dy = newY - n.y
+        n.x = newX
+        n.y = newY
+
+        // If dragging a hub, move all child entities with it
+        const children = hubChildrenRef.current.get(dragRef.current.id)
+        if (children) {
+          for (const child of liveNodesRef.current) {
+            if (children.has(child.id)) {
+              child.x += dx
+              child.y += dy
+              child.vx = 0
+              child.vy = 0
+            }
+          }
+        }
       }
     }
 
     const onUp = () => {
-      const n = liveNodesRef.current.find(nd => nd.id === dragRef.current?.id)
-      if (n) { n.vx = 0; n.vy = 0 }
+      if (dragRef.current) {
+        const n = liveNodesRef.current.find(nd => nd.id === dragRef.current!.id)
+        if (n) { n.vx = 0; n.vy = 0 }
+        // Also zero velocities for hub children
+        const children = hubChildrenRef.current.get(dragRef.current.id)
+        if (children) {
+          for (const child of liveNodesRef.current) {
+            if (children.has(child.id)) { child.vx = 0; child.vy = 0 }
+          }
+        }
+      }
       dragRef.current = null
       dragPrevPos.current = null
       document.removeEventListener('mousemove', onMove)
@@ -423,7 +518,26 @@ export function NeighborhoodView({
   }, [zoomAround])
 
   const resetCamera = useCallback(() => {
-    setCamera({ zoom: 1, panX: 0, panY: 0 })
+    // Re-compute fit-to-content zoom
+    const nodes = liveNodesRef.current
+    const w = sizeRef.current.width
+    const h = sizeRef.current.height
+    if (nodes.length === 0 || w === 0 || h === 0) {
+      setCamera({ zoom: 1, panX: 0, panY: 0 })
+      return
+    }
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x - n.radius)
+      maxX = Math.max(maxX, n.x + n.radius)
+      minY = Math.min(minY, n.y - n.radius)
+      maxY = Math.max(maxY, n.y + n.radius)
+    }
+    const padding = 40
+    const fitZoom = Math.max(0.55, Math.min(1, Math.min((w - padding * 2) / (maxX - minX), (h - padding * 2) / (maxY - minY))))
+    const cx = (minX + maxX) / 2
+    const cy = (minY + maxY) / 2
+    setCamera({ zoom: fitZoom, panX: w / 2 - cx * fitZoom, panY: h / 2 - cy * fitZoom })
   }, [])
 
   const resetNodes = useCallback(() => {
@@ -575,7 +689,8 @@ export function NeighborhoodView({
     [exploringEntityId, entities]
   )
 
-  // ── Legend: entity types present in this cluster ────────────────────────────
+  // ── Legend ──────────────────────────────────────────────────────────────────
+  const [legendOpen, setLegendOpen] = useState(false)
   const legendItems = useMemo(() => {
     const typeCount = new Map<string, number>()
     for (const e of entities) {
@@ -701,7 +816,80 @@ export function NeighborhoodView({
               )
             })}
 
-            {/* 4. Entity nodes — spec-compliant solid circles with labels below */}
+            {/* 4a. Anchor hub nodes — gold border, icon, draggable with children */}
+            {anchorHubs.map(hub => {
+              const pos = livePositions.get(hub.id)
+              if (!pos) return null
+              const hr = layoutPositions.get(hub.id)?.radius ?? 14
+              const hubLabel = hub.label.length > 22 ? hub.label.slice(0, 20) + '…' : hub.label
+
+              return (
+                <g
+                  key={`hub-${hub.id}`}
+                  onMouseDown={e => handleNodeMouseDown(e, hub.id)}
+                  style={{ cursor: dragRef.current?.id === hub.id ? 'grabbing' : 'grab' }}
+                >
+                  <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    {/* Soft gold glow */}
+                    <circle
+                      r={hr + 4}
+                      fill="none"
+                      stroke="rgba(180,140,50,0.18)"
+                      strokeWidth={3}
+                    />
+                    {/* Main circle — gold border, light fill */}
+                    <circle
+                      r={hr}
+                      fill="rgba(255,248,230,0.85)"
+                      stroke="#C5A44E"
+                      strokeWidth={2.5}
+                    />
+                    {/* Small anchor icon via foreignObject */}
+                    <foreignObject
+                      x={-hr * 0.38} y={-hr * 0.38}
+                      width={hr * 0.76} height={hr * 0.76}
+                      style={{ pointerEvents: 'none', overflow: 'visible' }}
+                    >
+                      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Anchor size={hr * 0.55} color="#B8963E" strokeWidth={2} />
+                      </div>
+                    </foreignObject>
+                    {/* Hub label — always visible */}
+                    <text
+                      y={hr + 14}
+                      textAnchor="middle"
+                      style={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        fill: '#8B7328',
+                        pointerEvents: 'none',
+                        userSelect: 'none',
+                      }}
+                    >
+                      {hubLabel}
+                    </text>
+                    {/* Entity count below label */}
+                    <text
+                      y={hr + 25}
+                      textAnchor="middle"
+                      style={{
+                        fontFamily: 'var(--font-body)',
+                        fontSize: 8,
+                        fontWeight: 500,
+                        fill: 'var(--color-text-placeholder)',
+                        pointerEvents: 'none',
+                        userSelect: 'none',
+                      }}
+                    >
+                      {hub.entityCount} entities
+                    </text>
+                  </g>
+                </g>
+              )
+            })}
+
+            {/* 4b. Entity nodes — labels only on zoom or hover */}
             {displayEntities.map(entity => {
               const pos = livePositions.get(entity.id)
               if (!pos) return null
@@ -714,13 +902,11 @@ export function NeighborhoodView({
               const isSelected = selectedEntityId === entity.id
               const isHovered = hoveredEntityId === entity.id
 
-              // PRD-23: Origin ring for entities from sub-anchors
-              const originCluster = isParentMode && entity.originAnchorId && entity.originAnchorId !== cluster.anchor.id
-                ? allClusters.find(c => c.anchor.id === entity.originAnchorId)
-                : null
-
               const scale = isHovered && !isDimmed ? 1.08 : 1
               const label = entity.label.length > 20 ? entity.label.slice(0, 19) + '…' : entity.label
+
+              // Show label only when deeply zoomed in, hovered, or selected
+              const showLabel = isHovered || isSelected || camera.zoom >= 2.2
 
               return (
                 <g
@@ -735,22 +921,9 @@ export function NeighborhoodView({
                     transition: 'opacity 0.18s ease',
                   }}
                 >
-                  {/* Origin cluster ring (PRD-23) */}
-                  {originCluster && (
-                    <circle
-                      cx={pos.x} cy={pos.y}
-                      r={r + 3}
-                      fill="none"
-                      stroke={getEntityColor(originCluster.anchor.entityType)}
-                      strokeWidth={1}
-                      strokeOpacity={0.3}
-                      style={{ pointerEvents: 'none' }}
-                    />
-                  )}
-
                   <g transform={`translate(${pos.x}, ${pos.y})`}>
                     <g transform={`scale(${scale})`} style={{ transition: 'transform 0.15s ease' }}>
-                      {/* Selection ring — spec Section 4.4 */}
+                      {/* Selection ring */}
                       {isSelected && !isDimmed && (
                         <circle
                           r={r + 5}
@@ -761,7 +934,7 @@ export function NeighborhoodView({
                         />
                       )}
 
-                      {/* Hover glow ring — spec Section 4.5 */}
+                      {/* Hover glow ring */}
                       {isHovered && !isDimmed && !isSelected && (
                         <circle
                           r={r + 4}
@@ -771,7 +944,7 @@ export function NeighborhoodView({
                         />
                       )}
 
-                      {/* Solid filled circle — spec Section 4.1/4.2 */}
+                      {/* Solid filled circle */}
                       <circle
                         r={r}
                         fill={`${entityColor}22`}
@@ -800,24 +973,26 @@ export function NeighborhoodView({
                       )}
                     </g>
 
-                    {/* Label below circle — always visible, spec Section 5 */}
-                    <text
-                      y={r + 12}
-                      textAnchor="middle"
-                      style={{
-                        fontFamily: 'var(--font-display)',
-                        fontSize: 9,
-                        fontWeight: 600,
-                        fill: isSelected ? 'var(--color-accent-500)'
-                          : isHovered ? 'var(--color-text-primary)'
-                          : 'var(--color-text-secondary)',
-                        pointerEvents: 'none',
-                        userSelect: 'none',
-                        transition: 'fill 0.15s ease',
-                      }}
-                    >
-                      {label}
-                    </text>
+                    {/* Label — only on zoom or hover/selected */}
+                    {showLabel && (
+                      <text
+                        y={r + 12}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-display)',
+                          fontSize: 9,
+                          fontWeight: 600,
+                          fill: isSelected ? 'var(--color-accent-500)'
+                            : isHovered ? 'var(--color-text-primary)'
+                            : 'var(--color-text-secondary)',
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          opacity: isHovered || isSelected ? 1 : Math.min(1, (camera.zoom - 2.2) / 0.6 + 0.3),
+                        }}
+                      >
+                        {label}
+                      </text>
+                    )}
                   </g>
                 </g>
               )
@@ -884,70 +1059,94 @@ export function NeighborhoodView({
         </span>
       </div>
 
-      {/* PRD-23: Sub-anchor navigation pills (parent mode only) */}
+      {/* PRD-23: Sub-anchor dropdown (parent mode only) */}
       {isParentMode && (
         <div
           style={{
             position: 'absolute',
             top: 46,
             left: 16,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            flexWrap: 'wrap',
             pointerEvents: 'all',
-            maxWidth: '60%',
+            zIndex: 25,
           }}
         >
           <button
             type="button"
-            onClick={() => setActiveSubAnchorId(null)}
-            className="font-body font-semibold"
+            onClick={() => setSubAnchorDropdownOpen(prev => !prev)}
+            className="flex items-center gap-1.5 font-body font-semibold cursor-pointer"
             style={{
-              padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+              padding: '5px 10px', borderRadius: 8,
               fontSize: 11,
-              background: !activeSubAnchorId ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
-              border: !activeSubAnchorId
-                ? '1px solid rgba(214,58,0,0.2)'
-                : '1px solid var(--border-subtle)',
-              color: !activeSubAnchorId
+              background: 'var(--color-bg-card)',
+              border: '1px solid var(--border-subtle)',
+              color: activeSubAnchorId
                 ? 'var(--color-accent-500)'
                 : 'var(--color-text-secondary)',
             }}
           >
-            All ({entities.length})
+            {activeSubAnchorId
+              ? (() => {
+                  const sub = allClusters.find(c => c.anchor.id === activeSubAnchorId)
+                  return sub ? sub.anchor.label : 'All'
+                })()
+              : `All topics (${entities.length})`}
+            <ChevronDown size={12} style={{ transition: 'transform 0.15s ease', transform: subAnchorDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} />
           </button>
-          {cluster.subAnchorIds.map(subId => {
-            const subCluster = allClusters.find(c => c.anchor.id === subId)
-            if (!subCluster) return null
-            const subEntities = entities.filter(e => e.originAnchorId === subId)
-            const isActive = activeSubAnchorId === subId
-
-            return (
+          {subAnchorDropdownOpen && (
+            <div
+              style={{
+                marginTop: 4,
+                background: 'var(--color-bg-card)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 8,
+                padding: '4px 0',
+                maxHeight: 280,
+                overflowY: 'auto',
+                minWidth: 180,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+              }}
+            >
               <button
-                key={subId}
                 type="button"
-                onClick={() => setActiveSubAnchorId(isActive ? null : subId)}
-                className="font-body font-semibold"
+                onClick={() => { setActiveSubAnchorId(null); setSubAnchorDropdownOpen(false) }}
+                className="flex items-center gap-2 w-full font-body cursor-pointer"
                 style={{
-                  padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
-                  fontSize: 11,
-                  background: isActive ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
-                  border: isActive
-                    ? '1px solid rgba(214,58,0,0.2)'
-                    : '1px solid var(--border-subtle)',
-                  color: isActive
-                    ? 'var(--color-accent-500)'
-                    : 'var(--color-text-secondary)',
+                  padding: '6px 12px', background: 'none', border: 'none',
+                  fontSize: 11, fontWeight: !activeSubAnchorId ? 600 : 500,
+                  color: !activeSubAnchorId ? 'var(--color-accent-500)' : 'var(--color-text-body)',
                 }}
               >
-                {subCluster.anchor.label.length > 16
-                  ? subCluster.anchor.label.slice(0, 14) + '…'
-                  : subCluster.anchor.label}
-                {' '}({subEntities.length})
+                All ({entities.length})
               </button>
-            )
-          })}
+              {cluster.subAnchorIds.map(subId => {
+                const subCluster = allClusters.find(c => c.anchor.id === subId)
+                if (!subCluster) return null
+                const subEntities = entities.filter(e => e.originAnchorId === subId)
+                const isActive = activeSubAnchorId === subId
+
+                return (
+                  <button
+                    key={subId}
+                    type="button"
+                    onClick={() => { setActiveSubAnchorId(isActive ? null : subId); setSubAnchorDropdownOpen(false) }}
+                    className="flex items-center gap-2 w-full font-body cursor-pointer"
+                    style={{
+                      padding: '6px 12px', background: 'none', border: 'none',
+                      fontSize: 11, fontWeight: isActive ? 600 : 500,
+                      color: isActive ? 'var(--color-accent-500)' : 'var(--color-text-body)',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{
+                      width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                      background: getEntityColor(subCluster.anchor.entityType),
+                    }} />
+                    {subCluster.anchor.label} ({subEntities.length})
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -1078,7 +1277,7 @@ export function NeighborhoodView({
         )
       })()}
 
-      {/* Entity type legend — bottom-left */}
+      {/* Entity type legend — bottom-left, collapsed by default */}
       <div
         style={{
           position: 'absolute',
@@ -1088,29 +1287,42 @@ export function NeighborhoodView({
           backdropFilter: 'blur(8px)',
           border: '1px solid var(--border-subtle)',
           borderRadius: 8,
-          padding: '8px 10px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
           zIndex: 20,
-          maxHeight: 200,
-          overflowY: 'auto',
+          overflow: 'hidden',
         }}
       >
-        <span style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, color: 'var(--color-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
+        <button
+          type="button"
+          onClick={() => setLegendOpen(prev => !prev)}
+          className="flex items-center gap-1.5 w-full cursor-pointer"
+          style={{
+            padding: '6px 10px',
+            background: 'none', border: 'none',
+            fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700,
+            color: 'var(--color-text-secondary)', letterSpacing: '0.06em',
+            textTransform: 'uppercase' as const,
+          }}
+        >
+          <svg width={8} height={8} viewBox="0 0 8 8" style={{ flexShrink: 0, transition: 'transform 0.15s ease', transform: legendOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+            <path d="M2 1l4 3-4 3z" fill="currentColor" />
+          </svg>
           Legend
-        </span>
-        {legendItems.map(item => (
-          <div key={item.type} className="flex items-center gap-2">
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', flex: 1 }}>
-              {item.type}
-            </span>
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, fontWeight: 600, color: 'var(--color-text-placeholder)' }}>
-              {item.count}
-            </span>
+        </button>
+        {legendOpen && (
+          <div style={{ padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto' }}>
+            {legendItems.map(item => (
+              <div key={item.type} className="flex items-center gap-2">
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)', flex: 1 }}>
+                  {item.type}
+                </span>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 8, fontWeight: 600, color: 'var(--color-text-placeholder)' }}>
+                  {item.count}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
       {/* Right-side entity detail card */}

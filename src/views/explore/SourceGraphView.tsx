@@ -65,6 +65,7 @@ export function SourceGraphView({
   // Interaction
   const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null)
   const [exploringSourceId, setExploringSourceId] = useState<string | null>(null)
+  const [legendOpen, setLegendOpen] = useState(false)
 
   // Static layout
   const layoutPositions = useSourceLayout(sources, edges, size.width, size.height)
@@ -103,13 +104,19 @@ export function SourceGraphView({
     connectivityRef.current = map
   }, [edges])
 
-  // Node radii — standardized sizing
+  // Node radii — sized by number of connected sources
   const nodeRadii = useMemo(() => {
-    const maxEntityCount = Math.max(...sources.map(s => s.entityCount), 1)
+    // Count connections per source from edges
+    const connCount = new Map<string, number>()
+    for (const e of edges) {
+      connCount.set(e.fromSourceId, (connCount.get(e.fromSourceId) ?? 0) + 1)
+      connCount.set(e.toSourceId, (connCount.get(e.toSourceId) ?? 0) + 1)
+    }
+    const maxConn = Math.max(...Array.from(connCount.values()), 1)
     const radii = new Map<string, number>()
-    for (const s of sources) radii.set(s.id, dotRadius(s.entityCount, maxEntityCount))
+    for (const s of sources) radii.set(s.id, dotRadius(connCount.get(s.id) ?? 0, maxConn))
     return radii
-  }, [sources])
+  }, [sources, edges])
 
   // Initialize live nodes
   useEffect(() => {
@@ -729,7 +736,7 @@ export function SourceGraphView({
         />
       )}
 
-      {/* Legend — bottom-left */}
+      {/* Legend — bottom-left, collapsed by default */}
       <div
         style={{
           position: 'absolute', bottom: 16, left: 16,
@@ -737,22 +744,39 @@ export function SourceGraphView({
           backdropFilter: 'blur(8px)',
           border: '1px solid var(--border-subtle)',
           borderRadius: 8,
-          padding: '8px 10px',
-          display: 'flex', flexDirection: 'column', gap: 4,
           zIndex: 20,
+          overflow: 'hidden',
         }}
       >
-        <span style={{ fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700, color: 'var(--color-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
+        <button
+          type="button"
+          onClick={() => setLegendOpen(prev => !prev)}
+          className="flex items-center gap-1.5 w-full cursor-pointer"
+          style={{
+            padding: '6px 10px',
+            background: 'none', border: 'none',
+            fontFamily: 'var(--font-display)', fontSize: 8, fontWeight: 700,
+            color: 'var(--color-text-secondary)', letterSpacing: '0.06em',
+            textTransform: 'uppercase' as const,
+          }}
+        >
+          <svg width={8} height={8} viewBox="0 0 8 8" style={{ flexShrink: 0, transition: 'transform 0.15s ease', transform: legendOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+            <path d="M2 1l4 3-4 3z" fill="currentColor" />
+          </svg>
           Legend
-        </span>
-        {legendItems.map(item => (
-          <div key={item.label} className="flex items-center gap-2">
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)' }}>
-              {item.label}
-            </span>
+        </button>
+        {legendOpen && (
+          <div style={{ padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto' }}>
+            {legendItems.map(item => (
+              <div key={item.label} className="flex items-center gap-2">
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: `${item.color}22`, border: `1.5px solid ${item.color}`, flexShrink: 0 }} />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: 'var(--color-text-body)' }}>
+                  {item.label}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
       {/* Stats — top-right */}
