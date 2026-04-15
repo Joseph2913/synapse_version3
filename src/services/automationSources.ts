@@ -29,6 +29,7 @@ export interface AutomationSource {
   status: 'active' | 'paused' | 'connected' | 'disconnected' | 'error'
   videosIngested?: number
   meetingsIngested?: number
+  digestsIngested?: number
   lastScan?: string
   lastSync?: string
   mode: string

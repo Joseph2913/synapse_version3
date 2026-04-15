@@ -59,8 +59,8 @@ export function SourceCard({ source, isSelected, onClick, index = 0 }: SourceCar
         {/* Left: icon + name */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <ProviderIcon
-            sourceType={source.category === 'microsoft' ? 'Research' : source.category === 'meeting' ? 'Meeting' : 'YouTube'}
-            provider={source.provider ?? (source.category === 'youtube-playlist' ? 'youtube' : source.category === 'microsoft' ? 'microsoft' : undefined)}
+            sourceType={source.category === 'microsoft' ? 'Research' : source.category === 'meeting' ? 'Meeting' : source.category === 'github' ? 'Research' : 'YouTube'}
+            provider={source.provider ?? (source.category === 'youtube-playlist' ? 'youtube' : source.category === 'microsoft' ? 'microsoft' : source.category === 'github' ? 'github' : undefined)}
             size={32}
           />
           <div>
@@ -82,7 +82,9 @@ export function SourceCard({ source, isSelected, onClick, index = 0 }: SourceCar
                     ? 'Outlook & Teams'
                     : source.category === 'meeting'
                       ? 'Meeting Integration'
-                      : 'YouTube Playlist'}
+                      : source.category === 'github'
+                        ? 'GitHub Repository'
+                        : 'YouTube Playlist'}
             </div>
           </div>
         </div>
@@ -139,6 +141,14 @@ export function SourceCard({ source, isSelected, onClick, index = 0 }: SourceCar
               {source.meetingsIngested}
             </span>{' '}
             {source.category === 'microsoft' ? 'items ingested' : 'meetings ingested'}
+          </span>
+        )}
+        {source.digestsIngested !== undefined && (
+          <span className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+            <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>
+              {source.digestsIngested}
+            </span>{' '}
+            digests ingested
           </span>
         )}
         {(source.lastScan || source.lastSync) && (
