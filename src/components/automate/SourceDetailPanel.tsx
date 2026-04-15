@@ -6,6 +6,14 @@ import {
   updateSourceSettings, updateSourceName, fetchIngestedContent,
   callScanNowAPI, callProcessNowAPI,
 } from '../../services/automationSources'
+import {
+  updateGitHubRepo,
+  setGitHubRepoActive,
+  deleteGitHubRepo,
+  fetchGitHubQueue,
+  triggerGitHubScan,
+} from '../../services/githubIntegration'
+import type { GitHubQueueItem } from '../../services/githubIntegration'
 import { StatusLabel, StatusDot } from '../shared/StatusIndicator'
 import { useSourceQueue } from '../../hooks/useSourceQueue'
 import { useSettings } from '../../hooks/useSettings'
@@ -58,6 +66,53 @@ type QueueStep = typeof QUEUE_STEPS[number]
 
 function stepIndex(step: QueueStep): number {
   return QUEUE_STEPS.indexOf(step)
+}
+
+const SCAN_INTERVALS = [
+  { id: 'hourly', label: 'Hourly' },
+  { id: '6h', label: 'Every 6h' },
+  { id: '12h', label: 'Every 12h' },
+  { id: 'daily', label: 'Daily' },
+] as const
+
+function githubQueueItemToDisplay(item: GitHubQueueItem): { id: string; title: string; status: string; step: QueueStep; error?: string; nodes?: number; edges?: number } {
+  const rawStatus = item.status
+  let displayStatus: 'pending' | 'processing' | 'complete' | 'failed' = 'pending'
+  let step: QueueStep = 'queued'
+
+  if (rawStatus === 'completed') {
+    displayStatus = 'complete'
+    step = 'complete'
+  } else if (rawStatus === 'failed') {
+    displayStatus = 'failed'
+    step = 'extracting'
+  } else if (rawStatus === 'extracting') {
+    displayStatus = 'processing'
+    step = 'extracting'
+  } else if (rawStatus === 'digest_ready') {
+    displayStatus = 'processing'
+    step = 'fetching'
+  } else if (rawStatus === 'composing_digest') {
+    displayStatus = 'processing'
+    step = 'fetching'
+  } else {
+    // pending
+    displayStatus = 'pending'
+    step = 'queued'
+  }
+
+  const dateLabel = item.digest_date ? new Date(item.digest_date).toLocaleDateString() : item.id
+  const title = `${dateLabel} (${item.commit_count} commit${item.commit_count !== 1 ? 's' : ''})`
+
+  return {
+    id: item.id,
+    title,
+    status: displayStatus,
+    step,
+    error: item.error_message ?? undefined,
+    nodes: item.nodes_created,
+    edges: item.edges_created,
+  }
 }
 
 function QueueItemRow({ item }: { item: { id: string; title: string; status: string; step: QueueStep; error?: string; nodes?: number; edges?: number } }) {
@@ -148,8 +203,12 @@ function EditPanel({ source, onCancel, onSaved }: EditPanelProps) {
   const [editEmphasis, setEditEmphasis] = useState(source.emphasis)
   const [editAnchorIds, setEditAnchorIds] = useState<string[]>(source.linkedAnchors)
   const [editInstructions, setEditInstructions] = useState(source.customInstructions ?? '')
+  const [editScanInterval, setEditScanInterval] = useState<string>(
+    (source as AutomationSource & { scanInterval?: string }).scanInterval ?? 'daily'
+  )
 
   const isMeetingSource = source.category === 'meeting'
+  const isGitHub = source.category === 'github'
   const webhookUrl = isMeetingSource && user
     ? `${window.location.origin}/api/meetings/webhook?uid=${user.id}`
     : ''
@@ -158,16 +217,29 @@ function EditPanel({ source, onCancel, onSaved }: EditPanelProps) {
     setSaving(true)
     setSaveError(null)
     try {
-      if (editName.trim() && editName.trim() !== source.name) {
-        await updateSourceName(source.id, source.category, editName.trim())
+      if (isGitHub) {
+        const updates: Parameters<typeof updateGitHubRepo>[1] = {
+          extraction_mode: editMode,
+          anchor_emphasis: editEmphasis,
+          custom_instructions: editInstructions || null,
+          scan_interval: editScanInterval,
+        }
+        if (editAnchorIds.length > 0) {
+          updates.linked_anchor_ids = editAnchorIds
+        }
+        await updateGitHubRepo(source.id, updates)
+      } else {
+        if (editName.trim() && editName.trim() !== source.name) {
+          await updateSourceName(source.id, source.category, editName.trim())
+        }
+        const settings: SourceSettings = {
+          mode: editMode,
+          emphasis: editEmphasis,
+          linkedAnchorIds: editAnchorIds,
+          customInstructions: editInstructions || undefined,
+        }
+        await updateSourceSettings(source.id, source.category, settings)
       }
-      const settings: SourceSettings = {
-        mode: editMode,
-        emphasis: editEmphasis,
-        linkedAnchorIds: editAnchorIds,
-        customInstructions: editInstructions || undefined,
-      }
-      await updateSourceSettings(source.id, source.category, settings)
       await onSaved()
       onCancel()
     } catch (err) {
@@ -311,6 +383,29 @@ function EditPanel({ source, onCancel, onSaved }: EditPanelProps) {
         })}
       </div>
 
+      {/* Scan Interval (GitHub only) */}
+      {isGitHub && (
+        <>
+          <SL style={{ marginBottom: 6 }}>Scan Interval</SL>
+          <div style={{ display: 'flex', gap: 5, marginBottom: 14 }}>
+            {SCAN_INTERVALS.map(interval => {
+              const active = editScanInterval === interval.id
+              return (
+                <button
+                  key={interval.id}
+                  type="button"
+                  onClick={() => setEditScanInterval(interval.id)}
+                  className="font-body font-semibold"
+                  style={{ flex: 1, padding: '6px 8px', borderRadius: 7, border: active ? '1.5px solid rgba(214,58,0,0.3)' : '1px solid var(--border-subtle)', background: active ? 'var(--color-accent-50)' : 'transparent', color: active ? 'var(--color-accent-500)' : 'var(--color-text-secondary)', fontSize: 11, cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center' }}
+                >
+                  {interval.label}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+
       {/* Focus Anchors */}
       {anchors.length > 0 && (
         <>
@@ -408,8 +503,9 @@ function SettingsReadView({ source }: { source: AutomationSource }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPanelProps) {
+  const isGitHubSource = source.category === 'github'
   const { items, loading: queueLoading, refetch: refetchQueue } = useSourceQueue(
-    source.category === 'meeting' ? null : source.id,
+    source.category === 'meeting' || isGitHubSource ? null : source.id,
     source.category
   )
   const { session } = useAuth()
@@ -424,6 +520,8 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
   const [showAllIngested, setShowAllIngested] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [urlCopied, setUrlCopied] = useState(false)
+  const [githubQueue, setGithubQueue] = useState<GitHubQueueItem[]>([])
+  const [githubQueueLoading, setGithubQueueLoading] = useState(false)
 
   const catColor = getCategoryColor(source.category)
   const itemsIngested = source.videosIngested ?? source.meetingsIngested ?? 0
@@ -439,19 +537,43 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
       .finally(() => setIngestedLoading(false))
   }, [source.id, source.category])
 
+  // Load GitHub queue when applicable
+  useEffect(() => {
+    if (!isGitHubSource) return
+    setGithubQueueLoading(true)
+    fetchGitHubQueue(source.id)
+      .then(setGithubQueue)
+      .catch(err => console.warn('[SourceDetailPanel] fetchGitHubQueue:', err))
+      .finally(() => setGithubQueueLoading(false))
+  }, [source.id, isGitHubSource])
+
   // Reset edit state when source changes
   useEffect(() => { setIsEditing(false) }, [source.id])
 
   const handlePause = async () => {
     setActionLoading(true)
-    try { await updateSourceStatus(source.id, source.category, 'paused'); await onRefetch() }
+    try {
+      if (isGitHubSource) {
+        await setGitHubRepoActive(source.id, false)
+      } else {
+        await updateSourceStatus(source.id, source.category, 'paused')
+      }
+      await onRefetch()
+    }
     catch (err) { console.warn('[SourceDetailPanel] pause error:', err) }
     finally { setActionLoading(false) }
   }
 
   const handleResume = async () => {
     setActionLoading(true)
-    try { await updateSourceStatus(source.id, source.category, 'active'); await onRefetch() }
+    try {
+      if (isGitHubSource) {
+        await setGitHubRepoActive(source.id, true)
+      } else {
+        await updateSourceStatus(source.id, source.category, 'active')
+      }
+      await onRefetch()
+    }
     catch (err) { console.warn('[SourceDetailPanel] resume error:', err) }
     finally { setActionLoading(false) }
   }
@@ -461,7 +583,12 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
     setScanResult(null)
     setActionError(null)
     try {
-      if (source.category === 'microsoft' && session?.access_token) {
+      if (isGitHubSource) {
+        await triggerGitHubScan()
+        setScanResult('Scan triggered')
+        const updated = await fetchGitHubQueue(source.id)
+        setGithubQueue(updated)
+      } else if (source.category === 'microsoft' && session?.access_token) {
         // Microsoft: trigger a delta sync instead of YouTube scan
         const syncRes = await fetch('/api/microsoft/sync', {
           method: 'POST',
@@ -518,14 +645,22 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
   const handleDelete = async () => {
     if (!confirm(`Delete "${source.name}"? This will permanently remove the source and all its queue items. Extracted knowledge (nodes/edges) will be preserved.`)) return
     setActionLoading(true)
-    try { await deleteSource(source.id, source.category); await onRefetch(); onClose() }
+    try {
+      if (isGitHubSource) {
+        await deleteGitHubRepo(source.id)
+      } else {
+        await deleteSource(source.id, source.category)
+      }
+      await onRefetch()
+      onClose()
+    }
     catch (err) { console.warn('[SourceDetailPanel] delete error:', err) }
     finally { setActionLoading(false) }
   }
 
   const visibleIngested = showAllIngested ? ingestedItems : ingestedItems.slice(0, 10)
   const isMeeting = source.category === 'meeting'
-  const contentLabel = isMeeting ? 'Meetings' : 'Videos'
+  const contentLabel = isMeeting ? 'Meetings' : isGitHubSource ? 'Commits' : 'Videos'
 
   // ── Edit mode ────────────────────────────────────────────────────────────
   if (isEditing) {
@@ -632,7 +767,7 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
                     {scanLoading ? 'Scanning…' : source.category === 'microsoft' ? 'Sync Now' : 'Scan Now'}
                   </button>
                 )}
-                {source.queue.pending > 0 && (
+                {source.queue.pending > 0 && !isGitHubSource && (
                   <button
                     type="button" onClick={() => void handleProcessNow()} disabled={processLoading}
                     className="font-body font-semibold"
@@ -736,7 +871,7 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
         </div>
 
         {/* ── Queue ─────────────────────────────────────────────────── */}
-        {!isMeeting && (
+        {!isMeeting && !isGitHubSource && (
           <div style={{ marginBottom: 28 }}>
             <SL>Processing Queue ({items.length})</SL>
             {queueLoading ? (
@@ -754,18 +889,39 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
           </div>
         )}
 
+        {/* ── GitHub Queue ──────────────────────────────────────────── */}
+        {isGitHubSource && (
+          <div style={{ marginBottom: 28 }}>
+            <SL>Processing Queue ({githubQueue.length})</SL>
+            {githubQueueLoading ? (
+              <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', padding: '8px 0' }}>Loading queue…</p>
+            ) : githubQueue.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <Check size={18} style={{ color: 'var(--color-text-placeholder)', margin: '0 auto 6px' }} />
+                <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-placeholder)' }}>Queue is empty</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {githubQueue.map(item => <QueueItemRow key={item.id} item={githubQueueItemToDisplay(item)} />)}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Danger zone ───────────────────────────────────────────── */}
         <div style={{ paddingTop: 16, borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <button
-            type="button" onClick={() => void handleDisconnect()} disabled={actionLoading}
-            className="font-body"
-            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: 0, background: 'transparent', border: 'none', cursor: actionLoading ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 500, color: '#f59e0b', opacity: actionLoading ? 0.5 : 0.7, transition: 'opacity 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-            onMouseLeave={e => { e.currentTarget.style.opacity = actionLoading ? '0.5' : '0.7' }}
-          >
-            <Unlink size={12} />
-            Disconnect Source
-          </button>
+          {!isGitHubSource && (
+            <button
+              type="button" onClick={() => void handleDisconnect()} disabled={actionLoading}
+              className="font-body"
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: 0, background: 'transparent', border: 'none', cursor: actionLoading ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 500, color: '#f59e0b', opacity: actionLoading ? 0.5 : 0.7, transition: 'opacity 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
+              onMouseLeave={e => { e.currentTarget.style.opacity = actionLoading ? '0.5' : '0.7' }}
+            >
+              <Unlink size={12} />
+              Disconnect Source
+            </button>
+          )}
           <button
             type="button" onClick={() => void handleDelete()} disabled={actionLoading}
             className="font-body"
