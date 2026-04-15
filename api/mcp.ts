@@ -320,9 +320,8 @@ async function handleSendToSynapse(
     return { content: [{ type: 'text', text: 'Error: INGEST_SECRET not configured on server.' }] };
   }
 
-  const appUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : 'http://localhost:3000';
+  const appUrl = process.env.APP_DOMAIN
+    ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
   const response = await fetch(`${appUrl}/api/ingest/session`, {
     method: 'POST',
