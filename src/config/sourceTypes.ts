@@ -10,6 +10,7 @@ export const SOURCE_TYPE_CONFIG: Record<string, SourceTypeConfig> = {
   Research: { color: '#8b5cf6', icon: '🔬', label: 'Research' },
   Note:     { color: '#10b981', icon: '✏️', label: 'Note' },
   Document: { color: '#f59e0b', icon: '📋', label: 'Document' },
+  GitHub:   { color: '#24292e', icon: '🔀', label: 'GitHub' },
 }
 
 export const DEFAULT_SOURCE_CONFIG: SourceTypeConfig = {

@@ -5,7 +5,7 @@ export type EntityType =
   | 'Lesson' | 'Document' | 'Event' | 'Location' | 'Technology'
   | 'Product' | 'Metric' | 'Hypothesis' | 'Anchor'
 
-export type SourceType = 'Meeting' | 'YouTube' | 'Research' | 'Note' | 'Document'
+export type SourceType = 'Meeting' | 'YouTube' | 'Research' | 'Note' | 'Document' | 'GitHub'
 
 export type RelationType =
   | 'leads_to' | 'supports' | 'blocks' | 'depends_on' | 'part_of'

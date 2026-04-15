@@ -18,7 +18,13 @@ if (!supabaseUrl || !supabaseAnonKey) {
   )
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    // Prevent "Lock was stolen by another request" AbortError when multiple
+    // components trigger concurrent auth-token refreshes on app load.
+    lockAcquireTimeout: 10000,
+  } as Record<string, unknown>,
+})
 
 // ─── Profile ────────────────────────────────────────────────────────────────
 
