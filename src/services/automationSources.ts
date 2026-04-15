@@ -76,7 +76,9 @@ export interface QueueSummary {
 
 function toRelativeTime(isoString: string | null | undefined): string {
   if (!isoString) return 'Never'
-  const diff = Date.now() - new Date(isoString).getTime()
+  const timestamp = new Date(isoString).getTime()
+  if (isNaN(timestamp)) return 'Never'
+  const diff = Date.now() - timestamp
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return 'Just now'
   if (minutes < 60) return `${minutes}m ago`

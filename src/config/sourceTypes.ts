@@ -40,6 +40,7 @@ export const PROVIDER_CONFIG: Record<string, ProviderConfig> = {
   meetgeek:   { logo: '/logos/meetgeek.jpeg',   label: 'MeetGeek',   color: '#8b5cf6' },
   tldv:       { logo: '/logos/tldv.svg',        label: 'tl;dv',      color: '#ec4899' },
   microsoft:  { logo: '/logos/microsoft.svg',   label: 'Microsoft 365', color: '#0078d4' },
+  github:     { logo: '/logos/github.svg',     label: 'GitHub',       color: '#24292f' },
 }
 
 export function getProviderConfig(provider: string | null | undefined): ProviderConfig | null {
