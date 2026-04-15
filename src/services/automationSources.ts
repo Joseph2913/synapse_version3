@@ -267,6 +267,7 @@ export async function fetchAutomationSources(): Promise<AutomationSource[]> {
         emphasis: repo.anchor_emphasis,
         linkedAnchors: repo.linked_anchor_ids ?? [],
         customInstructions: repo.custom_instructions ?? undefined,
+        iconUrl: '/logos/github.svg',
         provider: 'github',
         queue: {
           pending: ghQueueStats.pending,

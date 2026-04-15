@@ -673,7 +673,7 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
               <div style={{ width: 36, height: 36, borderRadius: 9, background: catColor + '1f', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                 {source.iconUrl
                 ? <img src={source.iconUrl} alt="" width={18} height={18} style={{ borderRadius: 4, objectFit: 'cover' }} />
-                : <span style={{ fontSize: 18 }}>{isMeeting ? '🎙' : '▶'}</span>}
+                : <span style={{ fontSize: 18 }}>{isMeeting ? '🎙' : isGitHubSource ? '🔀' : '▶'}</span>}
               </div>
               <div>
                 <div className="font-display" style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.2 }}>Edit Source</div>
@@ -702,7 +702,7 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
             <div style={{ width: 36, height: 36, borderRadius: 9, background: catColor + '1f', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               {source.iconUrl
                 ? <img src={source.iconUrl} alt="" width={18} height={18} style={{ borderRadius: 4, objectFit: 'cover' }} />
-                : <span style={{ fontSize: 18 }}>{isMeeting ? '🎙' : '▶'}</span>}
+                : <span style={{ fontSize: 18 }}>{isMeeting ? '🎙' : isGitHubSource ? '🔀' : '▶'}</span>}
             </div>
             <div>
               <div className="font-display" style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.2 }}>{source.name}</div>
