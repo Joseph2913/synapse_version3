@@ -215,7 +215,7 @@ export async function fetchGitHubQueue(repoId: string): Promise<GitHubQueueItem[
   if (!user) return []
 
   const { data, error } = await supabase
-    .from('github_digest_queue')
+    .from('github_ingestion_queue')
     .select('*')
     .eq('repo_id', repoId)
     .order('digest_date', { ascending: false })
@@ -245,7 +245,7 @@ export async function fetchGitHubQueueStats(): Promise<GitHubQueueStats> {
   if (repoIds.length === 0) return { pending: 0, processing: 0, completed: 0, failed: 0 }
 
   const { data, error } = await supabase
-    .from('github_digest_queue')
+    .from('github_ingestion_queue')
     .select('status')
     .in('repo_id', repoIds)
 
