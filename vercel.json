@@ -62,6 +62,18 @@
     {
       "path": "/api/council/cron",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/github/scan-repos",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/github/compose-digest",
+      "schedule": "10 * * * *"
+    },
+    {
+      "path": "/api/github/extract-knowledge",
+      "schedule": "20 * * * *"
     }
   ]
 }
