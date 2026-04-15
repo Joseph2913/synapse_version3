@@ -797,6 +797,37 @@ export function SourceDetailPanel({ source, onClose, onRefetch }: SourceDetailPa
                 </button>
               </>
             )}
+            {source.status === 'error' && (
+              <>
+                <button
+                  type="button" onClick={() => {
+                    if (isGitHubSource) {
+                      void (async () => {
+                        setActionLoading(true)
+                        try {
+                          await setGitHubRepoActive(source.id, true)
+                          await handleScanNow()
+                        } catch { /* handled by scanNow */ }
+                        setActionLoading(false)
+                      })()
+                    }
+                  }}
+                  disabled={actionLoading || scanLoading}
+                  className="font-body font-semibold"
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 14px', borderRadius: 8, border: '1px solid rgba(214,58,0,0.25)', background: 'var(--color-accent-50)', color: 'var(--color-accent-500)', fontSize: 11, cursor: actionLoading ? 'not-allowed' : 'pointer' }}
+                >
+                  <RefreshCw size={12} style={{ animation: scanLoading ? 'spin 1s linear infinite' : 'none' }} />
+                  {scanLoading ? 'Retrying…' : 'Retry Scan'}
+                </button>
+                <button
+                  type="button" onClick={() => setIsEditing(true)}
+                  className="font-body font-semibold"
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--color-bg-card)', color: 'var(--color-text-body)', fontSize: 11, cursor: 'pointer' }}
+                >
+                  <Pencil size={12} /> Edit
+                </button>
+              </>
+            )}
             {source.status === 'disconnected' && (
               <button type="button" className="font-body font-semibold" style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 14px', borderRadius: 8, border: 'none', background: 'var(--color-accent-500)', color: 'white', fontSize: 11, cursor: 'pointer' }}>
                 <Link size={12} /> Connect
