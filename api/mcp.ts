@@ -2,7 +2,7 @@
  * api/mcp.ts
  *
  * Synapse MCP Server — Vercel serverless function implementing MCP Streamable HTTP transport.
- * Exposes 15 tools: 12 knowledge graph tools + 3 skill library tools (PRD-Skills-C).
+ * Exposes 16 tools: 12 knowledge graph tools + 3 skill library tools + 1 write tool (send_to_synapse).
  *
  * CRITICAL: Fully self-contained. No local imports. All helpers defined inline.
  * PRD-24: MCP Server & API Key Management
@@ -307,6 +307,59 @@ function getTypeSystemPromptGuidance(type: RetrievalType): string {
     case 'synthesis':
       return 'Provide a comprehensive overview synthesising information across multiple sources. Highlight patterns, contradictions, and temporal evolution. Be thorough but organised.'
   }
+}
+
+// ─── Send to Synapse handler ────────────────────────────────────────────────
+
+async function handleSendToSynapse(
+  args: { title: string; content: string; repo?: string; branch?: string; guidance?: string },
+  userId: string
+): Promise<ToolContent> {
+  const INGEST_SECRET = process.env.INGEST_SECRET;
+  if (!INGEST_SECRET) {
+    return { content: [{ type: 'text', text: 'Error: INGEST_SECRET not configured on server.' }] };
+  }
+
+  const appUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : 'http://localhost:3000';
+
+  const response = await fetch(`${appUrl}/api/ingest/session`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-ingest-secret': INGEST_SECRET,
+    },
+    body: JSON.stringify({
+      userId,
+      title: args.title,
+      content: args.content,
+      repo: args.repo ?? null,
+      branch: args.branch ?? null,
+      guidance: args.guidance ?? null,
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    return { content: [{ type: 'text', text: `Failed to ingest session: ${response.status} ${errBody.slice(0, 300)}` }] };
+  }
+
+  const result = await response.json() as {
+    source_id: string;
+    title: string;
+    entity_count: number;
+    edge_count: number;
+    status: string;
+  };
+
+  return {
+    content: [{
+      type: 'text',
+      text: `Session saved to Synapse.\n\nSource ID: ${result.source_id}\nTitle: ${result.title}\nEntities extracted: ${result.entity_count}\nRelationships created: ${result.edge_count}\nStatus: ${result.status}\n\nThe session is now in your knowledge graph and searchable via ask_synapse.`,
+    }],
+  };
 }
 
 // ─── Tool descriptors ────────────────────────────────────────────────────────
@@ -683,6 +736,37 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'send_to_synapse',
+    description:
+      'Send a structured session summary from Claude Code into the Synapse knowledge graph. Creates a GitHub source and triggers the full extraction pipeline (entity extraction, embeddings, chunking, cross-connections). Use after generating a session summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Concise descriptive title for the session.',
+        },
+        content: {
+          type: 'string',
+          description: 'Full structured markdown summary of the session.',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name (auto-detected from working directory).',
+        },
+        branch: {
+          type: 'string',
+          description: 'Git branch name at time of session.',
+        },
+        guidance: {
+          type: 'string',
+          description: 'User-provided instructions that shaped the summary emphasis.',
+        },
+      },
+      required: ['title', 'content'],
     },
   },
 ]
@@ -3257,6 +3341,21 @@ async function handleMcpRequest(
                 },
                 userId,
                 sb
+              )
+            )
+
+          case 'send_to_synapse':
+            return jsonRpcResult(
+              reqId,
+              await handleSendToSynapse(
+                {
+                  title: toolArgs.title as string,
+                  content: toolArgs.content as string,
+                  repo: toolArgs.repo as string | undefined,
+                  branch: toolArgs.branch as string | undefined,
+                  guidance: toolArgs.guidance as string | undefined,
+                },
+                userId
               )
             )
 
