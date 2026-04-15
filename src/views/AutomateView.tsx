@@ -8,21 +8,23 @@ import { NewSourcePanel } from '../components/automate/NewSourcePanel'
 import { McpAccessPanel } from '../components/automate/McpAccessPanel'
 import type { AutomationSource } from '../services/automationSources'
 
-type FilterType = 'all' | 'youtube-playlist' | 'meeting' | 'microsoft' | 'api'
+type FilterType = 'all' | 'youtube-playlist' | 'meeting' | 'microsoft' | 'github' | 'api'
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'all', label: 'All Sources' },
   { key: 'api', label: 'API & MCP' },
   { key: 'microsoft', label: 'Microsoft 365' },
   { key: 'meeting', label: 'Meeting Services' },
+  { key: 'github', label: 'GitHub' },
   { key: 'youtube-playlist', label: 'YouTube Playlists' },
 ]
 
-// Ordered groups for "All" view: Microsoft → Meeting → Playlist
-const CATEGORY_ORDER: AutomationSource['category'][] = ['microsoft', 'meeting', 'youtube-playlist']
+// Ordered groups for "All" view: Microsoft → Meeting → GitHub → Playlist
+const CATEGORY_ORDER: AutomationSource['category'][] = ['microsoft', 'meeting', 'github', 'youtube-playlist']
 const CATEGORY_LABELS: Record<AutomationSource['category'], string> = {
   'microsoft': 'Microsoft 365',
   'meeting': 'Meeting Services',
+  'github': 'GitHub',
   'youtube-playlist': 'YouTube Playlists',
 }
 

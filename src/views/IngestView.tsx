@@ -21,10 +21,11 @@ const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'youtube-playlist', label: 'YouTube Playlists' },
 ]
 
-const CATEGORY_ORDER: AutomationSource['category'][] = ['microsoft', 'meeting', 'youtube-playlist']
+const CATEGORY_ORDER: AutomationSource['category'][] = ['microsoft', 'meeting', 'github', 'youtube-playlist']
 const CATEGORY_LABELS: Record<AutomationSource['category'], string> = {
   'microsoft': 'Microsoft 365',
   'meeting': 'Meeting Services',
+  'github': 'GitHub',
   'youtube-playlist': 'YouTube Playlists',
 }
 
