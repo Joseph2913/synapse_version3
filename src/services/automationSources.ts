@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { fetchPlaylistMetadata } from './youtube'
 import { getMicrosoftIntegration, getMicrosoftQueueStats } from './microsoft'
+import { fetchGitHubRepos, fetchGitHubQueueStats } from './githubIntegration'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,7 @@ export const DEFAULT_SOURCE_SETTINGS: SourceSettings = {
 
 export interface AutomationSource {
   id: string
-  category: 'youtube-playlist' | 'meeting' | 'microsoft'
+  category: 'youtube-playlist' | 'meeting' | 'microsoft' | 'github'
   name: string
   handle?: string
   channel?: string
@@ -241,6 +242,38 @@ export async function fetchAutomationSources(): Promise<AutomationSource[]> {
   } catch {
     // microsoft_integrations table may not exist yet
   }
+
+  // GitHub tracked repos
+  try {
+    const ghRepos = await fetchGitHubRepos()
+    const ghQueueStats = await fetchGitHubQueueStats()
+
+    for (const repo of ghRepos) {
+      sources.push({
+        id: repo.id,
+        category: 'github',
+        name: repo.display_name,
+        handle: `${repo.repo_owner}/${repo.repo_name}`,
+        description: `Tracking ${repo.default_branch} branch`,
+        status: repo.is_active
+          ? (repo.status === 'active' ? 'active' : repo.status === 'error' ? 'error' : 'paused')
+          : 'paused',
+        videosIngested: ghQueueStats.completed,
+        lastScan: toRelativeTime(repo.last_scanned_at),
+        mode: repo.extraction_mode,
+        emphasis: repo.anchor_emphasis,
+        linkedAnchors: repo.linked_anchor_ids ?? [],
+        customInstructions: repo.custom_instructions ?? undefined,
+        provider: 'github',
+        queue: {
+          pending: ghQueueStats.pending,
+          processing: ghQueueStats.processing,
+          complete: ghQueueStats.completed,
+          failed: ghQueueStats.failed,
+        },
+      })
+    }
+  } catch {}
 
   return sources
 }
