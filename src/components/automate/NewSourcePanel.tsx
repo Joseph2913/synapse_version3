@@ -4,6 +4,7 @@ import type { AutomationSource, SourceSettings } from '../../services/automation
 import type { ManualUploadType } from '../../views/IngestView'
 import { addYouTubePlaylist, DEFAULT_SOURCE_SETTINGS } from '../../services/automationSources'
 import { connectMicrosoft } from '../../services/microsoft'
+import { addGitHubRepo } from '../../services/githubIntegration'
 import { useSettings } from '../../hooks/useSettings'
 import { useAuth } from '../../hooks/useAuth'
 import { EXTRACTION_MODES, ANCHOR_EMPHASIS_LEVELS } from '../../config/extractionModes'
@@ -15,13 +16,14 @@ interface NewSourcePanelProps {
   onSelectManualUpload: (type: ManualUploadType) => void
 }
 
-type SourceTypeId = 'youtube-playlist' | 'circleback' | 'firefly' | 'microsoft'
+type SourceTypeId = 'youtube-playlist' | 'circleback' | 'firefly' | 'microsoft' | 'github'
 
 const SOURCE_TYPES: { id: SourceTypeId; logo: string; label: string; description: string }[] = [
   { id: 'microsoft', logo: '/logos/microsoft.svg', label: 'Microsoft 365', description: 'Outlook calendar, email & Teams transcripts' },
   { id: 'youtube-playlist', logo: '/logos/youtube.svg', label: 'YouTube Playlist', description: 'Sync all videos in a specific playlist' },
   { id: 'circleback', logo: '/logos/circleback.jpeg', label: 'Circleback', description: 'Auto-ingest meeting transcripts via webhook' },
   { id: 'firefly', logo: '/logos/fireflies.jpeg', label: 'Firefly', description: 'Auto-ingest Firefly.ai meeting notes' },
+  { id: 'github' as SourceTypeId, logo: '/logos/github.svg', label: 'GitHub Repository', description: 'Track code changes and development activity' },
 ]
 
 const COMING_SOON = [
@@ -401,6 +403,13 @@ interface StepConfigureProps {
   onSourceAdded: (source: AutomationSource) => void
 }
 
+const SCAN_INTERVALS = [
+  { id: 'hourly', label: 'Hourly' },
+  { id: '6h', label: 'Every 6h' },
+  { id: '12h', label: 'Every 12h' },
+  { id: 'daily', label: 'Daily' },
+]
+
 function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps) {
   const [url, setUrl] = useState('')
   const [settings, setSettings] = useState<SourceSettings>({ ...DEFAULT_SOURCE_SETTINGS })
@@ -409,8 +418,15 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
   const [copied, setCopied] = useState(false)
   const { user } = useAuth()
 
+  // GitHub-specific state
+  const [ghRepoUrl, setGhRepoUrl] = useState('')
+  const [ghDisplayName, setGhDisplayName] = useState('')
+  const [ghBranch, setGhBranch] = useState('main')
+  const [ghScanInterval, setGhScanInterval] = useState('daily')
+
   const isMeeting = sourceType === 'circleback' || sourceType === 'firefly'
   const isMicrosoft = sourceType === 'microsoft'
+  const isGitHub = sourceType === 'github'
   const webhookUrl = isMeeting && user
     ? `${window.location.origin}/api/meetings/webhook?uid=${user.id}`
     : ''
@@ -462,13 +478,53 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
     }
   }
 
+  const handleConnectGitHub = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const repo = await addGitHubRepo(
+        ghRepoUrl,
+        ghDisplayName,
+        ghBranch,
+        ghScanInterval,
+        {
+          extraction_mode: settings.mode,
+          anchor_emphasis: settings.emphasis,
+          linked_anchor_ids: settings.linkedAnchorIds,
+          custom_instructions: settings.customInstructions ?? null,
+        }
+      )
+      onSourceAdded({
+        id: repo.id,
+        category: 'github',
+        name: repo.display_name,
+        handle: `${repo.repo_owner}/${repo.repo_name}`,
+        description: `Tracking ${repo.default_branch} branch`,
+        status: 'active',
+        lastScan: 'Never',
+        mode: repo.extraction_mode,
+        emphasis: repo.anchor_emphasis,
+        linkedAnchors: repo.linked_anchor_ids ?? [],
+        customInstructions: repo.custom_instructions ?? undefined,
+        provider: 'github',
+        queue: { pending: 0, processing: 0, complete: 0, failed: 0 },
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add repository')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const connectLabel = isMicrosoft
     ? loading ? 'Redirecting to Microsoft…' : 'Connect with Microsoft'
     : isMeeting
       ? 'Done — Webhook Configured'
-      : loading
-        ? 'Connecting…'
-        : `Connect ${sourceInfo.label}`
+      : isGitHub
+        ? loading ? 'Connecting…' : 'Connect Repository'
+        : loading
+          ? 'Connecting…'
+          : `Connect ${sourceInfo.label}`
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)', animation: 'slideInRight 0.2s ease' }}>
@@ -502,7 +558,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
         </div>
 
         {/* ── YouTube URL input ── */}
-        {!isMeeting && !isMicrosoft && (
+        {!isMeeting && !isMicrosoft && !isGitHub && (
           <div style={{ marginBottom: 24 }}>
             <SL>Playlist URL</SL>
             <input
@@ -516,6 +572,70 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
             />
             {error && (
               <p className="font-body" style={{ fontSize: 11, color: '#ef4444', marginBottom: 0 }}>{error}</p>
+            )}
+          </div>
+        )}
+
+        {/* ── GitHub Repository form ── */}
+        {isGitHub && (
+          <div style={{ marginBottom: 24 }}>
+            <SL>Repository URL</SL>
+            <input
+              type="text"
+              value={ghRepoUrl}
+              onChange={e => { setGhRepoUrl(e.target.value); setError(null) }}
+              placeholder="https://github.com/owner/repo"
+              style={{ ...INPUT_STYLE, marginBottom: 12 }}
+              {...FOCUS_HANDLERS}
+            />
+            <SL>Display Name</SL>
+            <input
+              type="text"
+              value={ghDisplayName}
+              onChange={e => setGhDisplayName(e.target.value)}
+              placeholder="e.g. My Project"
+              style={{ ...INPUT_STYLE, marginBottom: 12 }}
+              {...FOCUS_HANDLERS}
+            />
+            <SL>Branch</SL>
+            <input
+              type="text"
+              value={ghBranch}
+              onChange={e => setGhBranch(e.target.value)}
+              placeholder="main"
+              style={{ ...INPUT_STYLE, marginBottom: 12 }}
+              {...FOCUS_HANDLERS}
+            />
+            <SL>Scan Frequency</SL>
+            <div style={{ display: 'flex', gap: 5, marginBottom: error ? 12 : 0 }}>
+              {SCAN_INTERVALS.map(interval => {
+                const active = ghScanInterval === interval.id
+                return (
+                  <button
+                    key={interval.id}
+                    type="button"
+                    onClick={() => setGhScanInterval(interval.id)}
+                    className="font-body font-semibold"
+                    style={{
+                      flex: 1,
+                      padding: '7px 8px',
+                      borderRadius: 7,
+                      border: active ? '1.5px solid rgba(214,58,0,0.3)' : '1px solid var(--border-subtle)',
+                      background: active ? 'var(--color-accent-50)' : 'transparent',
+                      color: active ? 'var(--color-accent-500)' : 'var(--color-text-secondary)',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      textAlign: 'center',
+                    }}
+                  >
+                    {interval.label}
+                  </button>
+                )
+              })}
+            </div>
+            {error && (
+              <p className="font-body" style={{ fontSize: 11, color: '#ef4444', marginTop: 6, marginBottom: 0 }}>{error}</p>
             )}
           </div>
         )}
@@ -596,7 +716,7 @@ function StepConfigure({ sourceType, onBack, onSourceAdded }: StepConfigureProps
         {/* ── Submit ── */}
         <button
           type="button"
-          onClick={() => void handleConnect()}
+          onClick={() => void (isGitHub ? handleConnectGitHub() : handleConnect())}
           disabled={loading}
           className="font-body font-semibold"
           style={{
