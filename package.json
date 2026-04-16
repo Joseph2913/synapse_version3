@@ -23,6 +23,7 @@
     "@remotion/media": "4.0.446",
     "@remotion/player": "^4.0.446",
     "@supabase/supabase-js": "^2.47.0",
+    "@vercel/functions": "^3.4.3",
     "lucide-react": "^0.460.0",
     "mammoth": "^1.11.0",
     "pdfjs-dist": "^3.11.174",
