@@ -367,6 +367,9 @@ interface SkillDetailPanelProps {
   onArchive: (id: string) => Promise<void>
   onReactivate: (id: string) => Promise<void>
   onUpdateContent: (id: string, content: string) => Promise<void>
+  onUpdateFromSource?: (skillId: string, sourceId: string) => Promise<void>
+  availableSources?: KnowledgeSkillSource[]
+  onSearchSources?: (query: string) => Promise<KnowledgeSkillSource[]>
 }
 
 export function SkillDetailPanel({
@@ -377,14 +380,21 @@ export function SkillDetailPanel({
   onArchive,
   onReactivate,
   onUpdateContent,
+  onUpdateFromSource: _onUpdateFromSource,
+  availableSources: _availableSources,
+  onSearchSources: _onSearchSources,
 }: SkillDetailPanelProps) {
+  // Suppress unused warnings for source picker props (UI not yet wired)
+  void _onUpdateFromSource; void _availableSources; void _onSearchSources
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState('')
   const [copied, setCopied] = useState<'skill' | 'name' | 'content' | null>(null)
   const [viewMode, setViewMode] = useState<'sections' | 'markdown'>('sections')
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const sourcePickerRef = useRef<HTMLDivElement>(null)
 
   const domainColor = getDomainColor(skill.domain)
   const confColor = getConfidenceColor(skill.confidence)
@@ -452,6 +462,22 @@ export function SkillDetailPanel({
     setCopied('content')
     setTimeout(() => setCopied(null), 2000)
   }, [skill.content])
+
+  useEffect(() => {
+    if (!sourcePickerOpen) return
+    const handleClick = (e: MouseEvent) => {
+      if (sourcePickerRef.current && !sourcePickerRef.current.contains(e.target as Node)) {
+        setSourcePickerOpen(false)
+      }
+    }
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setSourcePickerOpen(false) }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [sourcePickerOpen])
 
   // Signal scores
   const signals: Array<{ label: string; value: number | null }> = [
