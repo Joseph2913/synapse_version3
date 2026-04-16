@@ -5,7 +5,7 @@ import type { InlineQueryToolbarProps } from './InlineQueryToolbar'
 import { QUERY_MINDSETS, MODEL_TIERS } from '../../config/queryMindsets'
 import { TOOL_MODES } from '../../config/toolModes'
 
-export type AskMode = 'standard' | 'council'
+export type AskMode = 'standard' | 'council' | 'agent'
 
 interface ChatInputProps extends InlineQueryToolbarProps {
   onSend: (text: string) => void
