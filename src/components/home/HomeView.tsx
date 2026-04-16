@@ -375,24 +375,14 @@ function AgentRow({ agent, isLast }: { agent: AgentSummary; isLast: boolean }) {
             >
               {health.label}
             </span>
+            <span className="flex items-center shrink-0 font-body" style={{ gap: 8, marginLeft: 'auto', fontSize: 10, color: 'var(--color-text-placeholder)' }}>
+              <span>{agent.source_count} sources</span>
+              {agent.insights > 0 && <span style={{ color: '#b45309' }}>{agent.insights} insights</span>}
+              {agent.signalsOut > 0 && <span style={{ color: 'var(--color-accent-500)' }}>{agent.signalsOut} signals</span>}
+            </span>
           </div>
           <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
             {agent.description ?? ''}
-          </div>
-          <div className="flex items-center" style={{ gap: 10, marginTop: 4 }}>
-            <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-placeholder)' }}>
-              {agent.source_count} sources
-            </span>
-            {agent.insights > 0 && (
-              <span className="font-body" style={{ fontSize: 10, color: '#b45309' }}>
-                {agent.insights} insights
-              </span>
-            )}
-            {agent.signalsOut > 0 && (
-              <span className="font-body" style={{ fontSize: 10, color: 'var(--color-accent-500)' }}>
-                {agent.signalsOut} signals
-              </span>
-            )}
           </div>
         </div>
       </button>
@@ -558,14 +548,14 @@ export function HomeView() {
         {/* ── HERO CARD ── */}
         <div className="shrink-0" style={{ padding: '20px 36px 0 36px' }}>
           <div
-            className="bg-bg-card border border-border-subtle animate-[fadeUp_0.4s_ease]"
-            style={{ borderRadius: 14, animationFillMode: 'both' }}
+            className="bg-bg-card border border-border-subtle animate-[fadeUp_0.4s_var(--ease-out-expo)]"
+            style={{ borderRadius: 14, animationFillMode: 'both', boxShadow: 'var(--shadow-md)' }}
           >
             {/* Row 1: Greeting + Stats */}
             <div className="flex items-center justify-between" style={{ padding: '20px 28px', gap: 24 }}>
               <div className="shrink-0">
                 <p className="font-body text-text-secondary" style={{ fontSize: 12, marginBottom: 2 }}>{getGreeting()}</p>
-                <h1 className="font-display text-text-primary" style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.15 }}>
+                <h1 className="font-display text-text-primary" style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.035em', lineHeight: 1.1 }}>
                   {firstName ? `${firstName}.` : 'Welcome.'}
                 </h1>
               </div>
@@ -573,19 +563,19 @@ export function HomeView() {
               {stats && !dashboard.loading.stats ? (
                 <div className="flex items-center" style={{ gap: 6 }}>
                   {[
-                    { icon: <Database size={12} style={{ color: 'var(--color-text-secondary)' }} />, value: stats.totalSources, label: 'Sources' },
-                    { icon: <GitBranch size={12} style={{ color: 'var(--color-text-secondary)' }} />, value: stats.totalNodes, label: 'Nodes' },
-                    { icon: <Anchor size={12} style={{ color: 'var(--color-text-secondary)' }} />, value: stats.activeAnchors, label: 'Anchors' },
-                    { icon: <Zap size={12} style={{ color: 'var(--color-text-secondary)' }} />, value: stats.activeSkills, label: 'Skills' },
+                    { icon: <Database size={12} style={{ color: 'var(--color-accent-500)' }} />, value: stats.totalSources, label: 'Sources' },
+                    { icon: <GitBranch size={12} style={{ color: 'var(--color-accent-500)' }} />, value: stats.totalNodes, label: 'Nodes' },
+                    { icon: <Anchor size={12} style={{ color: 'var(--color-accent-500)' }} />, value: stats.activeAnchors, label: 'Anchors' },
+                    { icon: <Zap size={12} style={{ color: 'var(--color-accent-500)' }} />, value: stats.activeSkills, label: 'Skills' },
                   ].map((stat, i) => (
                     <div key={stat.label} className="flex items-center">
                       {i > 0 && <div style={{ width: 1, height: 22, background: 'var(--border-subtle)', margin: '0 10px' }} />}
                       <div className="flex items-center" style={{ gap: 7 }}>
-                        <div className="shrink-0 flex items-center justify-center" style={{ width: 26, height: 26, borderRadius: 6, background: 'var(--color-bg-inset)' }}>
+                        <div className="shrink-0 flex items-center justify-center" style={{ width: 26, height: 26, borderRadius: 6, background: 'var(--color-accent-50)' }}>
                           {stat.icon}
                         </div>
                         <div>
-                          <div className="font-display text-text-primary" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1 }}>
+                          <div className="font-display text-text-primary" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
                             {stat.value.toLocaleString()}
                           </div>
                           <div className="font-body text-text-secondary" style={{ fontSize: 10 }}>{stat.label}</div>
