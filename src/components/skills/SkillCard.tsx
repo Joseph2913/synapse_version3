@@ -104,43 +104,44 @@ export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps)
     <div
       onClick={onClick}
       style={{
-        background: isSelected ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
+        background: isSelected
+          ? 'var(--color-accent-50)'
+          : `linear-gradient(135deg, ${domainColor}08 0%, ${domainColor}03 100%)`,
         border: isSelected
           ? '1px solid rgba(214,58,0,0.3)'
           : isDraft
-            ? '1px dashed var(--border-subtle)'
+            ? `1px dashed ${domainColor}30`
             : '1px solid var(--border-subtle)',
         borderRadius: 12,
         padding: '16px 18px',
         cursor: 'pointer',
         opacity: isArchived ? 0.72 : isDraft ? 0.92 : 1,
-        transition: 'all 0.15s ease',
-        animation: `fadeUp 0.4s ease ${index * 0.05}s both`,
+        transition: 'all 0.2s var(--ease-out-expo)',
+        animation: `fadeUp 0.4s var(--ease-out-expo) ${index * 0.05}s both`,
         position: 'relative',
         overflow: 'hidden',
-        borderLeft: isDraft ? `3px dashed ${domainColor}` : undefined,
+        boxShadow: 'var(--shadow-sm)',
       }}
       onMouseEnter={e => {
         if (!isSelected) {
           e.currentTarget.style.transform = 'translateY(-1px)'
-          e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)'
+          e.currentTarget.style.boxShadow = 'var(--shadow-md)'
+          e.currentTarget.style.borderColor = `${domainColor}25`
         }
       }}
       onMouseLeave={e => {
         e.currentTarget.style.transform = 'translateY(0)'
-        e.currentTarget.style.boxShadow = 'none'
+        e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
+        e.currentTarget.style.borderColor = isDraft ? `${domainColor}30` : 'var(--border-subtle)'
       }}
     >
-      {!isDraft && (
-        <div style={{
-          position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
-          background: domainColor, borderRadius: '12px 0 0 12px',
-        }} />
-      )}
 
       <div className="flex items-start justify-between gap-3" style={{ minWidth: 0, marginBottom: 8 }}>
         <div className="flex items-center gap-2 min-w-0">
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: domainColor, flexShrink: 0 }} />
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', background: domainColor, flexShrink: 0,
+            boxShadow: `0 0 0 3px ${domainColor}15`,
+          }} />
           <span
             className="font-display"
             style={{
