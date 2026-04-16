@@ -287,10 +287,10 @@ async function phase1Backfill(
 
   if (!sources || sources.length === 0) return;
 
-  // Filter to sources not already evaluated for skills
+  // Filter to sources not yet evaluated, or marked for retry (chunks weren't ready)
   const candidateSources = sources.filter(s => {
     const meta = (s.metadata ?? {}) as Record<string, unknown>;
-    return !meta.skill_backfill_status;
+    return !meta.skill_backfill_status || meta.skill_backfill_status === 'pending_retry';
   });
 
   // Check which sources already appear in any skill's source_ids

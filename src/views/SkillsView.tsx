@@ -297,6 +297,8 @@ export function SkillsView() {
     archiveSkill,
     updateSkillContent,
     updateSkillStatus,
+    updateSkillFromSource,
+    searchSources,
     refresh,
   } = useKnowledgeSkills()
 
@@ -461,6 +463,8 @@ export function SkillsView() {
       onArchive={archiveSkill}
       onReactivate={handleReactivate}
       onUpdateContent={updateSkillContent}
+      onUpdateFromSource={updateSkillFromSource}
+      onSearchSources={searchSources}
     />
   ) : (
     <SkillOverviewPanel

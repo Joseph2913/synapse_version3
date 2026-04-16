@@ -36,6 +36,8 @@ export interface UseKnowledgeSkillsReturn {
   archiveSkill: (id: string) => Promise<void>
   updateSkillContent: (id: string, content: string) => Promise<void>
   updateSkillStatus: (id: string, status: KnowledgeSkillStatus) => Promise<void>
+  updateSkillFromSource: (skillId: string, sourceId: string) => Promise<void>
+  searchSources: (query: string) => Promise<KnowledgeSkillSource[]>
   refresh: () => Promise<void>
 }
 
@@ -205,6 +207,58 @@ export function useKnowledgeSkills(): UseKnowledgeSkillsReturn {
     setSkills(prev => prev.map(s => s.id === id ? { ...s, updated_at: new Date().toISOString() } : s))
   }, [selectedSkill])
 
+  // ── Update skill from source (calls serverless endpoint) ───────────────────
+
+  const updateSkillFromSource = useCallback(async (skillId: string, sourceId: string) => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token) {
+      console.error('[useKnowledgeSkills] No session for updateSkillFromSource')
+      return
+    }
+
+    const response = await fetch('/api/skills/update-from-source', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ skillId, sourceId }),
+    })
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Update failed' })) as { error?: string }
+      throw new Error(body.error ?? 'Failed to update skill from source')
+    }
+
+    // Refresh the selected skill to show updated content and sources
+    if (selectedSkill?.id === skillId) {
+      await selectSkill(skillId)
+    }
+    // Refresh the list to update source_count, updated_at
+    await fetchSkills()
+  }, [selectedSkill, selectSkill, fetchSkills])
+
+  // ── Search sources for the source picker ─────────────────────────────────
+
+  const searchSources = useCallback(async (query: string): Promise<KnowledgeSkillSource[]> => {
+    if (!user) return []
+
+    const { data, error: err } = await supabase
+      .from('knowledge_sources')
+      .select('id, title, source_type, created_at')
+      .eq('user_id', user.id)
+      .ilike('title', `%${query}%`)
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (err) {
+      console.error('[useKnowledgeSkills] searchSources error:', err.message)
+      return []
+    }
+
+    return (data ?? []) as KnowledgeSkillSource[]
+  }, [user])
+
   return {
     skills,
     loading,
@@ -218,6 +272,8 @@ export function useKnowledgeSkills(): UseKnowledgeSkillsReturn {
     archiveSkill,
     updateSkillContent,
     updateSkillStatus,
+    updateSkillFromSource,
+    searchSources,
     refresh: fetchSkills,
   }
 }

@@ -742,6 +742,8 @@ export function SignalsView() {
     archiveSkill,
     updateSkillContent,
     updateSkillStatus,
+    updateSkillFromSource,
+    searchSources,
     refresh,
   } = useKnowledgeSkills()
 
@@ -1278,6 +1280,8 @@ export function SignalsView() {
           onArchive={archiveSkill}
           onReactivate={handleReactivateSkill}
           onUpdateContent={updateSkillContent}
+          onUpdateFromSource={updateSkillFromSource}
+          onSearchSources={searchSources}
         />
       )
     } else {

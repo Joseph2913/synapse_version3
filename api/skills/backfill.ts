@@ -442,9 +442,13 @@ async function markSource(
   skillName: string | null,
   existingMetadata: Record<string, unknown> | null
 ): Promise<void> {
+  // If chunks weren't ready yet, mark as pending_retry so the next cron pass
+  // re-evaluates this source instead of permanently skipping it.
+  const isRetryable = result === 'skipped_no_chunks';
+
   const updatedMetadata = {
     ...(existingMetadata ?? {}),
-    skill_backfill_status: 'processed',
+    skill_backfill_status: isRetryable ? 'pending_retry' : 'processed',
     skill_backfill_at: new Date().toISOString(),
     skill_backfill_result: result,
     skill_backfill_skill_name: skillName,
@@ -498,7 +502,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let sourceQuery = supabase
     .from('knowledge_sources')
     .select('id, user_id, title, content, source_type, source_url, metadata, created_at')
-    .is('metadata->skill_backfill_status', null)
+    .or('metadata->skill_backfill_status.is.null,metadata->skill_backfill_status.eq.pending_retry')
     .not('content', 'is', null)
     .order('created_at', { ascending: false })
     .range(page * batchSize * 3, (page + 1) * batchSize * 3 - 1);

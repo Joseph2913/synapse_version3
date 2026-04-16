@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Copy, Check, Pencil, Archive, Sparkles, RotateCcw, ChevronDown, ChevronRight, FileText, LayoutList } from 'lucide-react'
+import { MoreHorizontal, Copy, Check, Pencil, Archive, Sparkles, RotateCcw, ChevronDown, ChevronRight, FileText, LayoutList, Plus, Loader2, Search, X } from 'lucide-react'
 import { SourceIcon } from '../shared/SourceIcon'
 import type { KnowledgeSkillDetail, KnowledgeSkillSource } from '../../types/skills'
 
@@ -380,21 +380,24 @@ export function SkillDetailPanel({
   onArchive,
   onReactivate,
   onUpdateContent,
-  onUpdateFromSource: _onUpdateFromSource,
-  availableSources: _availableSources,
-  onSearchSources: _onSearchSources,
+  onUpdateFromSource,
+  availableSources,
+  onSearchSources,
 }: SkillDetailPanelProps) {
-  // Suppress unused warnings for source picker props (UI not yet wired)
-  void _onUpdateFromSource; void _availableSources; void _onSearchSources
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState('')
   const [copied, setCopied] = useState<'skill' | 'name' | 'content' | null>(null)
   const [viewMode, setViewMode] = useState<'sections' | 'markdown'>('sections')
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
+  const [sourceSearchQuery, setSourceSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<KnowledgeSkillSource[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [updatingFromSource, setUpdatingFromSource] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const sourcePickerRef = useRef<HTMLDivElement>(null)
+  const sourceSearchRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const domainColor = getDomainColor(skill.domain)
   const confColor = getConfidenceColor(skill.confidence)
@@ -462,6 +465,55 @@ export function SkillDetailPanel({
     setCopied('content')
     setTimeout(() => setCopied(null), 2000)
   }, [skill.content])
+
+  // ── Source picker handlers ────────────────────────────────────────────────
+
+  const handleOpenSourcePicker = useCallback(() => {
+    setSourcePickerOpen(true)
+    setSourceSearchQuery('')
+    setSearchResults([])
+    setTimeout(() => sourceSearchRef.current?.focus(), 50)
+  }, [])
+
+  const handleSourceSearch = useCallback(async (query: string) => {
+    setSourceSearchQuery(query)
+    if (!onSearchSources) return
+    if (query.length < 2) {
+      setSearchResults([])
+      return
+    }
+    setSearchLoading(true)
+    try {
+      const results = await onSearchSources(query)
+      setSearchResults(results.filter(s => !skill.source_ids.includes(s.id)))
+    } catch {
+      setSearchResults([])
+    } finally {
+      setSearchLoading(false)
+    }
+  }, [onSearchSources, skill.source_ids])
+
+  const handleSelectSource = useCallback(async (sourceId: string) => {
+    if (!onUpdateFromSource) return
+    setUpdatingFromSource(sourceId)
+    try {
+      await onUpdateFromSource(skill.id, sourceId)
+      setSourcePickerOpen(false)
+      setSourceSearchQuery('')
+      setSearchResults([])
+    } catch {
+      // Error handling done by parent
+    } finally {
+      setUpdatingFromSource(null)
+    }
+  }, [onUpdateFromSource, skill.id])
+
+  const filteredAvailableSources = useMemo(() => {
+    if (!availableSources) return []
+    return availableSources.filter(s => !skill.source_ids.includes(s.id))
+  }, [availableSources, skill.source_ids])
+
+  const sourcePickerList = sourceSearchQuery.length >= 2 ? searchResults : filteredAvailableSources
 
   useEffect(() => {
     if (!sourcePickerOpen) return
@@ -642,12 +694,115 @@ export function SkillDetailPanel({
           marginBottom: 16,
         }}
       >
-        <h3
-          className="font-display"
-          style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', margin: '0 0 8px' }}
-        >
-          Sources ({sources.length})
-        </h3>
+        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+          <h3
+            className="font-display"
+            style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', margin: 0 }}
+          >
+            Sources ({sources.length})
+          </h3>
+          {onUpdateFromSource && (
+            <div ref={sourcePickerRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={sourcePickerOpen ? () => setSourcePickerOpen(false) : handleOpenSourcePicker}
+                className="font-body font-semibold"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '3px 10px', borderRadius: 20, fontSize: 11,
+                  border: sourcePickerOpen ? '1px solid rgba(214,58,0,0.15)' : '1px solid var(--border-subtle)',
+                  background: sourcePickerOpen ? 'var(--color-accent-50)' : 'transparent',
+                  color: sourcePickerOpen ? 'var(--color-accent-500)' : 'var(--color-text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                <Plus size={11} />
+                Add Source
+              </button>
+              {sourcePickerOpen && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: 4,
+                  width: 320, maxHeight: 340,
+                  background: 'var(--color-bg-card)',
+                  border: '1px solid var(--border-strong, var(--border-subtle))',
+                  borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
+                  zIndex: 50, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+                }}>
+                  <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <div style={{ position: 'relative' }}>
+                      <Search size={13} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-secondary)' }} />
+                      <input
+                        ref={sourceSearchRef}
+                        type="text"
+                        value={sourceSearchQuery}
+                        onChange={e => handleSourceSearch(e.target.value)}
+                        placeholder="Search sources..."
+                        className="font-body"
+                        style={{
+                          width: '100%', padding: '5px 28px 5px 28px', borderRadius: 20,
+                          border: '1px solid var(--border-subtle)', background: 'var(--color-bg-inset)',
+                          fontSize: 12, color: 'var(--color-text-primary)', outline: 'none',
+                        }}
+                      />
+                      {sourceSearchQuery && (
+                        <button type="button" onClick={() => { setSourceSearchQuery(''); setSearchResults([]) }}
+                          style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                          <X size={12} style={{ color: 'var(--color-text-secondary)' }} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ overflowY: 'auto', flex: 1, padding: 4 }}>
+                    {searchLoading ? (
+                      <div className="flex items-center justify-center" style={{ padding: 16 }}>
+                        <Loader2 size={16} className="animate-spin" style={{ color: 'var(--color-text-secondary)' }} />
+                      </div>
+                    ) : sourcePickerList.length === 0 ? (
+                      <p className="font-body" style={{ fontSize: 12, color: 'var(--color-text-secondary)', textAlign: 'center', padding: '16px 8px', margin: 0 }}>
+                        {sourceSearchQuery.length >= 2 ? 'No matching sources found.' : 'Type to search your sources.'}
+                      </p>
+                    ) : (
+                      sourcePickerList.map(src => (
+                        <button key={src.id} type="button" disabled={updatingFromSource !== null}
+                          onClick={() => handleSelectSource(src.id)}
+                          className="flex items-center gap-2"
+                          style={{
+                            width: '100%', padding: '6px 8px', borderRadius: 6, border: 'none',
+                            background: updatingFromSource === src.id ? 'var(--color-accent-50)' : 'transparent',
+                            cursor: updatingFromSource !== null ? 'wait' : 'pointer',
+                            textAlign: 'left', fontSize: 12, color: 'var(--color-text-primary)',
+                            opacity: updatingFromSource !== null && updatingFromSource !== src.id ? 0.5 : 1,
+                          }}
+                          onMouseOver={e => { if (!updatingFromSource) (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
+                          onMouseOut={e => { if (updatingFromSource !== src.id) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+                        >
+                          {updatingFromSource === src.id ? (
+                            <Loader2 size={16} className="animate-spin" style={{ color: 'var(--color-accent-500)', flexShrink: 0 }} />
+                          ) : (
+                            <SourceIcon sourceType={src.source_type} size={16} />
+                          )}
+                          <span className="font-body" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {src.title}
+                          </span>
+                          <span className="font-body" style={{ flexShrink: 0, fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                            {formatDate(src.created_at)}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  {updatingFromSource && (
+                    <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border-subtle)', background: 'var(--color-accent-50)' }}>
+                      <p className="font-body" style={{ fontSize: 11, color: 'var(--color-accent-500)', margin: 0, textAlign: 'center' }}>
+                        Updating skill from source...
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         {sources.length === 0 ? (
           <p className="font-body" style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: 0 }}>
             {skill.source_ids.length > 0
