@@ -8,11 +8,11 @@ const GRID_SPACING = 60
 // ─── Edge colors by kind ─────────────────────────────────────────────────────
 
 const EDGE_COLORS = {
-  anchor:  { default: 'rgba(0,0,0,0.04)', hover: 'rgba(214,58,0,0.2)' },
-  source:  { default: 'rgba(0,0,0,0.12)', hover: 'rgba(0,0,0,0.35)' },
-  intra:   { default: 'rgba(0,0,0,0.06)', hover: 'rgba(0,0,0,0.18)' },
-  cross:   { default: 'rgba(214,58,0,0.08)', hover: 'rgba(214,58,0,0.3)' },
-  ghost:   { default: 'rgba(214,58,0,0.06)', hover: 'rgba(214,58,0,0.3)' },
+  anchor:  { default: 'rgba(180,89,0,0.05)', hover: 'rgba(214,58,0,0.25)' },
+  source:  { default: 'rgba(0,0,0,0.10)', hover: 'rgba(0,0,0,0.30)' },
+  intra:   { default: 'rgba(0,0,0,0.05)', hover: 'rgba(0,0,0,0.16)' },
+  cross:   { default: 'rgba(214,58,0,0.06)', hover: 'rgba(214,58,0,0.25)' },
+  ghost:   { default: 'rgba(214,58,0,0.04)', hover: 'rgba(214,58,0,0.20)' },
 } as const
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -131,6 +131,16 @@ function drawAnchorNode(
 ) {
   const r = node.radius
 
+  // Ambient glow rings
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}0A`
+  ctx.fill()
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 3, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}0F`
+  ctx.fill()
+
   // Solid filled circle
   const fillAlpha = isHovered ? 0.28 : 0.18
   const strokeAlpha = isHovered ? 0.6 : 0.35
@@ -143,6 +153,15 @@ function drawAnchorNode(
   ctx.strokeStyle = hexToRgba(node.color, isSelected ? 0.7 : strokeAlpha)
   ctx.lineWidth = strokeW
   ctx.stroke()
+
+  // Hover outer ring
+  if (isHovered) {
+    ctx.beginPath()
+    ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2)
+    ctx.strokeStyle = `${node.color}15`
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+  }
 
   // Entity count centered in node
   const countSize = Math.max(11, r * 0.38)
@@ -175,6 +194,16 @@ function drawGravityAnchorNode(
 ) {
   const r = node.radius
 
+  // Ambient glow rings
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}0A`
+  ctx.fill()
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 3, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}0F`
+  ctx.fill()
+
   // Subtle glow ring showing gravity field
   ctx.beginPath()
   ctx.arc(node.x, node.y, r + 8, 0, Math.PI * 2)
@@ -191,6 +220,15 @@ function drawGravityAnchorNode(
   ctx.strokeStyle = hexToRgba(node.color, strokeAlpha)
   ctx.lineWidth = isSelected ? 2.5 : 2
   ctx.stroke()
+
+  // Hover outer ring
+  if (isHovered) {
+    ctx.beginPath()
+    ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2)
+    ctx.strokeStyle = `${node.color}15`
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+  }
 
   // Connection count centered in node
   const countSize = Math.max(9, r * 0.45)
