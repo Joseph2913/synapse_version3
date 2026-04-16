@@ -337,7 +337,7 @@ async function handleSendToSynapse(
       branch: args.branch ?? null,
       guidance: args.guidance ?? null,
     }),
-    signal: AbortSignal.timeout(90000),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!response.ok) {
@@ -348,15 +348,14 @@ async function handleSendToSynapse(
   const result = await response.json() as {
     source_id: string;
     title: string;
-    entity_count: number;
-    edge_count: number;
     status: string;
+    message: string;
   };
 
   return {
     content: [{
       type: 'text',
-      text: `Session saved to Synapse.\n\nSource ID: ${result.source_id}\nTitle: ${result.title}\nEntities extracted: ${result.entity_count}\nRelationships created: ${result.edge_count}\nStatus: ${result.status}\n\nThe session is now in your knowledge graph and searchable via ask_synapse.`,
+      text: `Session sent to Synapse.\n\nSource ID: ${result.source_id}\nTitle: ${result.title}\nStatus: ${result.status}\n\nThe extraction pipeline is running in the background. Entities, relationships, and embeddings will be available in your knowledge graph shortly. You can check the source status via search_sources.`,
     }],
   };
 }
