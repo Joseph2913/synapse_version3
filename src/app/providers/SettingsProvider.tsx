@@ -6,6 +6,8 @@ import {
   updateExtractionSettings as updateExtractionSettingsService,
   promoteToAnchor as promoteToAnchorService,
   demoteAnchor as demoteAnchorService,
+  completeOnboarding as completeOnboardingService,
+  resetOnboarding as resetOnboardingService,
   supabase,
 } from '../../services/supabase'
 import type { KnowledgeNode, UserProfile, ExtractionSettings } from '../../types/database'
@@ -28,6 +30,8 @@ export interface SettingsContextValue {
   updateExtractionSettings: (updates: Partial<{ default_mode: string; default_anchor_emphasis: string }>) => Promise<{ error: Error | null }>
   promoteToAnchor: (nodeId: string) => Promise<{ error: Error | null }>
   demoteAnchor: (nodeId: string) => Promise<{ error: Error | null }>
+  completeOnboarding: () => Promise<{ error: Error | null }>
+  resetOnboarding: () => Promise<{ error: Error | null }>
 
   // Refresh
   refreshAnchors: () => Promise<void>
@@ -96,6 +100,26 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return result
   }, [refreshAnchors])
 
+  const completeOnboardingFn = useCallback(async () => {
+    const result = await completeOnboardingService()
+    if (!result.error) {
+      setProfile(prev =>
+        prev ? { ...prev, onboarding_complete: true } as UserProfile : null
+      )
+    }
+    return result
+  }, [])
+
+  const resetOnboardingFn = useCallback(async () => {
+    const result = await resetOnboardingService()
+    if (!result.error) {
+      setProfile(prev =>
+        prev ? { ...prev, onboarding_complete: false } as UserProfile : null
+      )
+    }
+    return result
+  }, [])
+
   useEffect(() => {
     Promise.all([
       refreshProfile(),
@@ -114,6 +138,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       updateExtractionSettings: updateExtractionSettingsFn,
       promoteToAnchor: promoteToAnchorFn,
       demoteAnchor: demoteAnchorFn,
+      completeOnboarding: completeOnboardingFn,
+      resetOnboarding: resetOnboardingFn,
       refreshAnchors,
       refreshProfile,
       refreshExtractionSettings,
