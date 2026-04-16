@@ -48,6 +48,8 @@ export default function App() {
   return (
     <AuthProvider>
       <AuthGate>
+        <div className="ambient-gradient" />
+        <div className="noise-overlay" />
         <SettingsProvider>
           <GraphProvider>
             <ProcessingProvider>
