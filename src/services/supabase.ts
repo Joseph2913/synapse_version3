@@ -48,6 +48,7 @@ export async function fetchOrCreateProfile(): Promise<UserProfile | null> {
         professional_context: {},
         personal_interests: {},
         processing_preferences: {},
+        onboarding_complete: false,
       })
       .select()
       .single()
@@ -75,6 +76,30 @@ export async function updateProfile(
   const { error } = await supabase
     .from('user_profiles')
     .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('user_id', user.id)
+
+  return { error: error ? new Error(error.message) : null }
+}
+
+export async function completeOnboarding(): Promise<{ error: Error | null }> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: new Error('Not authenticated') }
+
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ onboarding_complete: true, updated_at: new Date().toISOString() })
+    .eq('user_id', user.id)
+
+  return { error: error ? new Error(error.message) : null }
+}
+
+export async function resetOnboarding(): Promise<{ error: Error | null }> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: new Error('Not authenticated') }
+
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ onboarding_complete: false, updated_at: new Date().toISOString() })
     .eq('user_id', user.id)
 
   return { error: error ? new Error(error.message) : null }

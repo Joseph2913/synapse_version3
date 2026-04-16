@@ -80,6 +80,7 @@ export interface UserProfile {
   professional_context: { role?: string; industry?: string; current_projects?: string }
   personal_interests: { topics?: string; learning_goals?: string }
   processing_preferences: { insight_depth?: string; relationship_focus?: string }
+  onboarding_complete: boolean
   created_at: string
   updated_at: string
 }
