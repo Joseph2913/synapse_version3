@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { waitUntil } from '@vercel/functions';
 
 // Allow up to 120s on Vercel Pro (Gemini extraction + embeddings)
 export const maxDuration = 120;
@@ -223,79 +224,26 @@ function chunkText(text: string, targetTokens: number = 500): string[] {
   return chunks.filter(c => c.length > 50);
 }
 
-// ─── HANDLER ───────────────────────────────────────────────────────────────────
+// ─── BACKGROUND PIPELINE ──────────────────────────────────────────────────────
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-ingest-secret');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  if (!verifyIngestSecret(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+async function runExtractionPipeline(params: {
+  sourceId: string;
+  userId: string;
+  title: string;
+  content: string;
+  guidance?: string;
+  metadata: Record<string, unknown>;
+}): Promise<void> {
+  const { sourceId, userId, title, content, guidance, metadata } = params;
   const startTime = Date.now();
-
-  const {
-    userId,
-    title,
-    content,
-    repo,
-    branch,
-    guidance,
-  } = req.body as {
-    userId: string;
-    title: string;
-    content: string;
-    repo?: string;
-    branch?: string;
-    guidance?: string;
-  };
-
-  if (!userId || !title || !content) {
-    return res.status(400).json({ error: 'Missing required fields: userId, title, content' });
-  }
-
   const supabase = getSupabase();
 
+  const updateStatus = async (status: string, extra?: Record<string, unknown>) => {
+    const meta = { ...metadata, extraction_status: status, ...extra };
+    await supabase.from('knowledge_sources').update({ metadata: meta }).eq('id', sourceId);
+  };
+
   try {
-    // ── STEP 1: SAVE SOURCE ──────────────────────────────────────────────────
-    const metadata: Record<string, unknown> = {
-      ingested_via: 'mcp_session',
-      extraction_status: 'pending',
-      repo: repo ?? null,
-      branch: branch ?? null,
-      guidance: guidance ?? null,
-      session_date: new Date().toISOString(),
-    };
-
-    const { data: sourceData, error: sourceError } = await supabase
-      .from('knowledge_sources')
-      .insert({
-        user_id: userId,
-        title,
-        source_type: 'GitHub',
-        content: content.slice(0, MAX_CONTENT_CHARS),
-        metadata,
-      })
-      .select('id')
-      .single();
-
-    if (sourceError) {
-      throw new Error(`Failed to save source: ${sourceError.message}`);
-    }
-
-    const sourceId = (sourceData as { id: string }).id;
-    console.log(`[ingest/session] Saved source "${title}" (${sourceId}) for user ${userId}`);
-
-    const updateStatus = async (status: string, extra?: Record<string, unknown>) => {
-      const meta = { ...metadata, extraction_status: status, ...extra };
-      await supabase.from('knowledge_sources').update({ metadata: meta }).eq('id', sourceId);
-    };
-
     await updateStatus('processing', { processing_started_at: new Date().toISOString() });
 
     // ── STEP 2: GENERATE SUMMARY ────────────────────────────────────────────
@@ -643,21 +591,103 @@ Return an empty array if no genuine cross-source connections exist.`;
     }
 
     // ── COMPLETE ────────────────────────────────────────────────────────────
-    await updateStatus('completed');
+    await updateStatus('completed', {
+      processing_completed_at: new Date().toISOString(),
+      duration_ms: Date.now() - startTime,
+    });
 
     console.log(`[ingest/session] Complete: ${nodesCreated} nodes, ${edgesCreated} edges (${crossConnectionCount} cross), ${chunks.length} chunks in ${Date.now() - startTime}ms`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[ingest/session] Pipeline error:', err);
+    await updateStatus('error', {
+      error: msg,
+      failed_at: new Date().toISOString(),
+    }).catch(() => { /* best-effort status update */ });
+  }
+}
 
-    return res.status(200).json({
+// ─── HANDLER ───────────────────────────────────────────────────────────────────
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-ingest-secret');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  if (!verifyIngestSecret(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const {
+    userId,
+    title,
+    content,
+    repo,
+    branch,
+    guidance,
+  } = req.body as {
+    userId: string;
+    title: string;
+    content: string;
+    repo?: string;
+    branch?: string;
+    guidance?: string;
+  };
+
+  if (!userId || !title || !content) {
+    return res.status(400).json({ error: 'Missing required fields: userId, title, content' });
+  }
+
+  const supabase = getSupabase();
+
+  try {
+    // ── STEP 1: SAVE SOURCE ──────────────────────────────────────────────────
+    const metadata: Record<string, unknown> = {
+      ingested_via: 'mcp_session',
+      extraction_status: 'accepted',
+      repo: repo ?? null,
+      branch: branch ?? null,
+      guidance: guidance ?? null,
+      session_date: new Date().toISOString(),
+    };
+
+    const { data: sourceData, error: sourceError } = await supabase
+      .from('knowledge_sources')
+      .insert({
+        user_id: userId,
+        title,
+        source_type: 'GitHub',
+        content: content.slice(0, MAX_CONTENT_CHARS),
+        metadata,
+      })
+      .select('id')
+      .single();
+
+    if (sourceError) {
+      throw new Error(`Failed to save source: ${sourceError.message}`);
+    }
+
+    const sourceId = (sourceData as { id: string }).id;
+    console.log(`[ingest/session] Saved source "${title}" (${sourceId}) for user ${userId}, dispatching background pipeline`);
+
+    // Fire extraction pipeline in background via waitUntil
+    waitUntil(runExtractionPipeline({
+      sourceId,
+      userId,
+      title,
+      content: content.slice(0, MAX_CONTENT_CHARS),
+      guidance,
+      metadata,
+    }));
+
+    return res.status(202).json({
       source_id: sourceId,
       title,
-      entity_count: entities.length,
-      nodes_created: nodesCreated,
-      nodes_reused: savedNodeMap.size - nodesCreated,
-      edge_count: edgesCreated,
-      cross_connections: crossConnectionCount,
-      chunk_count: chunks.length,
-      status: 'complete',
-      duration_ms: Date.now() - startTime,
+      status: 'processing',
+      message: 'Source accepted. Extraction pipeline running in background.',
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -665,7 +695,6 @@ Return an empty array if no genuine cross-source connections exist.`;
     return res.status(500).json({
       success: false,
       error: msg,
-      duration_ms: Date.now() - startTime,
     });
   }
 }
