@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, HelpCircle, Zap, ArrowUpRight, Circle, Check, type LucideIcon } from 'lucide-react'
+import { SpotlightCard } from '../components/ui/SpotlightCard'
+import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, HelpCircle, Zap, Circle, Check, type LucideIcon } from 'lucide-react'
 import {
   fetchDomainAgents,
   fetchAgentQuestions,
@@ -379,15 +380,16 @@ function GapBadge({ label }: { label: string }) {
 
 // ── Advisor Card (List View) ────────────────────────────────────────────────
 
-function AdvisorCard({ advisor, index, onClick }: { advisor: Advisor; index: number; onClick: () => void }) {
+function AdvisorCard({ advisor, onClick }: { advisor: Advisor; onClick: () => void }) {
   const [hovered, setHovered] = useState(false)
 
   return (
-    <div
+    <SpotlightCard
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className="cursor-pointer"
+      color="rgba(214, 58, 0, 0.4)"
       style={{
         background: 'var(--color-bg-card)',
         borderRadius: 12,
@@ -396,10 +398,9 @@ function AdvisorCard({ advisor, index, onClick }: { advisor: Advisor; index: num
         transform: hovered ? 'translateY(-1px)' : 'translateY(0)',
         boxShadow: hovered ? '0 2px 8px rgba(0,0,0,0.04)' : 'none',
         transition: 'all 0.18s ease',
-        animation: `fadeUp 0.4s ease ${index * 0.05}s both`,
       }}
     >
-      {/* Row 1: Icon + Name + Health */}
+      {/* Row 1: Icon + Name + Stats + Health */}
       <div className="flex items-start justify-between" style={{ marginBottom: 8 }}>
         <div className="flex items-center gap-3">
           <div
@@ -409,15 +410,21 @@ function AdvisorCard({ advisor, index, onClick }: { advisor: Advisor; index: num
             <advisor.icon size={16} strokeWidth={2} style={{ color: advisor.iconColor }} />
           </div>
           <div>
-            <div className="font-display font-bold" style={{ fontSize: 14, color: 'var(--color-text-primary)' }}>
-              {advisor.name}
+            <div className="flex items-center gap-2">
+              <span className="font-display font-bold" style={{ fontSize: 14, color: 'var(--color-text-primary)' }}>
+                {advisor.name}
+              </span>
+              <HealthBadge health={advisor.health} />
             </div>
-            <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-              {advisor.videoCount} videos · {advisor.entityCount.toLocaleString()} entities · Updated {advisor.updatedAgo}
+            <div className="font-body flex items-center gap-1" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+              <span>{advisor.videoCount} sources</span>
+              <span style={{ opacity: 0.4 }}>·</span>
+              <span>{advisor.newInsights} insights</span>
+              <span style={{ opacity: 0.4 }}>·</span>
+              <span>{advisor.signalsOut} signals</span>
             </div>
           </div>
         </div>
-        <HealthBadge health={advisor.health} />
       </div>
 
       {/* Row 2: Description */}
@@ -444,7 +451,7 @@ function AdvisorCard({ advisor, index, onClick }: { advisor: Advisor; index: num
         ))}
       </div>
 
-      {/* Row 4: Stats */}
+      {/* Row 4: Secondary stats */}
       <div
         className="flex items-center font-body"
         style={{
@@ -455,14 +462,16 @@ function AdvisorCard({ advisor, index, onClick }: { advisor: Advisor; index: num
           gap: 14,
         }}
       >
-        <span className="flex items-center gap-1"><HelpCircle size={11} /> {advisor.standingQuestions} standing questions</span>
-        <span className="flex items-center gap-1"><Zap size={11} /> {advisor.newInsights} new insights</span>
-        <span className="flex items-center gap-1" style={{ color: 'var(--color-accent-500)', fontWeight: 600 }}><ArrowUpRight size={11} /> {advisor.signalsOut} signals out</span>
-        <span className="ml-auto" style={{ color: advisor.gaps > 0 ? '#dc2626' : undefined, fontWeight: advisor.gaps > 0 ? 600 : undefined }}>
-          {advisor.gaps} gaps
-        </span>
+        <span className="flex items-center gap-1"><HelpCircle size={11} /> {advisor.standingQuestions} questions</span>
+        <span className="flex items-center gap-1"><Zap size={11} /> {advisor.entityCount.toLocaleString()} entities</span>
+        <span className="font-body" style={{ fontSize: 10, color: 'var(--color-text-placeholder)' }}>Updated {advisor.updatedAgo}</span>
+        {advisor.gaps > 0 && (
+          <span className="ml-auto" style={{ color: '#dc2626', fontWeight: 600 }}>
+            {advisor.gaps} gaps
+          </span>
+        )}
       </div>
-    </div>
+    </SpotlightCard>
   )
 }
 
@@ -476,11 +485,10 @@ function CouncilListCenter({ filtered, onSelectAdvisor }: { filtered: Advisor[];
 
       {/* Cards */}
       <div className="flex flex-col" style={{ gap: 8 }}>
-        {filtered.map((advisor, i) => (
+        {filtered.map((advisor) => (
           <AdvisorCard
             key={advisor.id}
             advisor={advisor}
-            index={i}
             onClick={() => onSelectAdvisor(advisor.id)}
           />
         ))}

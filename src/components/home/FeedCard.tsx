@@ -4,6 +4,7 @@ import { useGraphContext } from '../../hooks/useGraphContext'
 import { ProviderIcon } from '../shared/ProviderIcon'
 import { fetchNodeById, fetchSourceById } from '../../services/supabase'
 import { stripMarkdown } from '../../utils/stripMarkdown'
+import { SpotlightCard } from '../ui/SpotlightCard'
 import type { FeedItem } from '../../types/feed'
 
 function formatRelativeTime(dateStr: string): string {
@@ -31,7 +32,7 @@ interface FeedCardProps {
   onItemSelect: (item: FeedItem) => void
 }
 
-export function FeedCard({ item, animDelay, isSelected, onItemSelect }: FeedCardProps) {
+export function FeedCard({ item, isSelected, onItemSelect }: FeedCardProps) {
   const { setRightPanelContent } = useGraphContext()
 
   const sourceProvider = (item.source.metadata as Record<string, unknown> | null)?.provider as string | undefined
@@ -95,8 +96,9 @@ export function FeedCard({ item, animDelay, isSelected, onItemSelect }: FeedCard
     : `${item.entityCount} entities`
 
   return (
-    <div
+    <SpotlightCard
       className="rounded-[12px]"
+      color="rgba(214, 58, 0, 0.4)"
       style={{
         background: isSelected
           ? 'linear-gradient(135deg, rgba(214,58,0,0.04) 0%, rgba(214,58,0,0.015) 100%)'
@@ -105,8 +107,6 @@ export function FeedCard({ item, animDelay, isSelected, onItemSelect }: FeedCard
         padding: '14px 16px',
         marginBottom: 8,
         boxShadow: isSelected ? 'var(--shadow-md)' : 'var(--shadow-sm)',
-        animation: 'fadeUp 0.4s var(--ease-out-expo) both',
-        animationDelay: `${animDelay}s`,
         transition: 'all 0.2s var(--ease-out-expo)',
       }}
     >
@@ -263,6 +263,6 @@ export function FeedCard({ item, animDelay, isSelected, onItemSelect }: FeedCard
           </button>
         </div>
       )}
-    </div>
+    </SpotlightCard>
   )
 }
