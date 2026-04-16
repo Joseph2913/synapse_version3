@@ -199,7 +199,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const since = repo.last_scanned_at ?? null;
 
         const { commits, status } = await fetchNewCommits(
-          repo.repo_name_owner,
+          repo.repo_owner,
           repo.repo_name,
           repo.default_branch,
           since
