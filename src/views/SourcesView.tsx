@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { GripVertical, Plus, Plug2, ChevronRight, Youtube, FileText, StickyNote, FlaskConical, Globe, MessageSquare as MeetingIcon } from 'lucide-react'
+import { GripVertical, Plus, Plug2, ChevronRight, Youtube, FileText, StickyNote, FlaskConical, Globe, MessageSquare as MeetingIcon, GitBranch } from 'lucide-react'
 import { FeedTab } from '../components/home/FeedTab'
 import { HomeFeedDetail } from '../components/home/HomeFeedDetail'
 import { useActivityFeed } from '../hooks/useActivityFeed'
@@ -42,6 +42,7 @@ const SOURCE_BADGES: Array<{
   { type: 'Research', label: 'Research', icon: FlaskConical, color: '#8b5cf6', bg: '#f5f3ff' },
   { type: 'API', label: 'API', icon: Globe, color: '#6b7280', bg: '#f9fafb' },
   { type: 'Meeting', label: 'Meetings', icon: MeetingIcon, color: '#3b82f6', bg: '#eff6ff' },
+  { type: 'GitHub', label: 'GitHub', icon: GitBranch, color: '#24292e', bg: '#f6f8fa' },
 ]
 
 function timeAgo(dateStr: string | null): string {

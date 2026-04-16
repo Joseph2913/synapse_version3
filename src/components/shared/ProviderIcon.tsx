@@ -21,8 +21,10 @@ export function ProviderIcon({
 }: ProviderIconProps) {
   const cfg = getSourceConfig(sourceType)
 
-  // Resolve provider: YouTube sources always use 'youtube' provider
-  const effectiveProvider = sourceType === 'YouTube' ? 'youtube' : provider
+  // Resolve provider: YouTube/GitHub sources always use their provider logo
+  const effectiveProvider = sourceType === 'YouTube' ? 'youtube'
+    : sourceType === 'GitHub' ? 'github'
+    : provider
   const providerCfg = getProviderConfig(effectiveProvider)
 
   // Use provider color if available, otherwise source type color

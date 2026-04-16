@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ListMusic, Loader2 } from 'lucide-react'
+import { ListMusic, Loader2, RotateCcw } from 'lucide-react'
 import { usePlaylistLayout } from '../../hooks/usePlaylistLayout'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchPlaylistGraph, fetchSourceGraph } from '../../services/exploreQueries'
@@ -559,6 +559,13 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     setCamera({ zoom: 1, panX: 0, panY: 0 })
   }, [])
 
+  const resetGraph = useCallback(() => {
+    hasAutoFitRef.current = false
+    setCamera({ zoom: 1, panX: 0, panY: 0 })
+    setSelectedPlaylistId(null)
+    setExploringVideoId(null)
+  }, [])
+
   // Wheel zoom
   useEffect(() => {
     const el = containerRef.current
@@ -1099,31 +1106,53 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         </span>
       </div>
 
-      {/* Zoom controls — bottom-right */}
-      <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 20 }}>
-        {[
-          { label: '+', title: 'Zoom in', action: zoomIn },
-          { label: '−', title: 'Zoom out', action: zoomOut },
-          { label: '⊙', title: 'Fit to screen', action: resetCamera },
-        ].map(({ label, title, action }) => (
-          <button
-            key={label}
-            type="button"
-            onClick={action}
-            title={title}
-            className="flex items-center justify-center font-body font-bold cursor-pointer"
-            style={{
-              width: 26, height: 26, borderRadius: 6,
-              background: 'rgba(255,255,255,0.92)',
-              border: '1px solid rgba(0,0,0,0.08)',
-              color: 'var(--color-text-secondary)',
-              fontSize: 14, lineHeight: 1,
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            {label}
-          </button>
-        ))}
+      {/* Zoom controls + Reset — bottom-right */}
+      <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, zIndex: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {[
+            { label: '+', title: 'Zoom in', action: zoomIn },
+            { label: '−', title: 'Zoom out', action: zoomOut },
+            { label: '⊙', title: 'Fit to screen', action: resetCamera },
+          ].map(({ label, title, action }) => (
+            <button
+              key={label}
+              type="button"
+              onClick={action}
+              title={title}
+              className="flex items-center justify-center font-body font-bold cursor-pointer"
+              style={{
+                width: 26, height: 26, borderRadius: 6,
+                background: 'rgba(255,255,255,0.92)',
+                border: '1px solid rgba(0,0,0,0.08)',
+                color: 'var(--color-text-secondary)',
+                fontSize: 14, lineHeight: 1,
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={resetGraph}
+          title="Reset graph view"
+          className="flex items-center font-body cursor-pointer"
+          style={{
+            gap: 5,
+            padding: '5px 10px',
+            borderRadius: 6,
+            background: 'rgba(255,255,255,0.92)',
+            border: '1px solid rgba(0,0,0,0.08)',
+            color: 'var(--color-text-secondary)',
+            fontSize: 11,
+            fontWeight: 600,
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <RotateCcw size={11} />
+          Reset Graph
+        </button>
       </div>
 
     </div>
