@@ -22,6 +22,7 @@ import { SkillOverviewPanel } from '../components/skills/SkillOverviewPanel'
 import { CombinedOverviewPanel } from '../components/signals/CombinedOverviewPanel'
 import { ProcessingCard } from '../components/signals/ProcessingCard'
 import { ToggleGroup } from '../components/shared/ToggleGroup'
+import { StaggerList, StaggerItem } from '../components/ui/StaggerList'
 import { SectionLabel } from '../components/ui/SectionLabel'
 import type { AnchorCandidateWithNode } from '../types/anchors'
 import { useProcessingItems } from '../app/providers/ProcessingProvider'
@@ -611,20 +612,21 @@ function AllModeList({
             </span>
           </div>
 
-          <div className="flex flex-col gap-2">
+          <StaggerList className="flex flex-col gap-2">
             {visibleAnchors.map((candidate, index) => (
-              <AnchorCard
-                key={candidate.id}
-                candidate={candidate}
-                isSelected={selectedType === 'anchor' && selectedId === candidate.id}
-                onClick={() => onSelectAnchor(candidate.id)}
-                onConfirm={onConfirmAnchor}
-                onDismiss={onDismissAnchor}
-                onDelete={onDeleteAnchor}
-                index={index}
-              />
+              <StaggerItem key={candidate.id}>
+                <AnchorCard
+                  candidate={candidate}
+                  isSelected={selectedType === 'anchor' && selectedId === candidate.id}
+                  onClick={() => onSelectAnchor(candidate.id)}
+                  onConfirm={onConfirmAnchor}
+                  onDismiss={onDismissAnchor}
+                  onDelete={onDeleteAnchor}
+                  index={index}
+                />
+              </StaggerItem>
             ))}
-          </div>
+          </StaggerList>
 
           {!showAllAnchors && anchors.length > 3 && (
             <button
@@ -660,17 +662,18 @@ function AllModeList({
             </span>
           </div>
 
-          <div className="flex flex-col gap-2">
+          <StaggerList className="flex flex-col gap-2">
             {visibleSkills.map((skill, index) => (
-              <SkillCard
-                key={skill.id}
-                skill={skill}
-                isSelected={selectedType === 'skill' && selectedId === skill.id}
-                onClick={() => onSelectSkill(skill.id)}
-                index={index}
-              />
+              <StaggerItem key={skill.id}>
+                <SkillCard
+                  skill={skill}
+                  isSelected={selectedType === 'skill' && selectedId === skill.id}
+                  onClick={() => onSelectSkill(skill.id)}
+                  index={index}
+                />
+              </StaggerItem>
             ))}
-          </div>
+          </StaggerList>
 
           {!showAllSkills && skills.length > 3 && (
             <button
@@ -1610,20 +1613,21 @@ export function SignalsView() {
                         </div>
                       )}
 
-                      <div className="flex flex-col gap-2" style={{ marginTop: 10 }}>
+                      <StaggerList className="flex flex-col gap-2" style={{ marginTop: 10 }}>
                         {suggestedAnchorsForMode.map((candidate, index) => (
-                          <AnchorCard
-                            key={candidate.id}
-                            candidate={candidate}
-                            isSelected={selectedType === 'anchor' && selectedId === candidate.id}
-                            onClick={() => handleSelectAnchor(candidate.id)}
-                            onConfirm={handleConfirm}
-                            onDismiss={handleDismiss}
-                            onDelete={handleDeleteCandidate}
-                            index={index}
-                          />
+                          <StaggerItem key={candidate.id}>
+                            <AnchorCard
+                              candidate={candidate}
+                              isSelected={selectedType === 'anchor' && selectedId === candidate.id}
+                              onClick={() => handleSelectAnchor(candidate.id)}
+                              onConfirm={handleConfirm}
+                              onDismiss={handleDismiss}
+                              onDelete={handleDeleteCandidate}
+                              index={index}
+                            />
+                          </StaggerItem>
                         ))}
-                      </div>
+                      </StaggerList>
                     </div>
                   )}
 
@@ -1633,42 +1637,45 @@ export function SignalsView() {
                         <SectionLabel>Your Anchors</SectionLabel>
                       </div>
 
-                      <div className="flex flex-col gap-2">
+                      <StaggerList className="flex flex-col gap-2">
                         {orderedConfirmedAnchors.map((entry, index) => (
-                          <div key={entry.candidate.id} style={{ marginLeft: entry.parentLabel ? 16 : 0 }}>
-                            <AnchorCard
-                              candidate={entry.candidate}
-                              isSelected={selectedType === 'anchor' && selectedId === entry.candidate.id}
-                              onClick={() => handleSelectAnchor(entry.candidate.id)}
-                              onConfirm={handleConfirm}
-                              onDismiss={handleDismiss}
-                              onDelete={handleDeleteCandidate}
-                              index={index + suggestedAnchorsForMode.length}
-                              parentLabel={entry.parentLabel}
-                            />
-                          </div>
+                          <StaggerItem key={entry.candidate.id}>
+                            <div style={{ marginLeft: entry.parentLabel ? 16 : 0 }}>
+                              <AnchorCard
+                                candidate={entry.candidate}
+                                isSelected={selectedType === 'anchor' && selectedId === entry.candidate.id}
+                                onClick={() => handleSelectAnchor(entry.candidate.id)}
+                                onConfirm={handleConfirm}
+                                onDismiss={handleDismiss}
+                                onDelete={handleDeleteCandidate}
+                                index={index + suggestedAnchorsForMode.length}
+                                parentLabel={entry.parentLabel}
+                              />
+                            </div>
+                          </StaggerItem>
                         ))}
-                      </div>
+                      </StaggerList>
                     </div>
                   )}
 
                   {archivedAnchorsForMode.length > 0 && (
                     <div style={{ marginTop: 16 }}>
                       <SectionLabel>Archived ({archivedAnchorsForMode.length})</SectionLabel>
-                      <div className="flex flex-col gap-2" style={{ marginTop: 8, opacity: 0.7 }}>
+                      <StaggerList className="flex flex-col gap-2" style={{ marginTop: 8, opacity: 0.7 }}>
                         {archivedAnchorsForMode.map((candidate, index) => (
-                          <AnchorCard
-                            key={candidate.id}
-                            candidate={candidate}
-                            isSelected={selectedType === 'anchor' && selectedId === candidate.id}
-                            onClick={() => handleSelectAnchor(candidate.id)}
-                            onConfirm={handleConfirm}
-                            onDismiss={handleDismiss}
-                            onDelete={handleDeleteCandidate}
-                            index={index + suggestedAnchorsForMode.length + orderedConfirmedAnchors.length}
-                          />
+                          <StaggerItem key={candidate.id}>
+                            <AnchorCard
+                              candidate={candidate}
+                              isSelected={selectedType === 'anchor' && selectedId === candidate.id}
+                              onClick={() => handleSelectAnchor(candidate.id)}
+                              onConfirm={handleConfirm}
+                              onDismiss={handleDismiss}
+                              onDelete={handleDeleteCandidate}
+                              index={index + suggestedAnchorsForMode.length + orderedConfirmedAnchors.length}
+                            />
+                          </StaggerItem>
                         ))}
-                      </div>
+                      </StaggerList>
                     </div>
                   )}
                 </>
@@ -1742,17 +1749,18 @@ export function SignalsView() {
                   }}
                 />
               ) : (
-                <div className="flex flex-col gap-2">
+                <StaggerList className="flex flex-col gap-2">
                   {filteredSkillsForMode.map((skill, index) => (
-                    <SkillCard
-                      key={skill.id}
-                      skill={skill}
-                      isSelected={selectedType === 'skill' && selectedId === skill.id}
-                      onClick={() => handleSelectSkill(skill.id)}
-                      index={index}
-                    />
+                    <StaggerItem key={skill.id}>
+                      <SkillCard
+                        skill={skill}
+                        isSelected={selectedType === 'skill' && selectedId === skill.id}
+                        onClick={() => handleSelectSkill(skill.id)}
+                        index={index}
+                      />
+                    </StaggerItem>
                   ))}
-                </div>
+                </StaggerList>
               )}
             </div>
           )}
