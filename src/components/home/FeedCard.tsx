@@ -98,14 +98,16 @@ export function FeedCard({ item, animDelay, isSelected, onItemSelect }: FeedCard
     <div
       className="rounded-[12px]"
       style={{
-        background: isSelected ? 'rgba(214,58,0,0.03)' : 'var(--color-bg-card)',
-        border: isSelected ? '1px solid rgba(214,58,0,0.25)' : '1px solid var(--border-subtle)',
-        borderLeft: isSelected ? '3px solid var(--color-accent-500)' : undefined,
+        background: isSelected
+          ? 'linear-gradient(135deg, rgba(214,58,0,0.04) 0%, rgba(214,58,0,0.015) 100%)'
+          : 'var(--color-bg-card)',
+        border: isSelected ? '1px solid rgba(214,58,0,0.2)' : '1px solid var(--border-subtle)',
         padding: '14px 16px',
         marginBottom: 8,
-        animation: 'fadeUp 0.4s ease both',
+        boxShadow: isSelected ? 'var(--shadow-md)' : 'var(--shadow-sm)',
+        animation: 'fadeUp 0.4s var(--ease-out-expo) both',
         animationDelay: `${animDelay}s`,
-        transition: 'background 0.15s ease, border-color 0.15s ease',
+        transition: 'all 0.2s var(--ease-out-expo)',
       }}
     >
       {/* ── Header: clickable → selects this item ── */}
@@ -254,7 +256,7 @@ export function FeedCard({ item, animDelay, isSelected, onItemSelect }: FeedCard
               border: isSelected ? '1px solid rgba(214,58,0,0.2)' : '1px solid var(--border-subtle)',
               background: isSelected ? 'rgba(214,58,0,0.07)' : 'var(--color-bg-inset)',
               color: isSelected ? 'var(--color-accent-500)' : 'var(--color-text-secondary)',
-              transition: 'all 0.15s ease',
+              transition: 'all 0.2s var(--ease-out-expo)',
             }}
           >
             Explore More <ArrowRight size={11} />
