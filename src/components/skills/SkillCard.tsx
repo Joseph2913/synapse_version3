@@ -219,13 +219,13 @@ export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps)
 
       <div className="flex items-center gap-4 flex-wrap" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
         <span className="flex items-center gap-1 font-body">
-          <FileText size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{skill.source_count}</span> source{skill.source_count !== 1 ? 's' : ''}
+          <FileText size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{skill.source_count}</span> source{skill.source_count !== 1 ? 's' : ''}
         </span>
         <span className="flex items-center gap-1 font-body">
-          <Sparkles size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{skill.usage_count}</span> use{skill.usage_count !== 1 ? 's' : ''}
+          <Sparkles size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{skill.usage_count}</span> use{skill.usage_count !== 1 ? 's' : ''}
         </span>
         <span className="flex items-center gap-1 font-body">
-          <BarChart3 size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{Math.round(skill.confidence * 100)}%</span> confidence
+          <BarChart3 size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(skill.confidence * 100)}%</span> confidence
         </span>
       </div>
     </div>

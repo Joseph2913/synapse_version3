@@ -70,7 +70,7 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
 
       {/* Right side — metadata + avatar */}
       <div className="flex items-center gap-4 shrink-0">
-        <span className="font-body text-[12px]" style={{ whiteSpace: 'nowrap', color: 'var(--color-text-secondary)' }}>
+        <span className="font-body text-[12px]" style={{ whiteSpace: 'nowrap', color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
           {nodeCount.toLocaleString()} nodes · {edgeCount.toLocaleString()} edges
         </span>
 

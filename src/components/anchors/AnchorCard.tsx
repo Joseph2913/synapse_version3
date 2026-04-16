@@ -195,13 +195,13 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
       {/* Stats row */}
       <div className="flex items-center gap-4 flex-wrap" style={{ marginTop: 0, marginBottom: isSuggested ? 12 : 0 }}>
         <span className="flex items-center gap-1 font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-          <Network size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{candidate.connectionCount}</span> nodes
+          <Network size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{candidate.connectionCount}</span> nodes
         </span>
         <span className="flex items-center gap-1 font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-          <FileText size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{candidate.sourceCount}</span> sources
+          <FileText size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{candidate.sourceCount}</span> sources
         </span>
         <span className="flex items-center gap-1 font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-          <Link2 size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{isSuggested ? candidate.connectionCount : candidate.anchorConnections}</span> {isSuggested ? 'edges' : 'connections'}
+          <Link2 size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{isSuggested ? candidate.connectionCount : candidate.anchorConnections}</span> {isSuggested ? 'edges' : 'connections'}
         </span>
       </div>
 
