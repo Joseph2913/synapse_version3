@@ -53,8 +53,9 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
       className="flex items-center justify-between shrink-0"
       style={{
         height: 52,
-        background: 'var(--color-accent-50)',
-        borderBottom: '1px solid var(--border-subtle)',
+        background: 'linear-gradient(90deg, var(--color-accent-50) 0%, rgba(255,245,240,0.6) 50%, var(--color-accent-50) 100%)',
+        borderBottom: '1px solid rgba(214,58,0,0.06)',
+        boxShadow: '0 1px 4px rgba(180,89,0,0.03)',
         paddingLeft: 24,
         paddingRight: 24,
       }}
@@ -89,6 +90,16 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
             fontWeight: 700,
             lineHeight: 1,
             marginRight: 4,
+            boxShadow: '0 0 0 2px rgba(214,58,0,0.08)',
+            transition: 'box-shadow 0.2s var(--ease-out-expo), transform 0.2s var(--ease-out-expo)',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.boxShadow = '0 0 0 3px rgba(214,58,0,0.15)'
+            e.currentTarget.style.transform = 'scale(1.05)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.boxShadow = '0 0 0 2px rgba(214,58,0,0.08)'
+            e.currentTarget.style.transform = 'scale(1)'
           }}
         >
           {initial}
