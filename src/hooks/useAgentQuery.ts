@@ -3,7 +3,6 @@ import { supabase } from '../services/supabase'
 import {
   INITIAL_AGENT_STATE,
   type AgentQueryState,
-  type AgentSSEEvent,
   type AgentToolCall,
 } from '../types/agent'
 import type { ChatMessage } from '../types/rag'
@@ -20,59 +19,83 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 export function useAgentQuery() {
   const [agentState, setAgentState] = useState<AgentQueryState>(INITIAL_AGENT_STATE)
   const abortRef = useRef<AbortController | null>(null)
+  // Track tool call count so we can assign stable indices
+  const callCountRef = useRef(0)
 
-  const processEvent = useCallback((event: AgentSSEEvent) => {
-    switch (event.type) {
-      case 'tool_start':
-        setAgentState(prev => {
-          const newCall: AgentToolCall = {
-            index: event.call_index,
-            tool: event.tool,
-            params: event.params,
-            result: null,
-            status: 'running',
-          }
-          return { ...prev, toolCalls: [...prev.toolCalls, newCall] }
-        })
-        break
-
-      case 'tool_result':
+  const processEvent = useCallback((eventType: string, data: Record<string, unknown>) => {
+    switch (eventType) {
+      case 'tool_start': {
+        const idx = callCountRef.current++
+        const newCall: AgentToolCall = {
+          index: idx,
+          tool: (data.tool as string) ?? 'unknown',
+          params: (data.params as Record<string, unknown>) ?? {},
+          result: null,
+          status: 'running',
+        }
         setAgentState(prev => ({
           ...prev,
-          toolCalls: prev.toolCalls.map(tc =>
-            tc.index === event.call_index
-              ? { ...tc, status: 'complete' as const, result: event.result, duration_ms: event.duration_ms }
-              : tc
-          ),
+          toolCalls: [...prev.toolCalls, newCall],
+          thinking: (data.reasoning as string) ?? prev.thinking,
         }))
         break
+      }
 
-      case 'tool_error':
+      case 'tool_result': {
         setAgentState(prev => ({
           ...prev,
-          toolCalls: prev.toolCalls.map(tc =>
-            tc.index === event.call_index
-              ? { ...tc, status: 'error' as const, error: event.error }
-              : tc
-          ),
+          toolCalls: prev.toolCalls.map((tc, i, arr) => {
+            // Find the last running tool call
+            const isLastRunning = tc.status === 'running' &&
+              !arr.slice(i + 1).some(t => t.status === 'running')
+            if (!isLastRunning) return tc
+            return {
+              ...tc,
+              status: 'complete' as const,
+              result: (data.result as Record<string, unknown>) ?? {},
+            }
+          }),
         }))
         break
+      }
+
+      case 'tool_error': {
+        setAgentState(prev => ({
+          ...prev,
+          toolCalls: prev.toolCalls.map((tc, i, arr) => {
+            const isLastRunning = tc.status === 'running' &&
+              !arr.slice(i + 1).some(t => t.status === 'running')
+            if (!isLastRunning) return tc
+            return {
+              ...tc,
+              status: 'error' as const,
+              error: (data.error as string) ?? 'Unknown tool error',
+            }
+          }),
+        }))
+        break
+      }
 
       case 'thinking':
-        setAgentState(prev => ({ ...prev, thinking: event.text }))
+        setAgentState(prev => ({ ...prev, thinking: (data.text as string) ?? null }))
         break
 
       case 'answer':
         setAgentState(prev => ({
           ...prev,
-          answer: event.text,
-          citations: event.citations ?? [],
+          // The server sends 'answer' field, not 'text'
+          answer: (data.answer as string) ?? (data.text as string) ?? null,
+          citations: [],
           thinking: null,
         }))
         break
 
       case 'error':
-        setAgentState(prev => ({ ...prev, status: 'error', error: event.message }))
+        setAgentState(prev => ({
+          ...prev,
+          status: 'error',
+          error: (data.message as string) ?? (data.error as string) ?? 'Unknown error',
+        }))
         break
 
       case 'done':
@@ -85,11 +108,12 @@ export function useAgentQuery() {
 
   const sendAgentQuery = useCallback(async (
     query: string,
-    conversationHistory: ChatMessage[]
+    conversationHistory: ChatMessage[] = [],
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    callCountRef.current = 0
 
     setAgentState({ ...INITIAL_AGENT_STATE, status: 'running' })
 
@@ -99,18 +123,22 @@ export function useAgentQuery() {
       const resp = await fetch('/api/agent/run', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ query, conversation_history: conversationHistory }),
+        body: JSON.stringify({
+          query,
+          conversation_history: conversationHistory.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+        }),
         signal: controller.signal,
       })
 
       if (!resp.ok) {
-        const err = await resp.json().catch(() => null)
-        throw new Error((err as { message?: string } | null)?.message ?? `Server error ${resp.status}`)
+        const errBody = await resp.text().catch(() => '')
+        throw new Error(`Server error ${resp.status}: ${errBody}`)
       }
 
-      if (!resp.body) {
-        throw new Error('No response body')
-      }
+      if (!resp.body) throw new Error('No response body')
 
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
@@ -122,64 +150,42 @@ export function useAgentQuery() {
 
         buffer += decoder.decode(value, { stream: true })
 
-        // Split on double newline (SSE event boundary) but handle partial events
-        const lines = buffer.split('\n')
-        // Keep the last (potentially incomplete) line in the buffer
-        buffer = lines.pop() ?? ''
+        // SSE format: "event: <type>\ndata: <json>\n\n"
+        // Split on double newline to get complete events
+        const events = buffer.split('\n\n')
+        // Keep the last chunk (may be incomplete)
+        buffer = events.pop() ?? ''
 
-        let eventType: string | null = null
-        let dataLine: string | null = null
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue
 
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (trimmed === '') {
-            // Empty line = end of SSE event — process what we have
-            if (dataLine !== null) {
-              try {
-                const parsed = JSON.parse(dataLine) as AgentSSEEvent
-                processEvent(parsed)
-              } catch {
-                // Malformed event — skip
-              }
-              eventType = null
-              dataLine = null
+          let eventType = ''
+          let dataStr = ''
+
+          for (const line of eventBlock.split('\n')) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('event:')) {
+              eventType = trimmed.slice(6).trim()
+            } else if (trimmed.startsWith('data:')) {
+              dataStr = trimmed.slice(5).trim()
             }
-          } else if (trimmed.startsWith('event:')) {
-            eventType = trimmed.slice('event:'.length).trim()
-          } else if (trimmed.startsWith('data:')) {
-            dataLine = trimmed.slice('data:'.length).trim()
           }
-        }
 
-        // If there's a pending event after the loop (no trailing blank line), keep it in the buffer
-        if (eventType !== null || dataLine !== null) {
-          const rebuiltLines: string[] = []
-          if (eventType !== null) rebuiltLines.push(`event: ${eventType}`)
-          if (dataLine !== null) rebuiltLines.push(`data: ${dataLine}`)
-          buffer = rebuiltLines.join('\n') + '\n' + buffer
-        }
-      }
-
-      // Flush any remaining buffered event
-      if (buffer.trim()) {
-        const lines = buffer.split('\n')
-        let dataLine: string | null = null
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (trimmed.startsWith('data:')) {
-            dataLine = trimmed.slice('data:'.length).trim()
-          }
-        }
-        if (dataLine) {
-          try {
-            const parsed = JSON.parse(dataLine) as AgentSSEEvent
-            processEvent(parsed)
-          } catch {
-            // Malformed — skip
+          if (eventType && dataStr) {
+            try {
+              const parsed = JSON.parse(dataStr) as Record<string, unknown>
+              processEvent(eventType, parsed)
+            } catch {
+              // Malformed JSON, skip
+            }
           }
         }
       }
 
+      // Mark complete if not already in error state
+      setAgentState(prev =>
+        prev.status === 'error' ? prev : { ...prev, status: 'complete' }
+      )
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
       setAgentState(prev => ({
@@ -192,6 +198,7 @@ export function useAgentQuery() {
 
   const resetAgent = useCallback(() => {
     abortRef.current?.abort()
+    callCountRef.current = 0
     setAgentState(INITIAL_AGENT_STATE)
   }, [])
 
