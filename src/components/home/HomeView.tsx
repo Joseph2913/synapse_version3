@@ -352,21 +352,21 @@ function AgentRow({ agent, isLast }: { agent: AgentSummary; isLast: boolean }) {
   return (
     <div
       className="relative overflow-hidden"
-      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', flex: '1 1 0' }}
+      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', height: '100%' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       <button
         type="button"
         onClick={() => navigate('/council')}
-        className="flex w-full text-left bg-transparent cursor-pointer border-none"
-        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
+        className="flex w-full text-left bg-transparent cursor-pointer border-none flex-1"
+        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: 'transparent', transition: 'background 0.15s ease' }}
       >
         <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-accent-50)' }}>
           <Users size={15} style={{ color: 'var(--color-accent-500)' }} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center" style={{ gap: 8, marginBottom: 3 }}>
+          <div className="flex items-center" style={{ gap: 8, marginBottom: 4 }}>
             <span className="font-display text-text-primary truncate" style={{ fontSize: 13, fontWeight: 700 }}>
               {agent.name}
             </span>
@@ -376,15 +376,15 @@ function AgentRow({ agent, isLast }: { agent: AgentSummary; isLast: boolean }) {
             >
               {health.label}
             </span>
-            <span className="flex items-center shrink-0 font-body" style={{ gap: 8, marginLeft: 'auto', fontSize: 10, color: 'var(--color-text-placeholder)' }}>
-              <span>{agent.source_count} sources</span>
+            <span className="flex items-center shrink-0 font-body" style={{ gap: 6, marginLeft: 'auto', fontSize: 10, color: 'var(--color-text-placeholder)' }}>
+              {agent.source_count} sources
               {agent.insights > 0 && <span style={{ color: '#b45309' }}>{agent.insights} insights</span>}
               {agent.signalsOut > 0 && <span style={{ color: 'var(--color-accent-500)' }}>{agent.signalsOut} signals</span>}
             </span>
           </div>
-          <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          <p className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', margin: 0 }}>
             {agent.description ?? ''}
-          </div>
+          </p>
         </div>
       </button>
       <div
@@ -496,7 +496,7 @@ function HomeInsightsCard() {
         ) : (
           <StaggerList className="flex flex-col flex-1">
             {agents.map((agent, i) => (
-              <StaggerItem key={agent.id}>
+              <StaggerItem key={agent.id} style={{ flex: '1 1 0', minHeight: 0 }}>
                 <AgentRow agent={agent} isLast={i === agents.length - 1} />
               </StaggerItem>
             ))}

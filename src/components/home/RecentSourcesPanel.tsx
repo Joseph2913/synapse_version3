@@ -116,7 +116,7 @@ export function RecentSourcesPanel({
         </div>
       ) : (
         <div className={stretch ? 'flex flex-col flex-1' : ''}>
-          {sources.map((source) => (
+          {sources.slice(0, 5).map((source) => (
             <SourceFeedItem
               key={source.id}
               source={source}

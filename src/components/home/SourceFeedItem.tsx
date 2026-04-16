@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronRight, Search, MessageSquare, GitFork } from 'lucide-react'
 import { ProviderIcon } from '../shared/ProviderIcon'
+import { SpotlightCard } from '../ui/SpotlightCard'
 import type { KnowledgeSource } from '../../types/database'
 
 interface SourceFeedItemProps {
@@ -25,14 +26,29 @@ function formatRelativeTime(dateStr: string): string {
   return `${Math.floor(days / 30)}mo ago`
 }
 
+const SOURCE_TYPE_COLORS: Record<string, string> = {
+  YouTube:  'rgba(239, 68, 68, 0.08)',
+  Meeting:  'rgba(59, 130, 246, 0.08)',
+  Document: 'rgba(217, 119, 6, 0.08)',
+  Note:     'rgba(16, 185, 129, 0.08)',
+  Research: 'rgba(139, 92, 246, 0.08)',
+  API:      'rgba(99, 102, 241, 0.08)',
+  Email:    'rgba(0, 120, 212, 0.08)',
+}
+
+function getSpotlightColor(sourceType: string): string {
+  return SOURCE_TYPE_COLORS[sourceType] ?? 'rgba(214, 58, 0, 0.06)'
+}
+
 export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat, onGraph, stretch }: SourceFeedItemProps) {
   const provider = (source.metadata as Record<string, unknown> | null)?.provider as string | undefined
   const summary = source.summary ?? null
   const [hovered, setHovered] = useState(false)
 
   return (
-    <div
-      className="relative overflow-hidden"
+    <SpotlightCard
+      color={getSpotlightColor(source.source_type ?? '')}
+      radius={140}
       style={{
         borderBottom: '1px solid var(--border-subtle)',
         flex: stretch ? '1 1 0' : undefined,
@@ -40,7 +56,7 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Main row content — shifts left on hover */}
+      {/* Main row content */}
       <button
         type="button"
         onClick={onClick}
@@ -49,8 +65,7 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
           gap: 14,
           padding: '14px 20px',
           alignItems: 'flex-start',
-          background: hovered ? 'var(--color-bg-hover)' : 'transparent',
-          transition: 'background 0.15s ease',
+          background: 'transparent',
         }}
       >
         <ProviderIcon
@@ -90,23 +105,22 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
             <ChevronRight size={13} style={{ color: 'var(--color-text-placeholder)', flexShrink: 0 }} />
           </div>
 
-          {/* Summary */}
-          {summary && (
-            <p
-              className="font-body text-text-secondary"
-              style={{
-                fontSize: 12,
-                lineHeight: 1.5,
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                margin: 0,
-              }}
-            >
-              {summary}
-            </p>
-          )}
+          {/* Summary — always rendered to maintain consistent row height */}
+          <p
+            className="font-body text-text-secondary"
+            style={{
+              fontSize: 12,
+              lineHeight: 1.5,
+              minHeight: 36,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              margin: 0,
+            }}
+          >
+            {summary ?? ''}
+          </p>
         </div>
       </button>
 
@@ -221,6 +235,6 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
           <span className="font-body" style={{ fontSize: 9, fontWeight: 600 }}>Graph</span>
         </button>
       </div>
-    </div>
+    </SpotlightCard>
   )
 }
