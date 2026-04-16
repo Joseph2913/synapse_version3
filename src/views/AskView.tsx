@@ -22,6 +22,8 @@ import { EmptyAskState } from '../components/ask/EmptyAskState'
 import { AskRightPanel } from '../components/ask/AskRightPanel'
 import { CouncilResponse } from '../components/ask/CouncilResponse'
 import { CouncilRightPanel } from '../components/ask/CouncilRightPanel'
+import { AgentResponse } from '../components/ask/AgentResponse'
+import { useAgentQuery } from '../hooks/useAgentQuery'
 import { SourceDetailCard } from '../components/explore/SourceDetailCard'
 import { NodeDetail } from '../components/panels/NodeDetail'
 import { SourceDetail } from '../components/panels/SourceDetail'
@@ -43,8 +45,10 @@ export function AskView() {
     setModelTier,
   } = useQueryComposer()
   const { councilState, sendCouncilQuery, toggleAgent, approveAndAnalyse, skipAndAnalyse, resetCouncil } = useCouncilQuery()
+  const { agentState, sendAgentQuery, resetAgent } = useAgentQuery()
   const [askMode, setAskMode] = useState<AskMode>('standard')
   const [councilQuery, setCouncilQuery] = useState<string>('')
+  const [agentQuery, setAgentQuery] = useState<string>('')
   const [graphIsEmpty, setGraphIsEmpty] = useState(false)
   const [recentSessions, setRecentSessions] = useState<ChatSession[]>([])
   const [highlightedCitationIndex, setHighlightedCitationIndex] = useState<number | null>(null)
@@ -78,6 +82,9 @@ export function AskView() {
     if (askMode === 'council') {
       setCouncilQuery(text)
       void sendCouncilQuery(text)
+    } else if (askMode === 'agent') {
+      setAgentQuery(text)
+      void sendAgentQuery(text, messages)
     } else {
       void sendMessage(text, config)
     }
@@ -91,6 +98,9 @@ export function AskView() {
     if (askMode === 'council') {
       setCouncilQuery(question)
       void sendCouncilQuery(question)
+    } else if (askMode === 'agent') {
+      setAgentQuery(question)
+      void sendAgentQuery(question, messages)
     } else {
       void sendMessage(question, config)
     }
@@ -228,7 +238,8 @@ export function AskView() {
 
   const hasMessages = messages.length > 0
   const councilActive = councilState.status !== 'idle'
-  const hasContent = hasMessages || councilActive
+  const agentActive = agentState.status !== 'idle'
+  const hasContent = hasMessages || councilActive || agentActive
 
   const helperText =
     config.scopeAnchors.length > 0
@@ -321,8 +332,8 @@ export function AskView() {
       <StatusBar
         hasError={!!error && !hasMessages}
         hasMessages={hasContent}
-        onClearChat={() => { clearChat(); resetCouncil(); setCouncilQuery('') }}
-        contextLabel={councilActive ? 'Council mode' : activeEntryContext?.displayLabel}
+        onClearChat={() => { clearChat(); resetCouncil(); setCouncilQuery(''); resetAgent(); setAgentQuery('') }}
+        contextLabel={councilActive ? 'Council mode' : agentActive ? 'Agent mode' : activeEntryContext?.displayLabel}
       />
 
       {/* Full-width chat area */}
@@ -398,6 +409,53 @@ export function AskView() {
 
             <div ref={scroll.bottomRef} style={{ height: 1 }} />
           </div>
+        ) : agentActive ? (
+          /* ── Agent mode response ──────────────────────────────────── */
+          <div
+            ref={scroll.scrollRef}
+            className="flex-1 overflow-y-auto"
+            onScroll={scroll.onScroll}
+            style={{ scrollBehavior: 'smooth' }}
+          >
+            {hasMessages && (
+              <ChatMessageList
+                messages={messages}
+                isLoading={false}
+                pipelineEvents={[]}
+                scroll={scroll}
+                onFollowUpClick={handleFollowUp}
+                onCitationClick={handleCitationClick}
+                onCitationHoverChange={setHighlightedCitationIndex}
+                onExploreMore={handleExploreMore}
+                onSourceClick={handleSourceClick}
+              />
+            )}
+
+            {agentQuery && (
+              <div style={{ maxWidth: 1020, margin: '0 auto', padding: '0 24px' }}>
+                <div className="flex justify-end" style={{ marginBottom: 12 }}>
+                  <div
+                    className="font-body"
+                    style={{
+                      fontSize: 13,
+                      color: 'var(--color-text-primary)',
+                      background: 'var(--color-accent-50)',
+                      border: '1px solid rgba(214,58,0,0.08)',
+                      borderRadius: '16px 16px 4px 16px',
+                      padding: '10px 16px',
+                      maxWidth: '75%',
+                    }}
+                  >
+                    {agentQuery}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <AgentResponse state={agentState} />
+
+            <div ref={scroll.bottomRef} style={{ height: 1 }} />
+          </div>
         ) : (
           /* ── Standard chat messages ───────────────────────────────── */
           <ChatMessageList
@@ -416,7 +474,11 @@ export function AskView() {
         {/* Chat input — always at bottom */}
         <ChatInput
           onSend={handleSend}
-          disabled={isLoading || (askMode === 'council' && councilState.status !== 'idle' && councilState.status !== 'complete' && councilState.status !== 'error')}
+          disabled={
+            isLoading
+            || (askMode === 'council' && councilState.status !== 'idle' && councilState.status !== 'complete' && councilState.status !== 'error')
+            || (askMode === 'agent' && agentState.status === 'running')
+          }
           helperText={helperText}
           embedded={!hasContent}
           config={config}

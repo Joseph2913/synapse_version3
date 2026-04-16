@@ -170,7 +170,7 @@ export function ChatInput({
                   padding: 3,
                 }}
               >
-                {(['standard', 'council'] as const).map(mode => {
+                {(['standard', 'council', 'agent'] as const).map(mode => {
                   const isActive = askMode === mode
                   return (
                     <button
@@ -185,13 +185,13 @@ export function ChatInput({
                         border: 'none',
                         background: isActive ? 'var(--color-bg-card)' : 'transparent',
                         color: isActive
-                          ? (mode === 'council' ? 'var(--color-accent-500)' : 'var(--color-text-primary)')
+                          ? (mode === 'standard' ? 'var(--color-text-primary)' : 'var(--color-accent-500)')
                           : 'var(--color-text-secondary)',
                         boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
                         transition: 'all 0.15s ease',
                       }}
                     >
-                      {mode === 'standard' ? 'Standard' : 'Council'}
+                      {mode === 'standard' ? 'Standard' : mode === 'council' ? 'Council' : 'Agent'}
                     </button>
                   )
                 })}
@@ -208,6 +208,11 @@ export function ChatInput({
                   Your question will be analysed by domain advisors with cross-perspective synthesis
                 </p>
               )}
+              {askMode === 'agent' && (
+                <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', margin: '6px 0 0' }}>
+                  Agent will automatically search your knowledge graph using the best tools for your question
+                </p>
+              )}
             </div>
           )}
 
@@ -218,7 +223,9 @@ export function ChatInput({
               rows={1}
               placeholder={askMode === 'council'
                 ? 'Ask your advisory council...'
-                : 'Ask your knowledge graph anything...'}
+                : askMode === 'agent'
+                  ? 'Ask your agent anything...'
+                  : 'Ask your knowledge graph anything...'}
               value={value}
               onInput={handleInput}
               onKeyDown={handleKeyDown}
