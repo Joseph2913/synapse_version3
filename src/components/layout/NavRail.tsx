@@ -65,9 +65,10 @@ function NavItemButton({
         background: isActive
           ? 'var(--color-accent-50)'
           : hovered
-            ? 'rgba(0,0,0,0.04)'
+            ? 'rgba(214,58,0,0.04)'
             : 'transparent',
-        transition: 'background 0.15s ease, width 0.2s ease, padding 0.2s ease',
+        boxShadow: isActive ? 'inset 0 0 0 1px rgba(214,58,0,0.08)' : 'none',
+        transition: 'all 0.2s var(--ease-out-expo)',
       }}
     >
       {/* Active indicator bar */}
@@ -79,9 +80,10 @@ function NavItemButton({
             top: '50%',
             transform: 'translateY(-50%)',
             width: 3,
-            height: 16,
+            height: 20,
             background: 'var(--color-accent-500)',
-            borderRadius: '0 2px 2px 0',
+            borderRadius: '0 3px 3px 0',
+            boxShadow: '2px 0 8px rgba(214,58,0,0.15)',
           }}
         />
       )}
@@ -96,7 +98,7 @@ function NavItemButton({
             : hovered
               ? 'var(--color-text-body)'
               : 'var(--color-text-secondary)',
-          transition: 'color 0.15s ease',
+          transition: 'color 0.2s var(--ease-out-expo)',
         }}
       />
 
@@ -166,8 +168,8 @@ function UtilButton({
         paddingRight: expanded ? 12 : 0,
         gap: 12,
         justifyContent: expanded ? 'flex-start' : 'center',
-        background: hovered ? 'rgba(0,0,0,0.04)' : 'transparent',
-        transition: 'background 0.15s ease, width 0.2s ease, padding 0.2s ease',
+        background: hovered ? 'rgba(214,58,0,0.04)' : 'transparent',
+        transition: 'all 0.2s var(--ease-out-expo)',
       }}
     >
       <Icon size={iconSize} strokeWidth={1.8} className="shrink-0" style={{ color: 'var(--color-text-secondary)' }} />
@@ -201,7 +203,7 @@ export function NavRail({ onOpenCommandPalette, onOpenSettings, signalsPendingCo
           borderRight: '1px solid var(--border-subtle)',
           transition: 'width 0.2s ease-out',
           zIndex: 200,
-          boxShadow: expanded ? '4px 0 16px rgba(0,0,0,0.06)' : 'none',
+          boxShadow: expanded ? '4px 0 20px rgba(180,89,0,0.06)' : 'none',
         }}
       >
         {/* Logo header — center the 30px logo in the 56px rail when collapsed */}
