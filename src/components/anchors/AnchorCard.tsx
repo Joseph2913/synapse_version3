@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Network, FileText, Link2 } from 'lucide-react'
 import { getEntityColor } from '../../config/entityTypes'
 import { EntityBadge } from '../shared/EntityBadge'
+import { SpotlightCard } from '../ui/SpotlightCard'
 import type { AnchorCandidateWithNode } from '../../types/anchors'
 
 interface AnchorCardProps {
@@ -68,11 +69,12 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
   }
 
   return (
-    <div
+    <SpotlightCard
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className="cursor-pointer"
+      color={`${entityColor}50`}
       style={{
         position: 'relative',
         overflow: 'hidden',
@@ -85,7 +87,6 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
         transform: hovered && !isSelected ? 'translateY(-1px)' : undefined,
         boxShadow: hovered && !isSelected ? 'var(--shadow-md)' : 'var(--shadow-sm)',
         transition: 'all 0.2s var(--ease-out-expo)',
-        animation: `fadeUp 0.4s var(--ease-out-expo) ${index * 0.05}s both`,
       }}
     >
 
@@ -233,6 +234,6 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
           </button>
         </div>
       )}
-    </div>
+    </SpotlightCard>
   )
 }

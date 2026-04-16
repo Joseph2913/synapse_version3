@@ -1,4 +1,5 @@
 import { BarChart3, FileText, Sparkles } from 'lucide-react'
+import { SpotlightCard } from '../ui/SpotlightCard'
 import type { KnowledgeSkillListItem } from '../../types/skills'
 
 // ─── Domain Colors ───────────────────────────────────────────────────────────
@@ -94,15 +95,16 @@ interface SkillCardProps {
   index: number
 }
 
-export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps) {
+export function SkillCard({ skill, isSelected, onClick }: SkillCardProps) {
   const domainColor = getDomainColor(skill.domain)
   const isDraft = skill.status === 'draft'
   const isArchived = skill.status === 'archived'
   const domainLabel = formatDomainLabel(skill.domain)
 
   return (
-    <div
+    <SpotlightCard
       onClick={onClick}
+      color={`${domainColor}50`}
       style={{
         background: isSelected
           ? 'var(--color-accent-50)'
@@ -117,22 +119,23 @@ export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps)
         cursor: 'pointer',
         opacity: isArchived ? 0.72 : isDraft ? 0.92 : 1,
         transition: 'all 0.2s var(--ease-out-expo)',
-        animation: `fadeUp 0.4s var(--ease-out-expo) ${index * 0.05}s both`,
         position: 'relative',
         overflow: 'hidden',
         boxShadow: 'var(--shadow-sm)',
       }}
       onMouseEnter={e => {
         if (!isSelected) {
-          e.currentTarget.style.transform = 'translateY(-1px)'
-          e.currentTarget.style.boxShadow = 'var(--shadow-md)'
-          e.currentTarget.style.borderColor = `${domainColor}25`
+          const el = e.currentTarget as HTMLDivElement
+          el.style.transform = 'translateY(-1px)'
+          el.style.boxShadow = 'var(--shadow-md)'
+          el.style.borderColor = `${domainColor}25`
         }
       }}
       onMouseLeave={e => {
-        e.currentTarget.style.transform = 'translateY(0)'
-        e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
-        e.currentTarget.style.borderColor = isDraft ? `${domainColor}30` : 'var(--border-subtle)'
+        const el = e.currentTarget as HTMLDivElement
+        el.style.transform = 'translateY(0)'
+        el.style.boxShadow = 'var(--shadow-sm)'
+        el.style.borderColor = isDraft ? `${domainColor}30` : 'var(--border-subtle)'
       }}
     >
 
@@ -228,6 +231,6 @@ export function SkillCard({ skill, isSelected, onClick, index }: SkillCardProps)
           <BarChart3 size={10} /> <span style={{ fontWeight: 600, color: 'var(--color-text-body)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(skill.confidence * 100)}%</span> confidence
         </span>
       </div>
-    </div>
+    </SpotlightCard>
   )
 }
