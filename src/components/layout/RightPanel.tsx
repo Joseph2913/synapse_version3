@@ -360,8 +360,11 @@ export function RightPanel() {
       className="flex flex-col h-screen shrink-0 overflow-hidden"
       style={{
         width: panelWidth,
-        background: 'var(--color-bg-card)',
-        borderLeft: '1px solid var(--border-subtle)',
+        background: 'rgba(255, 255, 255, 0.82)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        borderLeft: '1px solid rgba(255, 255, 255, 0.6)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4), -4px 0 20px rgba(180,89,0,0.04)',
         position: 'relative',
       }}
     >
@@ -377,19 +380,26 @@ export function RightPanel() {
           height: '100%',
           cursor: 'ew-resize',
           zIndex: 10,
-          background: 'transparent',
-          transition: 'background 0.15s ease',
+          background: 'rgba(0,0,0,0.03)',
+          transition: 'background 0.2s var(--ease-out-expo)',
         }}
         onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(214,58,0,0.18)' }}
         onMouseLeave={e => {
-          if (!isDragging.current) (e.currentTarget as HTMLDivElement).style.background = 'transparent'
+          if (!isDragging.current) (e.currentTarget as HTMLDivElement).style.background = 'rgba(0,0,0,0.03)'
         }}
       />
 
       {/* Panel header */}
       <div
         className="shrink-0 px-4 flex items-center"
-        style={{ height: 50, borderBottom: '1px solid var(--border-subtle)' }}
+        style={{
+          height: 50,
+          background: 'rgba(255, 255, 255, 0.92)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          borderBottom: '1px solid rgba(255,255,255,0.5)',
+          boxShadow: '0 1px 3px rgba(180,89,0,0.02)',
+        }}
       >
         <span className="font-display text-[12px] font-bold text-text-secondary uppercase tracking-[0.06em]">
           {panelTitle()}
