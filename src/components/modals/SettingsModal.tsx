@@ -97,7 +97,7 @@ function FieldLabel({ children }: { children: ReactNode }) {
 // ─── Profile Tab ──────────────────────────────────────────────────────────────
 
 function ProfileTab() {
-  const { profile, updateProfile, resetOnboarding } = useSettings()
+  const { profile, updateProfile } = useSettings()
   const [name, setName] = useState('')
   const [professionalContext, setProfessionalContext] = useState('')
   const [personalInterests, setPersonalInterests] = useState('')
@@ -130,10 +130,6 @@ function ProfileTab() {
     professionalContext !== savedState.professionalContext ||
     personalInterests !== savedState.personalInterests ||
     processingPreferences !== savedState.processingPreferences
-
-  const handleReplayOnboarding = useCallback(async () => {
-    await resetOnboarding()
-  }, [resetOnboarding])
 
   const handleSave = async () => {
     setSaveStatus('saving')
@@ -235,18 +231,6 @@ function ProfileTab() {
           {saveStatus === 'saved' ? 'Saved' : 'Save'}
         </button>
 
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
-          <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
-            Onboarding
-          </p>
-          <button
-            type="button"
-            onClick={handleReplayOnboarding}
-            className="px-4 py-2 rounded-full text-[12px] font-semibold border border-[var(--border-default)] text-[var(--color-text-secondary)] hover:border-[var(--border-strong)] transition-colors"
-          >
-            Replay onboarding
-          </button>
-        </div>
       </div>
     </div>
   )

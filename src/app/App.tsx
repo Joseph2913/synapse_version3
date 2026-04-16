@@ -7,8 +7,6 @@ import { HomeDashboardProvider } from './providers/HomeDashboardProvider'
 import { Router } from './Router'
 import { LoginPage } from '../components/auth/LoginPage'
 import { useAuth } from '../hooks/useAuth'
-import { useSettings } from '../hooks/useSettings'
-import { OnboardingWizard } from '../components/onboarding/OnboardingWizard'
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, loading } = useAuth()
@@ -46,42 +44,6 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-function OnboardingGate({ children }: { children: React.ReactNode }) {
-  const { profile, loading } = useSettings()
-
-  if (loading) {
-    return (
-      <div
-        style={{
-          width: '100vw',
-          height: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'var(--color-bg-content)',
-        }}
-      >
-        <div
-          style={{
-            width: 28,
-            height: 28,
-            border: '3px solid var(--border-subtle)',
-            borderTopColor: 'var(--color-accent-500)',
-            borderRadius: '50%',
-            animation: 'spin 0.8s linear infinite',
-          }}
-        />
-      </div>
-    )
-  }
-
-  if (profile !== null && profile.onboarding_complete === false) {
-    return <OnboardingWizard />
-  }
-
-  return <>{children}</>
-}
-
 export default function App() {
   return (
     <AuthProvider>
@@ -89,7 +51,6 @@ export default function App() {
         <div className="ambient-gradient" />
         <div className="noise-overlay" />
         <SettingsProvider>
-          <OnboardingGate>
           <GraphProvider>
             <ProcessingProvider>
               <ExploreDataProvider>
@@ -99,7 +60,6 @@ export default function App() {
               </ExploreDataProvider>
             </ProcessingProvider>
           </GraphProvider>
-          </OnboardingGate>
         </SettingsProvider>
       </AuthGate>
     </AuthProvider>
