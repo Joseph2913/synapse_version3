@@ -76,29 +76,30 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
       style={{
         position: 'relative',
         overflow: 'hidden',
-        background: isSelected ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
-        border: `1px solid ${isSelected ? 'rgba(214,58,0,0.3)' : hovered ? 'var(--border-default, var(--border-subtle))' : 'var(--border-subtle)'}`,
+        background: isSelected
+          ? 'var(--color-accent-50)'
+          : `linear-gradient(135deg, ${entityColor}08 0%, ${entityColor}03 100%)`,
+        border: `1px solid ${isSelected ? 'rgba(214,58,0,0.3)' : hovered ? `${entityColor}25` : 'var(--border-subtle)'}`,
         borderRadius: 12,
         padding: '16px 18px',
-        borderLeft: isSuggested ? `3px dashed ${entityColor}` : undefined,
         transform: hovered && !isSelected ? 'translateY(-1px)' : undefined,
-        boxShadow: hovered && !isSelected ? '0 2px 8px rgba(0,0,0,0.04)' : undefined,
-        transition: 'all 0.15s ease',
-        animation: `fadeUp 0.4s ease ${index * 0.05}s both`,
+        boxShadow: hovered && !isSelected ? 'var(--shadow-md)' : 'var(--shadow-sm)',
+        transition: 'all 0.2s var(--ease-out-expo)',
+        animation: `fadeUp 0.4s var(--ease-out-expo) ${index * 0.05}s both`,
       }}
     >
-      {/* Solid left bar for confirmed/dormant */}
-      {!isSuggested && (
-        <div style={{
-          position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
-          background: entityColor, borderRadius: '12px 0 0 12px',
-        }} />
-      )}
 
       {/* Header row */}
       <div className="flex items-start justify-between gap-3" style={{ marginBottom: 8 }}>
         <div className="flex items-center gap-2 min-w-0">
-          <div className="shrink-0" style={{ width: 8, height: 8, borderRadius: '50%', background: entityColor }} />
+          <div className="shrink-0" style={{
+            width: isSuggested ? 10 : 8,
+            height: isSuggested ? 10 : 8,
+            borderRadius: '50%',
+            background: entityColor,
+            boxShadow: `0 0 0 3px ${entityColor}15`,
+            transition: 'all 0.2s var(--ease-out-expo)',
+          }} />
           <span className="font-display truncate" style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)' }}>
             {node.label}
           </span>
