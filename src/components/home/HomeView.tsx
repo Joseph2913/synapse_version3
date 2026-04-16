@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { StaggerList, StaggerItem } from '../ui/StaggerList'
 import { Database, GitBranch, Anchor, Zap, Youtube, FileText, BookOpen, StickyNote, Video, Globe, Mail, ArrowUpRight, Search, MessageSquare, Users } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { useHomeDashboard } from '../../hooks/useHomeDashboard'
@@ -493,11 +494,13 @@ function HomeInsightsCard() {
             </p>
           </div>
         ) : (
-          <div className="flex flex-col flex-1">
+          <StaggerList className="flex flex-col flex-1">
             {agents.map((agent, i) => (
-              <AgentRow key={agent.id} agent={agent} isLast={i === agents.length - 1} />
+              <StaggerItem key={agent.id}>
+                <AgentRow agent={agent} isLast={i === agents.length - 1} />
+              </StaggerItem>
             ))}
-          </div>
+          </StaggerList>
         )}
       </div>
     </div>
