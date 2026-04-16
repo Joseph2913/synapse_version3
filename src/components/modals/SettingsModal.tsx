@@ -97,7 +97,7 @@ function FieldLabel({ children }: { children: ReactNode }) {
 // ─── Profile Tab ──────────────────────────────────────────────────────────────
 
 function ProfileTab() {
-  const { profile, updateProfile } = useSettings()
+  const { profile, updateProfile, resetOnboarding } = useSettings()
   const [name, setName] = useState('')
   const [professionalContext, setProfessionalContext] = useState('')
   const [personalInterests, setPersonalInterests] = useState('')
@@ -130,6 +130,10 @@ function ProfileTab() {
     professionalContext !== savedState.professionalContext ||
     personalInterests !== savedState.personalInterests ||
     processingPreferences !== savedState.processingPreferences
+
+  const handleReplayOnboarding = useCallback(async () => {
+    await resetOnboarding()
+  }, [resetOnboarding])
 
   const handleSave = async () => {
     setSaveStatus('saving')
@@ -202,7 +206,7 @@ function ProfileTab() {
         />
       </div>
 
-      <div style={{ paddingTop: 8 }}>
+      <div style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 16 }}>
         <button
           type="button"
           onClick={handleSave}
@@ -219,6 +223,7 @@ function ProfileTab() {
             opacity: !isDirty || saveStatus === 'saving' ? 0.4 : 1,
             cursor: !isDirty || saveStatus === 'saving' ? 'default' : 'pointer',
             transition: 'opacity 0.15s ease, background 0.15s ease',
+            alignSelf: 'flex-start',
           }}
           onMouseEnter={e => {
             if (isDirty && saveStatus !== 'saving') e.currentTarget.style.background = 'var(--color-accent-600)'
@@ -229,6 +234,19 @@ function ProfileTab() {
           {saveStatus === 'saved' && <Check size={13} style={{ color: '#4ade80' }} />}
           {saveStatus === 'saved' ? 'Saved' : 'Save'}
         </button>
+
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
+          <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+            Onboarding
+          </p>
+          <button
+            type="button"
+            onClick={handleReplayOnboarding}
+            className="px-4 py-2 rounded-full text-[12px] font-semibold border border-[var(--border-default)] text-[var(--color-text-secondary)] hover:border-[var(--border-strong)] transition-colors"
+          >
+            Replay onboarding
+          </button>
+        </div>
       </div>
     </div>
   )
