@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, MessageSquare, MessageCircle, GitBranch, RefreshCw, ArrowRight, Search, Link2, ChevronRight, Loader2 } from 'lucide-react'
+import { X, MessageSquare, MessageCircle, GitBranch, ArrowRight, Search, Link2, ChevronRight, Loader2 } from 'lucide-react'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { getEntityColor } from '../../config/entityTypes'
 import { ProviderIcon } from '../shared/ProviderIcon'
@@ -584,10 +584,6 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
   const [loadingEntityId, setLoadingEntityId] = useState<string | null>(null)
   const [selectedConnection, setSelectedConnection] = useState<UnifiedConnection | null>(null)
 
-  // Re-extract state
-  const [showReExtract, setShowReExtract] = useState(false)
-  const [reExtractInstructions, setReExtractInstructions] = useState('')
-
   // Summary state
   const [currentSummary, setCurrentSummary] = useState<string | null>(item.source.summary ?? null)
   const [currentSummarySource, setCurrentSummarySource] = useState<string | null>(item.source.summary_source ?? null)
@@ -811,29 +807,11 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
               type="button"
               className="font-body cursor-pointer"
               style={actionBtnStyle}
-              onClick={() => navigate('/explore')}
+              onClick={() => navigate(`/explore?viewMode=sources&sourceId=${item.source.id}`)}
               onMouseEnter={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-card)' }}
               onMouseLeave={e => { ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
             >
               <GitBranch size={12} /> View in Graph
-            </button>
-            <button
-              type="button"
-              className="font-body cursor-pointer"
-              style={{
-                ...actionBtnStyle,
-                ...(showReExtract
-                  ? { background: 'var(--color-accent-50)', borderColor: 'rgba(214,58,0,0.2)', color: 'var(--color-accent-500)' }
-                  : {}),
-                ...(!item.source.content ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
-              }}
-              disabled={!item.source.content}
-              title={!item.source.content ? 'No source content available' : 'Re-run extraction with new settings'}
-              onClick={() => setShowReExtract(v => !v)}
-              onMouseEnter={e => { if (item.source.content) (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-card)' }}
-              onMouseLeave={e => { if (item.source.content && !showReExtract) (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
-            >
-              <RefreshCw size={12} /> Re-extract
             </button>
             {(() => {
               const relatedSources = Array.from(
@@ -863,80 +841,6 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
             })()}
           </div>
 
-          {/* Re-extract options */}
-          {showReExtract && (
-            <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--color-bg-inset)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
-              <label className="font-body font-semibold" style={{ fontSize: 11, color: 'var(--color-text-secondary)', display: 'block', marginBottom: 6 }}>
-                Custom instructions (optional)
-              </label>
-              <textarea
-                value={reExtractInstructions}
-                onChange={e => setReExtractInstructions(e.target.value)}
-                placeholder="e.g., Focus on technical concepts, ignore personal names…"
-                className="font-body w-full"
-                style={{
-                  fontSize: 12,
-                  color: 'var(--color-text-body)',
-                  background: 'var(--color-bg-card)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 6,
-                  padding: '6px 8px',
-                  resize: 'vertical',
-                  minHeight: 56,
-                  maxHeight: 120,
-                  lineHeight: 1.4,
-                  outline: 'none',
-                }}
-                onFocus={e => { e.currentTarget.style.borderColor = 'rgba(214,58,0,0.3)' }}
-                onBlur={e => { e.currentTarget.style.borderColor = 'var(--border-subtle)' }}
-              />
-              <div className="flex items-center gap-2" style={{ marginTop: 8 }}>
-                <button
-                  type="button"
-                  className="font-body font-semibold cursor-pointer"
-                  style={{
-                    fontSize: 11,
-                    padding: '5px 14px',
-                    borderRadius: 6,
-                    background: 'var(--color-accent-500)',
-                    border: 'none',
-                    color: '#fff',
-                  }}
-                  onClick={() => {
-                    navigate('/capture', {
-                      state: {
-                        reExtractSource: {
-                          id: item.source.id,
-                          title: item.source.title,
-                          content: item.source.content,
-                          sourceType: item.source.source_type,
-                          sourceUrl: item.source.source_url,
-                          customInstructions: reExtractInstructions.trim() || undefined,
-                        },
-                      },
-                    })
-                  }}
-                >
-                  Start Re-extraction
-                </button>
-                <button
-                  type="button"
-                  className="font-body cursor-pointer"
-                  style={{
-                    fontSize: 11,
-                    padding: '5px 10px',
-                    borderRadius: 6,
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--color-text-secondary)',
-                  }}
-                  onClick={() => { setShowReExtract(false); setReExtractInstructions('') }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
         </SectionCard>
 
         {/* ── Summary card ── */}
