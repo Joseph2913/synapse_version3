@@ -1,6 +1,10 @@
 import { useState, useCallback } from 'react'
 import { useSettings } from '../../hooks/useSettings'
 import { Step0Walkthrough } from './Step0Walkthrough'
+import { Step1ImportHistory } from './Step1ImportHistory'
+import { Step2ReviewProfile } from './Step2ReviewProfile'
+import { Step3ConnectMeetings } from './Step3ConnectMeetings'
+import { Step4ConnectYouTube } from './Step4ConnectYouTube'
 
 type OnboardingStep = 0 | 1 | 2 | 3 | 4
 
@@ -64,91 +68,31 @@ export function OnboardingWizard() {
       )
     case 1:
       return (
-        <div className="fixed inset-0 bg-[var(--color-bg-content)] z-50 flex items-center justify-center">
-          <div className="text-center">
-            <p className="font-display font-bold text-lg text-[var(--color-text-primary)] mb-4">
-              Step 1: Import History
-            </p>
-            <button
-              onClick={() => handleNext(1, { step1Completed: false })}
-              className="px-5 py-2 rounded-full bg-[var(--color-accent-500)] text-white text-sm font-semibold mr-2"
-            >
-              Skip to Step 3
-            </button>
-            <button
-              onClick={handleSkipAll}
-              className="px-5 py-2 rounded-full border border-[var(--border-default)] text-[var(--color-text-secondary)] text-sm font-semibold"
-            >
-              Skip All
-            </button>
-          </div>
-        </div>
+        <Step1ImportHistory
+          onNext={(completed) => handleNext(1, { step1Completed: completed })}
+          onSkipAll={handleSkipAll}
+        />
       )
     case 2:
       return (
-        <div className="fixed inset-0 bg-[var(--color-bg-content)] z-50 flex items-center justify-center">
-          <div className="text-center">
-            <p className="font-display font-bold text-lg text-[var(--color-text-primary)] mb-4">
-              Step 2: Connect Sources
-            </p>
-            <button
-              onClick={() => handleNext(2)}
-              className="px-5 py-2 rounded-full bg-[var(--color-accent-500)] text-white text-sm font-semibold mr-2"
-            >
-              Next
-            </button>
-            <button
-              onClick={handleSkipAll}
-              className="px-5 py-2 rounded-full border border-[var(--border-default)] text-[var(--color-text-secondary)] text-sm font-semibold"
-            >
-              Skip All
-            </button>
-          </div>
-        </div>
+        <Step2ReviewProfile
+          onNext={() => handleNext(2)}
+          onSkipAll={handleSkipAll}
+        />
       )
     case 3:
       return (
-        <div className="fixed inset-0 bg-[var(--color-bg-content)] z-50 flex items-center justify-center">
-          <div className="text-center">
-            <p className="font-display font-bold text-lg text-[var(--color-text-primary)] mb-4">
-              Step 3: Set Up Profile
-            </p>
-            <button
-              onClick={() => handleNext(3)}
-              className="px-5 py-2 rounded-full bg-[var(--color-accent-500)] text-white text-sm font-semibold mr-2"
-            >
-              Next
-            </button>
-            <button
-              onClick={handleSkipAll}
-              className="px-5 py-2 rounded-full border border-[var(--border-default)] text-[var(--color-text-secondary)] text-sm font-semibold"
-            >
-              Skip All
-            </button>
-          </div>
-        </div>
+        <Step3ConnectMeetings
+          onNext={() => handleNext(3)}
+          onSkipAll={handleSkipAll}
+        />
       )
     case 4:
       return (
-        <div className="fixed inset-0 bg-[var(--color-bg-content)] z-50 flex items-center justify-center">
-          <div className="text-center">
-            <p className="font-display font-bold text-lg text-[var(--color-text-primary)] mb-4">
-              Step 4: You&apos;re Ready
-            </p>
-            <button
-              onClick={() => handleNext(4)}
-              className="px-5 py-2 rounded-full bg-[var(--color-accent-500)] text-white text-sm font-semibold mr-2"
-            >
-              Enter Synapse
-            </button>
-            <button
-              onClick={handleSkipAll}
-              className="px-5 py-2 rounded-full border border-[var(--border-default)] text-[var(--color-text-secondary)] text-sm font-semibold"
-            >
-              Skip All
-            </button>
-          </div>
-        </div>
+        <Step4ConnectYouTube
+          onFinish={() => handleNext(4)}
+          onSkipAll={handleSkipAll}
+        />
       )
   }
 }
