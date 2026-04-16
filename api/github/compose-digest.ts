@@ -36,13 +36,12 @@ interface QueueItem {
 
 interface TrackedRepo {
   id: string;
-  owner: string;
-  repo: string;
-  branch: string;
+  repo_owner: string;
+  repo_name: string;
+  default_branch: string;
   display_name: string | null;
   repo_url: string;
   custom_instructions: string | null;
-  github_token: string | null;
 }
 
 interface CommitFile {
@@ -167,8 +166,8 @@ function buildDigestPrompt(
   repo: TrackedRepo,
   diffContent: string
 ): string {
-  const displayName = repo.display_name ?? `${repo.owner}/${repo.repo}`;
-  const repoUrl = repo.repo_url ?? `https://github.com/${repo.owner}/${repo.repo}`;
+  const displayName = repo.display_name ?? `${repo.repo_owner}/${repo.repo_name}`;
+  const repoUrl = repo.repo_url ?? `https://github.com/${repo.repo_owner}/${repo.repo_name}`;
   const rawLog = item.raw_log.slice(0, MAX_RAW_LOG_CHARS);
   const authors = item.authors.join(', ');
   const customBlock = repo.custom_instructions
@@ -178,7 +177,7 @@ function buildDigestPrompt(
   return `You are analysing code changes from a GitHub repository for a personal knowledge graph system.
 
 Repository: ${displayName} (${repoUrl})
-Branch: ${repo.branch}
+Branch: ${repo.default_branch}
 Date: ${item.digest_date}
 Commits: ${item.commit_count}
 Authors: ${authors}
@@ -324,12 +323,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         const repo = repoData as TrackedRepo;
-        const repoLabel = `${repo.owner}/${repo.repo}`;
+        const repoLabel = `${repo.repo_owner}/${repo.repo_name}`;
 
         // Build diff content from GitHub
         let diffContent = '';
         try {
-          diffContent = await buildDiffContent(repo.owner, repo.repo, item.raw_log, repo.github_token);
+          diffContent = await buildDiffContent(repo.repo_owner, repo.repo_name, item.raw_log, null);
         } catch (diffErr) {
           const msg = diffErr instanceof Error ? diffErr.message : String(diffErr);
           console.warn(`[compose-digest] Diff fetch failed for ${repoLabel}, proceeding without diffs:`, msg);

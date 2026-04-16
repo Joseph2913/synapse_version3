@@ -17,9 +17,10 @@ type ScanInterval = 'hourly' | '6h' | '12h' | 'daily';
 interface GitHubTrackedRepo {
   id: string;
   user_id: string;
-  owner: string;
-  repo: string;
-  branch: string;
+  repo_owner: string;
+  repo_name: string;
+  default_branch: string;
+  display_name: string;
   scan_interval: ScanInterval;
   status: string;
   last_scanned_at: string | null;
@@ -183,7 +184,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     for (const repo of repos as GitHubTrackedRepo[]) {
-      const repoLabel = `${repo.owner}/${repo.repo}`;
+      const repoLabel = `${repo.repo_owner}/${repo.repo_name}`;
 
       // Check if this repo's scan interval has elapsed
       if (!shouldScan(repo, now)) {
@@ -198,9 +199,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const since = repo.last_scanned_at ?? null;
 
         const { commits, status } = await fetchNewCommits(
-          repo.owner,
-          repo.repo,
-          repo.branch,
+          repo.repo_name_owner,
+          repo.repo_name,
+          repo.default_branch,
           since
         );
 
