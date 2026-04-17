@@ -17,7 +17,7 @@ export function useExploreFilters() {
 
   // View mode: anchors | sources
   const [viewMode, setViewMode] = useState<ExploreViewMode>(
-    (searchParams.get('mode') as ExploreViewMode) || 'anchors'
+    (searchParams.get('mode') as ExploreViewMode) || 'sources'
   )
 
   // Zoom level
