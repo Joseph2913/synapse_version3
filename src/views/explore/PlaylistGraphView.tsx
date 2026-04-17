@@ -563,13 +563,12 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     let cancelled = false
     setLoading(true)
 
+    // Fetch core graph data (playlists + sources)
     Promise.all([
       fetchPlaylistGraph(user.id),
       fetchSourceGraph(user.id),
-      fetchGraphAnchors(user.id, 200),
-      fetchGraphSkills(user.id, 50),
     ])
-      .then(([playlistData, sourceData, anchorData, skillData]) => {
+      .then(([playlistData, sourceData]) => {
         if (cancelled) return
         // 1. Set playlist data as-is
         setPlaylists(playlistData.playlists)
@@ -632,11 +631,18 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         setPlaylists(prev => [...prev, ...virtualPlaylists])
         setVideos([...playlistData.videos, ...virtualVideos])
         setVideoEdges([...playlistData.videoEdges, ...sourceEdgesAsVideoEdges])
-        setAllGraphAnchors(anchorData)
-        setAllGraphSkills(skillData)
       })
       .catch(err => console.warn('PlaylistGraphView fetch error:', err))
       .finally(() => { if (!cancelled) setLoading(false) })
+
+    // Fetch anchors & skills separately so failures don't break the core graph
+    fetchGraphAnchors(user.id, 200)
+      .then(data => { if (!cancelled) setAllGraphAnchors(data) })
+      .catch(err => console.warn('PlaylistGraphView anchor fetch error:', err))
+
+    fetchGraphSkills(user.id, 50)
+      .then(data => { if (!cancelled) setAllGraphSkills(data) })
+      .catch(err => console.warn('PlaylistGraphView skill fetch error:', err))
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
