@@ -928,8 +928,8 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     x1={center.x} y1={center.y}
                     x2={vPos.x} y2={vPos.y}
                     stroke={color}
-                    strokeWidth={1.2}
-                    strokeOpacity={0.18}
+                    strokeWidth={0.8}
+                    strokeOpacity={0.06}
                   />
                 )
               })
@@ -950,14 +950,14 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
 
               // Cross-cluster edges are thicker and more visible; intra-cluster are subtler
               const baseWidth = edge.isCrossCluster
-                ? 0.8 + weightNorm * 1.5
-                : 0.4 + weightNorm * 0.8
-              const baseOpacity = edge.isCrossCluster ? 0.15 : 0.07
+                ? 0.5 + weightNorm * 0.8
+                : 0.3 + weightNorm * 0.4
+              const baseOpacity = edge.isCrossCluster ? 0.04 : 0.02
 
               // When hovering, highlighted edges pop, others fade
               let stroke = 'rgba(120,130,145,1)'
               let strokeWidth = baseWidth
-              let strokeOpacity = hasHover ? 0.03 : baseOpacity
+              let strokeOpacity = hasHover ? 0.01 : baseOpacity
 
               if (isHighlighted) {
                 stroke = edge.isCrossCluster ? 'var(--color-accent-500)' : playlistColorMap.get(sourceToPlaylist.get(edge.fromSourceId)!) ?? 'var(--color-accent-500)'
@@ -1024,21 +1024,24 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                         <circle r={r} fill={`${color}20`} stroke={color} strokeWidth={1.5} />
                       </g>
 
-                      <text
-                        y={r + 10}
-                        textAnchor="middle"
-                        style={{
-                          fontFamily: 'var(--font-body)',
-                          fontSize: 10,
-                          fontWeight: isHovered ? 600 : 500,
-                          fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                          transition: 'fill 0.15s ease',
-                        }}
-                      >
-                        {label}
-                      </text>
+                      {/* Label only on hover, selected, or zoomed in */}
+                      {(isHovered || isExploring || camera.zoom > 1.5) && (
+                        <text
+                          y={r + 10}
+                          textAnchor="middle"
+                          style={{
+                            fontFamily: 'var(--font-body)',
+                            fontSize: 10,
+                            fontWeight: isHovered ? 600 : 500,
+                            fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                            pointerEvents: 'none',
+                            userSelect: 'none',
+                            transition: 'fill 0.15s ease',
+                          }}
+                        >
+                          {label}
+                        </text>
+                      )}
                     </g>
                   </g>
                 )
@@ -1134,8 +1137,8 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     x1={hexPos.x} y1={hexPos.y}
                     x2={vPos.x} y2={vPos.y}
                     stroke={ANCHOR_COLOR}
-                    strokeWidth={highlight ? 1.5 : 1.5}
-                    strokeOpacity={highlight ? 0.55 : 0.30}
+                    strokeWidth={highlight ? 1.5 : 0.8}
+                    strokeOpacity={highlight ? 0.45 : 0.10}
                     strokeDasharray="3,3"
                     filter={highlight ? 'url(#glow-amber)' : undefined}
                     style={{ transition: 'stroke-opacity 0.15s ease' }}
@@ -1165,8 +1168,8 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     x1={hexPos.x} y1={hexPos.y}
                     x2={vPos.x} y2={vPos.y}
                     stroke={SKILL_COLOR}
-                    strokeWidth={highlight ? 1.5 : 1.5}
-                    strokeOpacity={highlight ? 0.55 : 0.30}
+                    strokeWidth={highlight ? 1.5 : 0.8}
+                    strokeOpacity={highlight ? 0.45 : 0.10}
                     strokeDasharray="3,3"
                     filter={highlight ? 'url(#glow-teal)' : undefined}
                     style={{ transition: 'stroke-opacity 0.15s ease' }}
