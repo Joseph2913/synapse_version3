@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections, PlaylistNode, PlaylistEdge, PlaylistVideoNode, PlaylistVideoEdge } from '../types/explore'
+import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections, PlaylistNode, PlaylistEdge, PlaylistVideoNode, PlaylistVideoEdge, PlaylistGraphAnchor, PlaylistGraphSkill } from '../types/explore'
 
 // ─── fetchClusterData (via Supabase RPC) ──────────────────────────────────────
 // Cluster summaries are computed server-side in Postgres (get_cluster_summaries).
@@ -845,4 +845,149 @@ export async function fetchPlaylistGraph(userId: string): Promise<PlaylistGraphR
     videos: result.videos ?? [],
     videoEdges: result.videoEdges ?? [],
   }
+}
+
+// ─── fetchGraphAnchors ──────────────────────────────────────────────────────
+// Fetch top N confirmed anchors with connected source IDs for the playlist graph.
+
+export async function fetchGraphAnchors(userId: string, limit: number): Promise<PlaylistGraphAnchor[]> {
+  // 1. Get top confirmed anchors by composite score
+  const { data: candidates, error: candErr } = await supabase
+    .from('anchor_candidates')
+    .select(`
+      id,
+      node_id,
+      composite_score,
+      knowledge_nodes!inner (
+        id, label, entity_type, description
+      )
+    `)
+    .eq('user_id', userId)
+    .eq('status', 'confirmed')
+    .order('composite_score', { ascending: false })
+    .limit(limit)
+
+  if (candErr) throw new Error(candErr.message)
+  if (!candidates || candidates.length === 0) return []
+
+  // 2. For each anchor's node_id, find connected source IDs via edges
+  const nodeIds = candidates.map((c: Record<string, unknown>) => (c.node_id as string))
+
+  // Get all edges involving these anchor nodes
+  const { data: edges, error: edgeErr } = await supabase
+    .from('knowledge_edges')
+    .select('source_node_id, target_node_id')
+    .eq('user_id', userId)
+    .or(`source_node_id.in.(${nodeIds.join(',')}),target_node_id.in.(${nodeIds.join(',')})`)
+
+  if (edgeErr) throw new Error(edgeErr.message)
+
+  // Build nodeId → set of connected entity IDs
+  const nodeIdSet = new Set(nodeIds)
+  const anchorToEntityIds = new Map<string, Set<string>>()
+  for (const nid of nodeIds) anchorToEntityIds.set(nid, new Set())
+
+  for (const e of edges ?? []) {
+    const src = e.source_node_id as string
+    const tgt = e.target_node_id as string
+    if (nodeIdSet.has(src) && !nodeIdSet.has(tgt)) {
+      anchorToEntityIds.get(src)!.add(tgt)
+    }
+    if (nodeIdSet.has(tgt) && !nodeIdSet.has(src)) {
+      anchorToEntityIds.get(tgt)!.add(src)
+    }
+  }
+
+  // 3. Resolve entity IDs → source IDs
+  const allEntityIds = new Set<string>()
+  for (const set of anchorToEntityIds.values()) {
+    for (const eid of set) allEntityIds.add(eid)
+  }
+
+  // Batch fetch source_id for all connected entities
+  const entityIdArray = Array.from(allEntityIds)
+  const entityToSource = new Map<string, string>()
+
+  // Fetch in batches of 500 to avoid URL length limits
+  for (let i = 0; i < entityIdArray.length; i += 500) {
+    const batch = entityIdArray.slice(i, i + 500)
+    const { data: entityRows, error: entityErr } = await supabase
+      .from('knowledge_nodes')
+      .select('id, source_id')
+      .in('id', batch)
+
+    if (entityErr) throw new Error(entityErr.message)
+    for (const row of entityRows ?? []) {
+      const r = row as { id: string; source_id: string | null }
+      if (r.source_id) entityToSource.set(r.id, r.source_id)
+    }
+  }
+
+  // Build final result
+  return candidates.map((c: Record<string, unknown>) => {
+    const node = c.knowledge_nodes as { id: string; label: string; entity_type: string; description: string | null }
+    const entityIds = anchorToEntityIds.get(c.node_id as string) ?? new Set<string>()
+    const sourceIds = new Set<string>()
+    for (const eid of entityIds) {
+      const sid = entityToSource.get(eid)
+      if (sid) sourceIds.add(sid)
+    }
+
+    return {
+      id: c.id as string,
+      nodeId: c.node_id as string,
+      label: node.label,
+      entityType: node.entity_type,
+      description: node.description,
+      compositeScore: (c.composite_score as number) ?? 0,
+      entityCount: entityIds.size,
+      connectedSourceIds: Array.from(sourceIds),
+    }
+  })
+}
+
+// ─── fetchGraphSkills ───────────────────────────────────────────────────────
+// Fetch top N active skills ranked by relevance for the playlist graph.
+
+export async function fetchGraphSkills(userId: string, limit: number): Promise<PlaylistGraphSkill[]> {
+  const { data, error } = await supabase
+    .from('knowledge_skills')
+    .select('id, name, title, description, domain, confidence, source_ids, usage_count, source_count, tags')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) return []
+
+  // Compute relevance scores
+  const maxUsage = Math.max(...data.map((s: Record<string, unknown>) => (s.usage_count as number) ?? 0), 1)
+  const maxSources = Math.max(...data.map((s: Record<string, unknown>) => (s.source_count as number) ?? 0), 1)
+
+  const scored = data.map((s: Record<string, unknown>) => {
+    const confidence = (s.confidence as number) ?? 0
+    const usageCount = (s.usage_count as number) ?? 0
+    const sourceCount = (s.source_count as number) ?? 0
+    const relevanceScore =
+      confidence * 0.4 +
+      (usageCount / maxUsage) * 0.3 +
+      (sourceCount / maxSources) * 0.3
+
+    return {
+      id: s.id as string,
+      name: s.name as string,
+      title: s.title as string,
+      description: (s.description as string) ?? '',
+      domain: (s.domain as string | null),
+      confidence,
+      sourceIds: (s.source_ids as string[]) ?? [],
+      usageCount,
+      sourceCount,
+      tags: (s.tags as string[]) ?? [],
+      relevanceScore,
+    }
+  })
+
+  // Sort by relevance and take top N
+  scored.sort((a, b) => b.relevanceScore - a.relevanceScore)
+  return scored.slice(0, limit)
 }
