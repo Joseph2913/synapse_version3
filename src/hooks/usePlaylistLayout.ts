@@ -119,8 +119,8 @@ export function usePlaylistLayout(
           const dx = b.x - a.x
           const dy = b.y - a.y
           const dist = Math.sqrt(dx * dx + dy * dy) || 0.1
-          const minDist = (a.r + b.r) * 1.05
-          const repulsion = Math.max(0, (minDist - dist)) * 0.22 * alpha
+          const minDist = (a.r + b.r) * 1.25
+          const repulsion = Math.max(0, (minDist - dist)) * 0.28 * alpha
 
           if (repulsion > 0) {
             const nx = dx / dist

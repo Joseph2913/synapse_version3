@@ -80,25 +80,36 @@ export function useHexagonLayout(
       positions.push({ id: node.id, x, y, radius: hexRadius, kind: node.kind })
     }
 
-    // Step 2: Push outside cluster boundaries
-    for (const pos of positions) {
-      for (const cluster of clusterCenters) {
-        const dx = pos.x - cluster.x
-        const dy = pos.y - cluster.y
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        const minDist = cluster.radius + pos.radius + 20
+    // Steps 2 & 3: Iterative push outside cluster boundaries + hex-hex repulsion
+    // Run multiple passes so fixing one overlap doesn't push into another cluster
+    const MIN_SEP = 20
+    const CLUSTER_PAD = 15 // extra padding beyond cluster radius
 
-        if (dist < minDist && dist > 0) {
-          const push = (minDist - dist) / dist
-          pos.x += dx * push
-          pos.y += dy * push
+    for (let iter = 0; iter < 20; iter++) {
+      // Push outside ALL cluster boundaries
+      for (const pos of positions) {
+        for (const cluster of clusterCenters) {
+          const dx = pos.x - cluster.x
+          const dy = pos.y - cluster.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          const minDist = cluster.radius + pos.radius + CLUSTER_PAD
+
+          if (dist < minDist) {
+            if (dist < 0.1) {
+              // Dead center — push in a deterministic direction
+              const angle = hashAngle(pos.id + cluster.id)
+              pos.x = cluster.x + Math.cos(angle) * minDist
+              pos.y = cluster.y + Math.sin(angle) * minDist
+            } else {
+              const push = (minDist - dist) / dist
+              pos.x += dx * push
+              pos.y += dy * push
+            }
+          }
         }
       }
-    }
 
-    // Step 3: Repulsion between hexagons (10 iterations)
-    const MIN_SEP = 40
-    for (let iter = 0; iter < 10; iter++) {
+      // Hex-hex repulsion
       for (let i = 0; i < positions.length; i++) {
         for (let j = i + 1; j < positions.length; j++) {
           const a = positions[i]!
