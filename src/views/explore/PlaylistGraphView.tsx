@@ -208,6 +208,37 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
   // Global max entity count for consistent video sizing
   const maxEntityCount = useMemo(() => Math.max(...videos.map(v => v.entityCount), 1), [videos])
 
+  // Progressive label density: at lower zoom show only top sources by entity count,
+  // at higher zoom progressively reveal more labels
+  const labelVisibleIds = useMemo(() => {
+    if (videos.length === 0) return new Set<string>()
+
+    // Zoom thresholds → fraction of labels to show
+    // Below 1.5: no labels (handled in render by hover/selected check)
+    // 1.5-2.0: top 10%
+    // 2.0-2.5: top 25%
+    // 2.5-3.0: top 50%
+    // 3.0+: all labels
+    let fraction: number
+    if (camera.zoom < 1.5) fraction = 0
+    else if (camera.zoom < 2.0) fraction = 0.10
+    else if (camera.zoom < 2.5) fraction = 0.25
+    else if (camera.zoom < 3.0) fraction = 0.50
+    else fraction = 1.0
+
+    if (fraction === 0) return new Set<string>()
+    if (fraction === 1.0) return new Set(videos.map(v => v.sourceId))
+
+    // Sort by entity count descending, take top fraction
+    const sorted = [...videos].sort((a, b) => b.entityCount - a.entityCount)
+    const count = Math.max(1, Math.ceil(sorted.length * fraction))
+    const ids = new Set<string>()
+    for (let i = 0; i < count && i < sorted.length; i++) {
+      ids.add(sorted[i]!.sourceId)
+    }
+    return ids
+  }, [videos, camera.zoom])
+
   // ─── Compute all video positions around their playlist centers ──────────────
 
   const videoPositions = useMemo(() => {
@@ -1023,19 +1054,19 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                         <circle r={r} fill={`${color}20`} stroke={color} strokeWidth={1.5} />
                       </g>
 
-                      {/* Label only on hover, selected, or zoomed in */}
-                      {(isHovered || isExploring || camera.zoom > 1.5) && (
+                      {/* Label: always on hover/selected, progressive density when zoomed */}
+                      {(isHovered || isExploring || labelVisibleIds.has(video.sourceId)) && (
                         <text
                           y={r + 10}
                           textAnchor="middle"
                           style={{
                             fontFamily: 'var(--font-body)',
-                            fontSize: 10,
-                            fontWeight: isHovered ? 600 : 500,
-                            fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                            fontSize: 8,
+                            fontWeight: isHovered ? 600 : 400,
+                            fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-tertiary, var(--color-text-secondary))',
                             pointerEvents: 'none',
                             userSelect: 'none',
-                            transition: 'fill 0.15s ease',
+                            opacity: isHovered || isExploring ? 1 : 0.7,
                           }}
                         >
                           {label}
