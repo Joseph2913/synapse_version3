@@ -847,115 +847,39 @@ export async function fetchPlaylistGraph(userId: string): Promise<PlaylistGraphR
   }
 }
 
-// ─── fetchGraphAnchors ──────────────────────────────────────────────────────
-// Fetch top N confirmed anchors with connected source IDs for the playlist graph.
+// ─── fetchGraphAnchors (via Supabase RPC) ───────────────────────────────────
+// Anchor-to-source resolution happens server-side in Postgres for performance.
+// See: supabase/migrations/20260417_get_graph_anchors.sql
 
 export async function fetchGraphAnchors(userId: string, limit: number): Promise<PlaylistGraphAnchor[]> {
-  // 1. Get top confirmed anchors by composite score (no join — PostgREST FK detection issues)
-  const { data: candidates, error: candErr } = await supabase
-    .from('anchor_candidates')
-    .select('id, node_id, composite_score')
-    .eq('user_id', userId)
-    .eq('status', 'confirmed')
-    .order('composite_score', { ascending: false })
-    .limit(limit)
+  const { data, error } = await supabase.rpc('get_graph_anchors', {
+    p_user_id: userId,
+    p_limit: limit,
+  })
 
-  if (candErr) throw new Error(candErr.message)
-  if (!candidates || candidates.length === 0) return []
+  if (error) throw new Error(error.message)
 
-  // 2. Fetch node data separately for all node_ids
-  const nodeIds = candidates
-    .map((c: Record<string, unknown>) => c.node_id as string)
-    .filter((id): id is string => id !== null)
+  const rows = (data as Array<{
+    id: string
+    nodeId: string
+    compositeScore: number
+    label: string
+    entityType: string
+    description: string | null
+    entityCount: number
+    connectedSourceIds: string[]
+  }>) ?? []
 
-  if (nodeIds.length === 0) return []
-
-  const { data: nodeRows, error: nodeErr } = await supabase
-    .from('knowledge_nodes')
-    .select('id, label, entity_type, description')
-    .in('id', nodeIds)
-
-  if (nodeErr) throw new Error(nodeErr.message)
-
-  const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description: string | null }>()
-  for (const n of nodeRows ?? []) {
-    const node = n as { id: string; label: string; entity_type: string; description: string | null }
-    nodeMap.set(node.id, node)
-  }
-
-  // 3. For each anchor's node_id, find connected source IDs via edges
-  const { data: edges, error: edgeErr } = await supabase
-    .from('knowledge_edges')
-    .select('source_node_id, target_node_id')
-    .eq('user_id', userId)
-    .or(`source_node_id.in.(${nodeIds.join(',')}),target_node_id.in.(${nodeIds.join(',')})`)
-
-  if (edgeErr) throw new Error(edgeErr.message)
-
-  // Build nodeId → set of connected entity IDs
-  const nodeIdSet = new Set(nodeIds)
-  const anchorToEntityIds = new Map<string, Set<string>>()
-  for (const nid of nodeIds) anchorToEntityIds.set(nid, new Set())
-
-  for (const e of edges ?? []) {
-    const src = e.source_node_id as string
-    const tgt = e.target_node_id as string
-    if (nodeIdSet.has(src) && !nodeIdSet.has(tgt)) {
-      anchorToEntityIds.get(src)!.add(tgt)
-    }
-    if (nodeIdSet.has(tgt) && !nodeIdSet.has(src)) {
-      anchorToEntityIds.get(tgt)!.add(src)
-    }
-  }
-
-  // 4. Resolve entity IDs → source IDs
-  const allEntityIds = new Set<string>()
-  for (const set of anchorToEntityIds.values()) {
-    for (const eid of set) allEntityIds.add(eid)
-  }
-
-  const entityIdArray = Array.from(allEntityIds)
-  const entityToSource = new Map<string, string>()
-
-  // Fetch in batches of 500 to avoid URL length limits
-  for (let i = 0; i < entityIdArray.length; i += 500) {
-    const batch = entityIdArray.slice(i, i + 500)
-    const { data: entityRows, error: entityErr } = await supabase
-      .from('knowledge_nodes')
-      .select('id, source_id')
-      .in('id', batch)
-
-    if (entityErr) throw new Error(entityErr.message)
-    for (const row of entityRows ?? []) {
-      const r = row as { id: string; source_id: string | null }
-      if (r.source_id) entityToSource.set(r.id, r.source_id)
-    }
-  }
-
-  // Build final result
-  return candidates
-    .map((c: Record<string, unknown>) => {
-      const node = nodeMap.get(c.node_id as string)
-      if (!node) return null
-      const entityIds = anchorToEntityIds.get(c.node_id as string) ?? new Set<string>()
-      const sourceIds = new Set<string>()
-      for (const eid of entityIds) {
-        const sid = entityToSource.get(eid)
-        if (sid) sourceIds.add(sid)
-      }
-
-      return {
-        id: c.id as string,
-        nodeId: c.node_id as string,
-        label: node.label,
-        entityType: node.entity_type,
-        description: node.description,
-        compositeScore: (c.composite_score as number) ?? 0,
-        entityCount: entityIds.size,
-        connectedSourceIds: Array.from(sourceIds),
-      }
-    })
-    .filter((a): a is PlaylistGraphAnchor => a !== null)
+  return rows.map(r => ({
+    id: r.id,
+    nodeId: r.nodeId,
+    label: r.label,
+    entityType: r.entityType,
+    description: r.description,
+    compositeScore: r.compositeScore ?? 0,
+    entityCount: r.entityCount ?? 0,
+    connectedSourceIds: r.connectedSourceIds ?? [],
+  }))
 }
 
 // ─── fetchGraphSkills ───────────────────────────────────────────────────────
