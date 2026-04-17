@@ -158,7 +158,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
   const [allGraphSkills, setAllGraphSkills] = useState<PlaylistGraphSkill[]>([])
   const [showAnchors, setShowAnchors] = useState(true)
   const [showSkills, setShowSkills] = useState(true)
-  const [anchorLimit, setAnchorLimit] = useState(50)
+  const [anchorLimit, setAnchorLimit] = useState(30)
   const [skillLimit, setSkillLimit] = useState(15)
   // Client-side filtered anchors/skills based on slider limits
   const graphAnchors = useMemo(() => allGraphAnchors.slice(0, anchorLimit), [allGraphAnchors, anchorLimit])
