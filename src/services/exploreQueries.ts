@@ -851,17 +851,10 @@ export async function fetchPlaylistGraph(userId: string): Promise<PlaylistGraphR
 // Fetch top N confirmed anchors with connected source IDs for the playlist graph.
 
 export async function fetchGraphAnchors(userId: string, limit: number): Promise<PlaylistGraphAnchor[]> {
-  // 1. Get top confirmed anchors by composite score
+  // 1. Get top confirmed anchors by composite score (no join — PostgREST FK detection issues)
   const { data: candidates, error: candErr } = await supabase
     .from('anchor_candidates')
-    .select(`
-      id,
-      node_id,
-      composite_score,
-      knowledge_nodes!inner (
-        id, label, entity_type, description
-      )
-    `)
+    .select('id, node_id, composite_score')
     .eq('user_id', userId)
     .eq('status', 'confirmed')
     .order('composite_score', { ascending: false })
@@ -870,10 +863,27 @@ export async function fetchGraphAnchors(userId: string, limit: number): Promise<
   if (candErr) throw new Error(candErr.message)
   if (!candidates || candidates.length === 0) return []
 
-  // 2. For each anchor's node_id, find connected source IDs via edges
-  const nodeIds = candidates.map((c: Record<string, unknown>) => (c.node_id as string))
+  // 2. Fetch node data separately for all node_ids
+  const nodeIds = candidates
+    .map((c: Record<string, unknown>) => c.node_id as string)
+    .filter((id): id is string => id !== null)
 
-  // Get all edges involving these anchor nodes
+  if (nodeIds.length === 0) return []
+
+  const { data: nodeRows, error: nodeErr } = await supabase
+    .from('knowledge_nodes')
+    .select('id, label, entity_type, description')
+    .in('id', nodeIds)
+
+  if (nodeErr) throw new Error(nodeErr.message)
+
+  const nodeMap = new Map<string, { id: string; label: string; entity_type: string; description: string | null }>()
+  for (const n of nodeRows ?? []) {
+    const node = n as { id: string; label: string; entity_type: string; description: string | null }
+    nodeMap.set(node.id, node)
+  }
+
+  // 3. For each anchor's node_id, find connected source IDs via edges
   const { data: edges, error: edgeErr } = await supabase
     .from('knowledge_edges')
     .select('source_node_id, target_node_id')
@@ -898,13 +908,12 @@ export async function fetchGraphAnchors(userId: string, limit: number): Promise<
     }
   }
 
-  // 3. Resolve entity IDs → source IDs
+  // 4. Resolve entity IDs → source IDs
   const allEntityIds = new Set<string>()
   for (const set of anchorToEntityIds.values()) {
     for (const eid of set) allEntityIds.add(eid)
   }
 
-  // Batch fetch source_id for all connected entities
   const entityIdArray = Array.from(allEntityIds)
   const entityToSource = new Map<string, string>()
 
@@ -924,26 +933,29 @@ export async function fetchGraphAnchors(userId: string, limit: number): Promise<
   }
 
   // Build final result
-  return candidates.map((c: Record<string, unknown>) => {
-    const node = c.knowledge_nodes as { id: string; label: string; entity_type: string; description: string | null }
-    const entityIds = anchorToEntityIds.get(c.node_id as string) ?? new Set<string>()
-    const sourceIds = new Set<string>()
-    for (const eid of entityIds) {
-      const sid = entityToSource.get(eid)
-      if (sid) sourceIds.add(sid)
-    }
+  return candidates
+    .map((c: Record<string, unknown>) => {
+      const node = nodeMap.get(c.node_id as string)
+      if (!node) return null
+      const entityIds = anchorToEntityIds.get(c.node_id as string) ?? new Set<string>()
+      const sourceIds = new Set<string>()
+      for (const eid of entityIds) {
+        const sid = entityToSource.get(eid)
+        if (sid) sourceIds.add(sid)
+      }
 
-    return {
-      id: c.id as string,
-      nodeId: c.node_id as string,
-      label: node.label,
-      entityType: node.entity_type,
-      description: node.description,
-      compositeScore: (c.composite_score as number) ?? 0,
-      entityCount: entityIds.size,
-      connectedSourceIds: Array.from(sourceIds),
-    }
-  })
+      return {
+        id: c.id as string,
+        nodeId: c.node_id as string,
+        label: node.label,
+        entityType: node.entity_type,
+        description: node.description,
+        compositeScore: (c.composite_score as number) ?? 0,
+        entityCount: entityIds.size,
+        connectedSourceIds: Array.from(sourceIds),
+      }
+    })
+    .filter((a): a is PlaylistGraphAnchor => a !== null)
 }
 
 // ─── fetchGraphSkills ───────────────────────────────────────────────────────
