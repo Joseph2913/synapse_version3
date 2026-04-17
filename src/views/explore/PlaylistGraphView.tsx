@@ -153,12 +153,16 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
   const [legendOpen, setLegendOpen] = useState(false)
 
   // Anchor & skill integration
-  const [graphAnchors, setGraphAnchors] = useState<PlaylistGraphAnchor[]>([])
-  const [graphSkills, setGraphSkills] = useState<PlaylistGraphSkill[]>([])
+  const [allGraphAnchors, setAllGraphAnchors] = useState<PlaylistGraphAnchor[]>([])
+  const [allGraphSkills, setAllGraphSkills] = useState<PlaylistGraphSkill[]>([])
   const [showAnchors, setShowAnchors] = useState(true)
   const [showSkills, setShowSkills] = useState(true)
   const [anchorLimit, setAnchorLimit] = useState(50)
   const [skillLimit, setSkillLimit] = useState(15)
+  // Client-side filtered anchors/skills based on slider limits
+  const graphAnchors = useMemo(() => allGraphAnchors.slice(0, anchorLimit), [allGraphAnchors, anchorLimit])
+  const graphSkills = useMemo(() => allGraphSkills.slice(0, skillLimit), [allGraphSkills, skillLimit])
+
   const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null)
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null)
@@ -562,8 +566,8 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     Promise.all([
       fetchPlaylistGraph(user.id),
       fetchSourceGraph(user.id),
-      fetchGraphAnchors(user.id, anchorLimit),
-      fetchGraphSkills(user.id, skillLimit),
+      fetchGraphAnchors(user.id, 200),
+      fetchGraphSkills(user.id, 50),
     ])
       .then(([playlistData, sourceData, anchorData, skillData]) => {
         if (cancelled) return
@@ -628,13 +632,14 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         setPlaylists(prev => [...prev, ...virtualPlaylists])
         setVideos([...playlistData.videos, ...virtualVideos])
         setVideoEdges([...playlistData.videoEdges, ...sourceEdgesAsVideoEdges])
-        setGraphAnchors(anchorData)
-        setGraphSkills(skillData)
+        setAllGraphAnchors(anchorData)
+        setAllGraphSkills(skillData)
       })
       .catch(err => console.warn('PlaylistGraphView fetch error:', err))
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [user, anchorLimit, skillLimit])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
 
   // Auto-select source from URL param (e.g. navigating from Home → Graph button)
   const hasAutoSelectedRef = useRef(false)
@@ -1018,7 +1023,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                         textAnchor="middle"
                         style={{
                           fontFamily: 'var(--font-body)',
-                          fontSize: 7,
+                          fontSize: 10,
                           fontWeight: isHovered ? 600 : 500,
                           fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
                           pointerEvents: 'none',
@@ -1115,16 +1120,18 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                 const vStatic = videoPositions.get(sid)
                 const vPos = vLive ?? vStatic
                 if (!vPos) return null
+                const isSourceHovered = hoveredVideoId === sid
+                const highlight = isHex || isSourceHovered
                 return (
                   <line
                     key={`ae-${hex.id}-${sid}`}
                     x1={hexPos.x} y1={hexPos.y}
                     x2={vPos.x} y2={vPos.y}
                     stroke={ANCHOR_COLOR}
-                    strokeWidth={isHex ? 1.5 : 0.8}
-                    strokeOpacity={isHex ? 0.5 : 0.12}
-                    strokeDasharray="4 3"
-                    filter={isHex ? 'url(#glow-amber)' : undefined}
+                    strokeWidth={highlight ? 1.5 : 1.5}
+                    strokeOpacity={highlight ? 0.55 : 0.30}
+                    strokeDasharray="3,3"
+                    filter={highlight ? 'url(#glow-amber)' : undefined}
                     style={{ transition: 'stroke-opacity 0.15s ease' }}
                   />
                 )
@@ -1144,16 +1151,18 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                 const vStatic = videoPositions.get(sid)
                 const vPos = vLive ?? vStatic
                 if (!vPos) return null
+                const isSourceHovered = hoveredVideoId === sid
+                const highlight = isHex || isSourceHovered
                 return (
                   <line
                     key={`se-${hex.id}-${sid}`}
                     x1={hexPos.x} y1={hexPos.y}
                     x2={vPos.x} y2={vPos.y}
                     stroke={SKILL_COLOR}
-                    strokeWidth={isHex ? 1.5 : 0.8}
-                    strokeOpacity={isHex ? 0.5 : 0.12}
-                    strokeDasharray="4 3"
-                    filter={isHex ? 'url(#glow-teal)' : undefined}
+                    strokeWidth={highlight ? 1.5 : 1.5}
+                    strokeOpacity={highlight ? 0.55 : 0.30}
+                    strokeDasharray="3,3"
+                    filter={highlight ? 'url(#glow-teal)' : undefined}
                     style={{ transition: 'stroke-opacity 0.15s ease' }}
                   />
                 )
@@ -1183,6 +1192,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                   style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
                 >
                   <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    <g transform={`scale(${isHovered ? 1.08 : 1})`} style={{ transition: 'transform 0.15s ease' }}>
                     {/* Glow ring on hover/selected */}
                     {(isHovered || isSelected) && (
                       <path
@@ -1195,19 +1205,20 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     )}
                     <path
                       d={hexagonPath(hex.radius)}
-                      fill={`${ANCHOR_COLOR}10`}
+                      fill={`${ANCHOR_COLOR}12`}
                       stroke={ANCHOR_COLOR}
-                      strokeWidth={1.5}
+                      strokeWidth={2}
                       strokeDasharray={isSelected ? 'none' : '4 2'}
                     />
                     {/* Entity type color dot center */}
                     <circle r={4} fill={entityColor} opacity={0.8} />
+                    </g>
                     <text
                       y={hex.radius + 12}
                       textAnchor="middle"
                       style={{
                         fontFamily: 'var(--font-body)',
-                        fontSize: 7,
+                        fontSize: 10,
                         fontWeight: isHovered ? 600 : 500,
                         fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : ANCHOR_COLOR,
                         pointerEvents: 'none',
@@ -1244,6 +1255,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                   style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
                 >
                   <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    <g transform={`scale(${isHovered ? 1.08 : 1})`} style={{ transition: 'transform 0.15s ease' }}>
                     {(isHovered || isSelected) && (
                       <path
                         d={hexagonPath(hex.radius + 4)}
@@ -1255,9 +1267,9 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     )}
                     <path
                       d={hexagonPath(hex.radius)}
-                      fill={`${SKILL_COLOR}10`}
+                      fill={`${SKILL_COLOR}12`}
                       stroke={SKILL_COLOR}
-                      strokeWidth={1.5}
+                      strokeWidth={2}
                       strokeDasharray={isSelected ? 'none' : '4 2'}
                     />
                     {/* Sparkle icon center */}
@@ -1266,12 +1278,13 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                         <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill={SKILL_COLOR} opacity={0.7} />
                       </svg>
                     </g>
+                    </g>
                     <text
                       y={hex.radius + 12}
                       textAnchor="middle"
                       style={{
                         fontFamily: 'var(--font-body)',
-                        fontSize: 7,
+                        fontSize: 10,
                         fontWeight: isHovered ? 600 : 500,
                         fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : SKILL_COLOR,
                         pointerEvents: 'none',
@@ -1470,10 +1483,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
             onClick={() => setShowAnchors(prev => !prev)}
             className="flex items-center gap-1.5 cursor-pointer"
             style={{
-              padding: '4px 10px', borderRadius: 20,
-              fontSize: 11, fontFamily: 'var(--font-body)', fontWeight: 600,
-              background: showAnchors ? `${ANCHOR_COLOR}15` : 'transparent',
-              border: `1px solid ${showAnchors ? `${ANCHOR_COLOR}30` : 'var(--border-subtle)'}`,
+              padding: '5px 13px', borderRadius: 20,
+              fontSize: 12, fontFamily: 'var(--font-body)', fontWeight: 600,
+              background: showAnchors ? '#fef3c7' : 'transparent',
+              border: `1px solid ${showAnchors ? 'rgba(217,119,6,0.15)' : 'var(--border-subtle)'}`,
               color: showAnchors ? ANCHOR_COLOR : 'var(--color-text-secondary)',
             }}
           >
@@ -1485,10 +1498,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
             onClick={() => setShowSkills(prev => !prev)}
             className="flex items-center gap-1.5 cursor-pointer"
             style={{
-              padding: '4px 10px', borderRadius: 20,
-              fontSize: 11, fontFamily: 'var(--font-body)', fontWeight: 600,
-              background: showSkills ? `${SKILL_COLOR}15` : 'transparent',
-              border: `1px solid ${showSkills ? `${SKILL_COLOR}30` : 'var(--border-subtle)'}`,
+              padding: '5px 13px', borderRadius: 20,
+              fontSize: 12, fontFamily: 'var(--font-body)', fontWeight: 600,
+              background: showSkills ? '#cffafe' : 'transparent',
+              border: `1px solid ${showSkills ? 'rgba(8,145,178,0.15)' : 'var(--border-subtle)'}`,
               color: showSkills ? SKILL_COLOR : 'var(--color-text-secondary)',
             }}
           >
@@ -1499,7 +1512,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         {showAnchors && (
           <div className="flex items-center gap-2">
             <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: ANCHOR_COLOR, fontWeight: 600, minWidth: 52 }}>
-              Anchors ({anchorLimit})
+              Top {anchorLimit} anchors
             </span>
             <input
               type="range"
@@ -1513,7 +1526,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         {showSkills && (
           <div className="flex items-center gap-2">
             <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: SKILL_COLOR, fontWeight: 600, minWidth: 52 }}>
-              Skills ({skillLimit})
+              Top {skillLimit} skills
             </span>
             <input
               type="range"
