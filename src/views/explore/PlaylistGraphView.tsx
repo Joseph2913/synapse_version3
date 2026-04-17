@@ -754,6 +754,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     const el = containerRef.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
+      // Don't zoom when scrolling inside a detail panel
+      const target = e.target as HTMLElement
+      if (target.closest('[data-panel]')) return
+
       e.preventDefault()
       const svg = svgRef.current
       if (!svg) return
@@ -1445,7 +1449,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
       {/* Right-side detail panel: anchor */}
       {selectedAnchorData && (
         <div
-          onWheel={e => e.stopPropagation()}
+          data-panel
           style={{ position: 'absolute', top: 0, right: 0, width: 340, height: '100%', zIndex: 40, overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}
         >
           <AnchorDetailPanel

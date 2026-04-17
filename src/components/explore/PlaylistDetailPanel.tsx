@@ -93,6 +93,7 @@ export function PlaylistDetailPanel({
   return (
     <div
       ref={panelRef}
+      data-panel
       style={{
         position: 'absolute', top: 0, right: 0, bottom: 0, width: PANEL_WIDTH,
         background: 'rgba(255,255,255,0.97)', backdropFilter: 'blur(20px)',
