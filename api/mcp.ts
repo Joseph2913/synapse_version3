@@ -800,7 +800,7 @@ async function handleAskSynapse(
   const [semanticChunksResult, keywordNodesResult, relationshipsResult] = await Promise.all([
     // Semantic search on source chunks
     sb.rpc('match_source_chunks', {
-      query_embedding: JSON.stringify(embedding),
+      query_embedding: embedding,
       match_threshold: retrievalType === 'synthesis' ? Math.min(matchThreshold, 0.25) : matchThreshold,
       match_count: isSourceScoped ? maxResults * 3 : (retrievalType === 'synthesis' ? maxResults * 2 : maxResults),
       p_user_id: userId,
@@ -1062,7 +1062,7 @@ async function handleSearchEntities(
   try {
     const embedding = await embedText(params.query)
     const rpcParams: Record<string, unknown> = {
-      query_embedding: JSON.stringify(embedding),
+      query_embedding: embedding,
       match_threshold: 0.3,
       match_count: params.source_id ? limit * 3 : limit, // fetch more if filtering
       p_user_id: userId,
@@ -2489,7 +2489,7 @@ async function handleSearchSkills(
 
     // Use raw SQL via rpc to do cosine similarity with the user_id filter
     const { data, error } = await sb.rpc('match_skills_for_user', {
-      query_embedding: JSON.stringify(embedding),
+      query_embedding: embedding,
       match_count: maxResults,
       match_threshold: 0.3,
       p_user_id: userId,
