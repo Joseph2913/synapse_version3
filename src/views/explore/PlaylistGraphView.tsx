@@ -6,8 +6,9 @@ import { fetchPlaylistGraph, fetchSourceGraph, fetchGraphAnchors, fetchGraphSkil
 import { useHexagonLayout } from '../../hooks/useHexagonLayout'
 import { SourceDetailCard } from '../../components/explore/SourceDetailCard'
 import { PlaylistDetailPanel } from '../../components/explore/PlaylistDetailPanel'
-import { PlaylistAnchorPanel } from './PlaylistAnchorPanel'
+import { AnchorDetailPanel } from '../../components/anchors/AnchorDetailPanel'
 import { PlaylistSkillPanel } from './PlaylistSkillPanel'
+import { fetchSingleCandidateWithNode } from '../../services/anchorCandidates'
 import { getSourceConfig } from '../../config/sourceTypes'
 import type {
   PlaylistNode,
@@ -17,6 +18,7 @@ import type {
   PlaylistGraphAnchor,
   PlaylistGraphSkill,
 } from '../../types/explore'
+import type { AnchorCandidateWithNode } from '../../types/anchors'
 
 const MIN_ZOOM = 0.08
 const MAX_ZOOM = 6.0
@@ -163,6 +165,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
   const graphSkills = useMemo(() => allGraphSkills.slice(0, skillLimit), [allGraphSkills, skillLimit])
 
   const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
+  const [selectedAnchorData, setSelectedAnchorData] = useState<AnchorCandidateWithNode | null>(null)
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null)
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null)
 
@@ -375,7 +378,6 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     return map
   }, [graphSkills])
 
-  const selectedAnchor = selectedAnchorId ? anchorById.get(selectedAnchorId) ?? null : null
   const selectedSkill = selectedSkillId ? skillById.get(selectedSkillId) ?? null : null
 
   // Cross-playlist video edges only
@@ -676,6 +678,19 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
+
+  // Fetch full anchor candidate data when an anchor is selected
+  useEffect(() => {
+    if (!selectedAnchorId || !user) {
+      setSelectedAnchorData(null)
+      return
+    }
+    let cancelled = false
+    fetchSingleCandidateWithNode(user.id, selectedAnchorId)
+      .then(data => { if (!cancelled) setSelectedAnchorData(data) })
+      .catch(() => { if (!cancelled) setSelectedAnchorData(null) })
+    return () => { cancelled = true }
+  }, [selectedAnchorId, user])
 
   // Auto-select source from URL param (e.g. navigating from Home → Graph button)
   const hasAutoSelectedRef = useRef(false)
@@ -1428,8 +1443,16 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
       )}
 
       {/* Right-side detail panel: anchor */}
-      {selectedAnchor && (
-        <PlaylistAnchorPanel anchor={selectedAnchor} onClose={() => setSelectedAnchorId(null)} />
+      {selectedAnchorData && (
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 340, height: '100%', zIndex: 40, overflow: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}>
+          <AnchorDetailPanel
+            candidate={selectedAnchorData}
+            onClose={() => setSelectedAnchorId(null)}
+            onConfirm={() => {}}
+            onDismiss={() => {}}
+            onArchive={() => {}}
+          />
+        </div>
       )}
 
       {/* Right-side detail panel: skill */}
