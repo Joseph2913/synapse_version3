@@ -1444,7 +1444,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
 
       {/* Right-side detail panel: anchor */}
       {selectedAnchorData && (
-        <div style={{ position: 'absolute', top: 0, right: 0, width: 340, height: '100%', zIndex: 40, overflow: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}>
+        <div
+          onWheel={e => e.stopPropagation()}
+          style={{ position: 'absolute', top: 0, right: 0, width: 340, height: '100%', zIndex: 40, overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}
+        >
           <AnchorDetailPanel
             candidate={selectedAnchorData}
             onClose={() => setSelectedAnchorId(null)}

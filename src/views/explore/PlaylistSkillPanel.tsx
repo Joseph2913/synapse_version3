@@ -135,6 +135,7 @@ export function PlaylistSkillPanel({ skill, onClose }: PlaylistSkillPanelProps) 
 
   return (
     <div
+      onWheel={e => e.stopPropagation()}
       style={{
         position: 'absolute',
         top: 0,
