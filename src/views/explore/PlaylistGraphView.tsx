@@ -9,7 +9,6 @@ import { PlaylistDetailPanel } from '../../components/explore/PlaylistDetailPane
 import { PlaylistAnchorPanel } from './PlaylistAnchorPanel'
 import { PlaylistSkillPanel } from './PlaylistSkillPanel'
 import { getSourceConfig } from '../../config/sourceTypes'
-import { getEntityColor } from '../../config/entityTypes'
 import type {
   PlaylistNode,
   PlaylistEdge,
@@ -1188,7 +1187,6 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
               const isHovered = hoveredHexId === hex.id
               const isSelected = selectedAnchorId === rawId
               const isDragging = dragRef.current?.type === 'hex' && dragRef.current?.id === hex.id
-              const entityColor = getEntityColor(anchor.entityType)
               const label = anchor.label.length > 18 ? anchor.label.slice(0, 17) + '\u2026' : anchor.label
 
               return (
@@ -1205,10 +1203,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     {/* Glow ring on hover/selected */}
                     {(isHovered || isSelected) && (
                       <path
-                        d={hexagonPath(hex.radius + 4)}
+                        d={hexagonPath(hex.radius + 3)}
                         fill="none"
                         stroke={isSelected ? 'var(--color-accent-500)' : `${ANCHOR_COLOR}55`}
-                        strokeWidth={1.5}
+                        strokeWidth={1}
                         opacity={0.6}
                       />
                     )}
@@ -1216,27 +1214,27 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                       d={hexagonPath(hex.radius)}
                       fill={`${ANCHOR_COLOR}12`}
                       stroke={ANCHOR_COLOR}
-                      strokeWidth={2}
-                      strokeDasharray={isSelected ? 'none' : '4 2'}
+                      strokeWidth={1.5}
+                      strokeDasharray={isSelected ? 'none' : '3 1.5'}
                     />
-                    {/* Entity type color dot center */}
-                    <circle r={4} fill={entityColor} opacity={0.8} />
                     </g>
-                    <text
-                      y={hex.radius + 12}
-                      textAnchor="middle"
-                      style={{
-                        fontFamily: 'var(--font-body)',
-                        fontSize: 10,
-                        fontWeight: isHovered ? 600 : 500,
-                        fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : ANCHOR_COLOR,
-                        pointerEvents: 'none',
-                        userSelect: 'none',
-                        transition: 'fill 0.15s ease',
-                      }}
-                    >
-                      {label}
-                    </text>
+                    {(isHovered || isSelected || camera.zoom > 1.5) && (
+                      <text
+                        y={hex.radius + 8}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-body)',
+                          fontSize: 7,
+                          fontWeight: isHovered ? 600 : 500,
+                          fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : ANCHOR_COLOR,
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          transition: 'fill 0.15s ease',
+                        }}
+                      >
+                        {label}
+                      </text>
+                    )}
                   </g>
                 </g>
               )
@@ -1267,10 +1265,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     <g transform={`scale(${isHovered ? 1.08 : 1})`} style={{ transition: 'transform 0.15s ease' }}>
                     {(isHovered || isSelected) && (
                       <path
-                        d={hexagonPath(hex.radius + 4)}
+                        d={hexagonPath(hex.radius + 3)}
                         fill="none"
                         stroke={isSelected ? 'var(--color-accent-500)' : `${SKILL_COLOR}55`}
-                        strokeWidth={1.5}
+                        strokeWidth={1}
                         opacity={0.6}
                       />
                     )}
@@ -1278,31 +1276,27 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                       d={hexagonPath(hex.radius)}
                       fill={`${SKILL_COLOR}12`}
                       stroke={SKILL_COLOR}
-                      strokeWidth={2}
-                      strokeDasharray={isSelected ? 'none' : '4 2'}
+                      strokeWidth={1.5}
+                      strokeDasharray={isSelected ? 'none' : '3 1.5'}
                     />
-                    {/* Sparkle icon center */}
-                    <g transform="translate(-5,-5)">
-                      <svg width={10} height={10} viewBox="0 0 24 24">
-                        <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill={SKILL_COLOR} opacity={0.7} />
-                      </svg>
                     </g>
-                    </g>
-                    <text
-                      y={hex.radius + 12}
-                      textAnchor="middle"
-                      style={{
-                        fontFamily: 'var(--font-body)',
-                        fontSize: 10,
-                        fontWeight: isHovered ? 600 : 500,
-                        fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : SKILL_COLOR,
-                        pointerEvents: 'none',
-                        userSelect: 'none',
-                        transition: 'fill 0.15s ease',
-                      }}
-                    >
-                      {label}
-                    </text>
+                    {(isHovered || isSelected || camera.zoom > 1.5) && (
+                      <text
+                        y={hex.radius + 8}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-body)',
+                          fontSize: 7,
+                          fontWeight: isHovered ? 600 : 500,
+                          fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : SKILL_COLOR,
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          transition: 'fill 0.15s ease',
+                        }}
+                      >
+                        {label}
+                      </text>
+                    )}
                   </g>
                 </g>
               )

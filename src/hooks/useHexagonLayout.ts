@@ -56,10 +56,10 @@ export function useHexagonLayout(
 
       if (connected.length === 0) continue
 
-      // Hex radius based on kind and score
+      // Hex radius based on kind and score (compact: 60% smaller)
       const hexRadius = node.kind === 'anchor'
-        ? 14 + node.score * 6   // 14-20px
-        : 12 + node.score * 4   // 12-16px
+        ? 5.5 + node.score * 2.5   // 5.5-8px
+        : 5 + node.score * 1.5     // 5-6.5px
 
       let x: number
       let y: number
