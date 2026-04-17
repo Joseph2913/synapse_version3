@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections, PlaylistNode, PlaylistEdge, PlaylistVideoNode, PlaylistVideoEdge } from '../types/explore'
+import type { ClusterData, CrossClusterEdge, TypeDistributionEntry, EntityNode, EntityWithConnections, PlaylistNode, PlaylistEdge, PlaylistVideoNode, PlaylistVideoEdge, PlaylistGraphAnchor, PlaylistGraphSkill } from '../types/explore'
 
 // ─── fetchClusterData (via Supabase RPC) ──────────────────────────────────────
 // Cluster summaries are computed server-side in Postgres (get_cluster_summaries).
@@ -845,4 +845,85 @@ export async function fetchPlaylistGraph(userId: string): Promise<PlaylistGraphR
     videos: result.videos ?? [],
     videoEdges: result.videoEdges ?? [],
   }
+}
+
+// ─── fetchGraphAnchors (via Supabase RPC) ───────────────────────────────────
+// Anchor-to-source resolution happens server-side in Postgres for performance.
+// See: supabase/migrations/20260417_get_graph_anchors.sql
+
+export async function fetchGraphAnchors(userId: string, limit: number): Promise<PlaylistGraphAnchor[]> {
+  const { data, error } = await supabase.rpc('get_graph_anchors', {
+    p_user_id: userId,
+    p_limit: limit,
+  })
+
+  if (error) throw new Error(error.message)
+
+  const rows = (data as Array<{
+    id: string
+    nodeId: string
+    compositeScore: number
+    label: string
+    entityType: string
+    description: string | null
+    entityCount: number
+    connectedSourceIds: string[]
+  }>) ?? []
+
+  return rows.map(r => ({
+    id: r.id,
+    nodeId: r.nodeId,
+    label: r.label,
+    entityType: r.entityType,
+    description: r.description,
+    compositeScore: r.compositeScore ?? 0,
+    entityCount: r.entityCount ?? 0,
+    connectedSourceIds: r.connectedSourceIds ?? [],
+  }))
+}
+
+// ─── fetchGraphSkills ───────────────────────────────────────────────────────
+// Fetch top N active skills ranked by relevance for the playlist graph.
+
+export async function fetchGraphSkills(userId: string, limit: number): Promise<PlaylistGraphSkill[]> {
+  const { data, error } = await supabase
+    .from('knowledge_skills')
+    .select('id, name, title, description, domain, confidence, source_ids, usage_count, source_count, tags')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) return []
+
+  // Compute relevance scores
+  const maxUsage = Math.max(...data.map((s: Record<string, unknown>) => (s.usage_count as number) ?? 0), 1)
+  const maxSources = Math.max(...data.map((s: Record<string, unknown>) => (s.source_count as number) ?? 0), 1)
+
+  const scored = data.map((s: Record<string, unknown>) => {
+    const confidence = (s.confidence as number) ?? 0
+    const usageCount = (s.usage_count as number) ?? 0
+    const sourceCount = (s.source_count as number) ?? 0
+    const relevanceScore =
+      confidence * 0.4 +
+      (usageCount / maxUsage) * 0.3 +
+      (sourceCount / maxSources) * 0.3
+
+    return {
+      id: s.id as string,
+      name: s.name as string,
+      title: s.title as string,
+      description: (s.description as string) ?? '',
+      domain: (s.domain as string | null),
+      confidence,
+      sourceIds: (s.source_ids as string[]) ?? [],
+      usageCount,
+      sourceCount,
+      tags: (s.tags as string[]) ?? [],
+      relevanceScore,
+    }
+  })
+
+  // Sort by relevance and take top N
+  scored.sort((a, b) => b.relevanceScore - a.relevanceScore)
+  return scored.slice(0, limit)
 }

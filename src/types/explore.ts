@@ -147,6 +147,31 @@ export interface PlaylistVideoEdge {
   sharedEntityCount: number
 }
 
+export interface PlaylistGraphAnchor {
+  id: string                    // anchor_candidates.id
+  nodeId: string                // knowledge_nodes.id
+  label: string
+  entityType: string
+  description: string | null
+  compositeScore: number
+  entityCount: number
+  connectedSourceIds: string[]  // source IDs with entities linked to this anchor
+}
+
+export interface PlaylistGraphSkill {
+  id: string
+  name: string
+  title: string
+  description: string
+  domain: string | null
+  confidence: number
+  sourceIds: string[]           // source_ids from the skill record
+  usageCount: number
+  sourceCount: number
+  tags: string[]
+  relevanceScore: number        // computed ranking score
+}
+
 // ─── Entity Browser types ─────────────────────────────────────────────────────
 
 export interface EntityWithConnections {

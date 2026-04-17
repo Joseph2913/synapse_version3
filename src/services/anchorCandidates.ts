@@ -356,6 +356,61 @@ export async function fetchCandidateByNodeId(
   return mapRow(data as AnchorCandidateRow)
 }
 
+// ─── Fetch: single candidate with node data (for graph detail panels) ────────
+// Lightweight fetch of one candidate by ID, with node and connection counts.
+
+export async function fetchSingleCandidateWithNode(
+  userId: string,
+  candidateId: string
+): Promise<AnchorCandidateWithNode | null> {
+  const { data: row, error } = await supabase
+    .from('anchor_candidates')
+    .select('*')
+    .eq('id', candidateId)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (error || !row) return null
+
+  const mapped = mapRow(row as AnchorCandidateRow)
+  const nid = (row as AnchorCandidateRow).node_id
+
+  // Fetch node data
+  let node: AnchorCandidateWithNode['node'] = null
+  if (nid) {
+    const { data: nodeData } = await supabase
+      .from('knowledge_nodes')
+      .select('id, label, entity_type, description, quote, user_tags, confidence, is_anchor, parent_anchor_id, created_at')
+      .eq('id', nid)
+      .maybeSingle()
+
+    if (nodeData) {
+      node = nodeData as AnchorCandidateWithNode['node']
+    }
+  }
+
+  // Fetch connection counts
+  const [outRes, inRes] = await Promise.all([
+    supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('source_node_id', nid ?? ''),
+    supabase.from('knowledge_edges').select('id', { count: 'exact', head: true }).eq('target_node_id', nid ?? ''),
+  ])
+  const connectionCount = (outRes.count ?? 0) + (inRes.count ?? 0)
+
+  // Count anchor-to-anchor connections
+  const { count: anchorConnCount } = await supabase
+    .from('knowledge_edges')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .or(`source_node_id.eq.${nid},target_node_id.eq.${nid}`)
+
+  return {
+    ...mapped,
+    node,
+    connectionCount,
+    anchorConnections: anchorConnCount ?? 0,
+  }
+}
+
 // ─── Fetch: confirmed anchors (for Anchors page "Your Anchors" section) ───────
 // Returns all confirmed and dormant candidates, ordered by composite_score desc.
 

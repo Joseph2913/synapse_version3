@@ -2,16 +2,23 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ListMusic, Loader2, RotateCcw } from 'lucide-react'
 import { usePlaylistLayout } from '../../hooks/usePlaylistLayout'
 import { useAuth } from '../../hooks/useAuth'
-import { fetchPlaylistGraph, fetchSourceGraph } from '../../services/exploreQueries'
+import { fetchPlaylistGraph, fetchSourceGraph, fetchGraphAnchors, fetchGraphSkills } from '../../services/exploreQueries'
+import { useHexagonLayout } from '../../hooks/useHexagonLayout'
 import { SourceDetailCard } from '../../components/explore/SourceDetailCard'
 import { PlaylistDetailPanel } from '../../components/explore/PlaylistDetailPanel'
+import { AnchorDetailPanel } from '../../components/anchors/AnchorDetailPanel'
+import { PlaylistSkillPanel } from './PlaylistSkillPanel'
+import { fetchSingleCandidateWithNode } from '../../services/anchorCandidates'
 import { getSourceConfig } from '../../config/sourceTypes'
 import type {
   PlaylistNode,
   PlaylistEdge,
   PlaylistVideoNode,
   PlaylistVideoEdge,
+  PlaylistGraphAnchor,
+  PlaylistGraphSkill,
 } from '../../types/explore'
+import type { AnchorCandidateWithNode } from '../../types/anchors'
 
 const MIN_ZOOM = 0.08
 const MAX_ZOOM = 6.0
@@ -108,6 +115,19 @@ function playlistCenterRadius(videoCount: number): number {
   return 12 + Math.min(videoCount * 0.4, 12)
 }
 
+/** Generate SVG path for a regular hexagon centered at (0,0) */
+function hexagonPath(radius: number): string {
+  const points: string[] = []
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 2
+    points.push(`${Math.cos(angle) * radius},${Math.sin(angle) * radius}`)
+  }
+  return `M${points.join('L')}Z`
+}
+
+const ANCHOR_COLOR = '#d97706'
+const SKILL_COLOR = '#0891b2'
+
 export function PlaylistGraphView({ showEdges = true, initialSourceId }: PlaylistGraphViewProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -133,13 +153,29 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
   const [exploringVideoId, setExploringVideoId] = useState<string | null>(null)
   const [legendOpen, setLegendOpen] = useState(false)
 
+  // Anchor & skill integration
+  const [allGraphAnchors, setAllGraphAnchors] = useState<PlaylistGraphAnchor[]>([])
+  const [allGraphSkills, setAllGraphSkills] = useState<PlaylistGraphSkill[]>([])
+  const [showAnchors, setShowAnchors] = useState(true)
+  const [showSkills, setShowSkills] = useState(true)
+  const [anchorLimit, setAnchorLimit] = useState(50)
+  const [skillLimit, setSkillLimit] = useState(15)
+  // Client-side filtered anchors/skills based on slider limits
+  const graphAnchors = useMemo(() => allGraphAnchors.slice(0, anchorLimit), [allGraphAnchors, anchorLimit])
+  const graphSkills = useMemo(() => allGraphSkills.slice(0, skillLimit), [allGraphSkills, skillLimit])
+
+  const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
+  const [selectedAnchorData, setSelectedAnchorData] = useState<AnchorCandidateWithNode | null>(null)
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null)
+  const [hoveredHexId, setHoveredHexId] = useState<string | null>(null)
+
   const hasDraggedRef = useRef(false)
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
 
   // Drag infrastructure — live positions for all nodes (playlist centers + videos)
   const liveNodesRef = useRef<LiveNode[]>([])
   const [livePositions, setLivePositions] = useState<Map<string, { x: number; y: number }>>(new Map())
-  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number; type: 'playlist' | 'video' } | null>(null)
+  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number; type: 'playlist' | 'video' | 'hex' } | null>(null)
   const dragPrevPos = useRef<{ x: number; y: number } | null>(null)
   const rafRef = useRef<number>(0)
 
@@ -174,6 +210,37 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
 
   // Global max entity count for consistent video sizing
   const maxEntityCount = useMemo(() => Math.max(...videos.map(v => v.entityCount), 1), [videos])
+
+  // Progressive label density: at lower zoom show only top sources by entity count,
+  // at higher zoom progressively reveal more labels
+  const labelVisibleIds = useMemo(() => {
+    if (videos.length === 0) return new Set<string>()
+
+    // Zoom thresholds → fraction of labels to show
+    // Below 1.5: no labels (handled in render by hover/selected check)
+    // 1.5-2.0: top 10%
+    // 2.0-2.5: top 25%
+    // 2.5-3.0: top 50%
+    // 3.0+: all labels
+    let fraction: number
+    if (camera.zoom < 1.5) fraction = 0
+    else if (camera.zoom < 2.0) fraction = 0.10
+    else if (camera.zoom < 2.5) fraction = 0.25
+    else if (camera.zoom < 3.0) fraction = 0.50
+    else fraction = 1.0
+
+    if (fraction === 0) return new Set<string>()
+    if (fraction === 1.0) return new Set(videos.map(v => v.sourceId))
+
+    // Sort by entity count descending, take top fraction
+    const sorted = [...videos].sort((a, b) => b.entityCount - a.entityCount)
+    const count = Math.max(1, Math.ceil(sorted.length * fraction))
+    const ids = new Set<string>()
+    for (let i = 0; i < count && i < sorted.length; i++) {
+      ids.add(sorted[i]!.sourceId)
+    }
+    return ids
+  }, [videos, camera.zoom])
 
   // ─── Compute all video positions around their playlist centers ──────────────
 
@@ -235,6 +302,84 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     return result
   }, [playlistCenterPositions, videosByPlaylist, videoPositions])
 
+  // ─── Hex layout: anchors & skills ──────────────────────────────────────────
+
+  // Map source IDs to their playlist ID so we can resolve hex connections
+  const sourceToPlaylistId = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const v of videos) map.set(v.sourceId, v.playlistId)
+    return map
+  }, [videos])
+
+  // Build hex nodes from anchors + skills
+  const hexNodes = useMemo(() => {
+    const nodes: { id: string; connectedClusterIds: string[]; kind: 'anchor' | 'skill'; score: number }[] = []
+
+    if (showAnchors) {
+      const maxScore = Math.max(...graphAnchors.map(a => a.compositeScore), 1)
+      for (const a of graphAnchors) {
+        const clusterIds = new Set<string>()
+        for (const sid of a.connectedSourceIds) {
+          const pid = sourceToPlaylistId.get(sid)
+          if (pid) clusterIds.add(pid)
+        }
+        if (clusterIds.size === 0) continue
+        nodes.push({
+          id: `a:${a.id}`,
+          connectedClusterIds: Array.from(clusterIds),
+          kind: 'anchor',
+          score: a.compositeScore / maxScore,
+        })
+      }
+    }
+
+    if (showSkills) {
+      const maxScore = Math.max(...graphSkills.map(s => s.relevanceScore), 1)
+      for (const s of graphSkills) {
+        const clusterIds = new Set<string>()
+        for (const sid of s.sourceIds) {
+          const pid = sourceToPlaylistId.get(sid)
+          if (pid) clusterIds.add(pid)
+        }
+        if (clusterIds.size === 0) continue
+        nodes.push({
+          id: `s:${s.id}`,
+          connectedClusterIds: Array.from(clusterIds),
+          kind: 'skill',
+          score: s.relevanceScore / maxScore,
+        })
+      }
+    }
+
+    return nodes
+  }, [graphAnchors, graphSkills, sourceToPlaylistId, showAnchors, showSkills])
+
+  // Convert playlistCenterPositions + clusterRadii into array format for the layout hook
+  const clusterCentersForLayout = useMemo(() => {
+    const result: { id: string; x: number; y: number; radius: number }[] = []
+    for (const [id, pos] of playlistCenterPositions) {
+      result.push({ id, x: pos.x, y: pos.y, radius: clusterRadii.get(id) ?? 50 })
+    }
+    return result
+  }, [playlistCenterPositions, clusterRadii])
+
+  const hexPositions = useHexagonLayout(hexNodes, clusterCentersForLayout, size.width, size.height)
+
+  // Lookup maps for quick access
+  const anchorById = useMemo(() => {
+    const map = new Map<string, PlaylistGraphAnchor>()
+    for (const a of graphAnchors) map.set(a.id, a)
+    return map
+  }, [graphAnchors])
+
+  const skillById = useMemo(() => {
+    const map = new Map<string, PlaylistGraphSkill>()
+    for (const s of graphSkills) map.set(s.id, s)
+    return map
+  }, [graphSkills])
+
+  const selectedSkill = selectedSkillId ? skillById.get(selectedSkillId) ?? null : null
+
   // Cross-playlist video edges only
   // Classify edges: intra-cluster (same playlist/type) vs cross-cluster
   const sourceToPlaylist = useMemo(() => {
@@ -291,8 +436,20 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     for (const e of crossPlaylistVideoEdges) {
       addLink(`v:${e.fromSourceId}`, `v:${e.toSourceId}`, Math.min(e.sharedEntityCount / maxShared, 1) * 0.4)
     }
+    // Hex-to-source links (anchors/skills connected to their sources)
+    for (const hex of hexPositions) {
+      const rawId = hex.id.slice(2) // strip 'a:' or 's:' prefix
+      const sourceIds = hex.kind === 'anchor'
+        ? (anchorById.get(rawId)?.connectedSourceIds ?? [])
+        : (skillById.get(rawId)?.sourceIds ?? [])
+      for (const sid of sourceIds) {
+        if (sourceToPlaylist.has(sid)) {
+          addLink(`h:${hex.id}`, `v:${sid}`, 0.3)
+        }
+      }
+    }
     connectivityRef.current = map
-  }, [videosByPlaylist, crossPlaylistVideoEdges])
+  }, [videosByPlaylist, crossPlaylistVideoEdges, hexPositions, anchorById, skillById, sourceToPlaylist])
 
   // Initialize live nodes from computed positions
   useEffect(() => {
@@ -304,8 +461,11 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     for (const [sourceId, pos] of videoPositions) {
       nodes.push({ id: `v:${sourceId}`, x: pos.x, y: pos.y, vx: 0, vy: 0 })
     }
+    for (const hex of hexPositions) {
+      nodes.push({ id: `h:${hex.id}`, x: hex.x, y: hex.y, vx: 0, vy: 0 })
+    }
     liveNodesRef.current = nodes
-  }, [playlistCenterPositions, videoPositions])
+  }, [playlistCenterPositions, videoPositions, hexPositions])
 
   // Animation loop
   useEffect(() => {
@@ -318,9 +478,8 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
 
       // Directional drag drift
       if (dragRef.current && dragPrevPos.current) {
-        const dragNode = nodeMap.get(
-          dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`
-        )
+        const dragLiveId = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : dragRef.current.type === 'hex' ? `h:${dragRef.current.id}` : `v:${dragRef.current.id}`
+        const dragNode = nodeMap.get(dragLiveId)
         if (dragNode) {
           const moveDx = dragNode.x - dragPrevPos.current.x
           const moveDy = dragNode.y - dragPrevPos.current.y
@@ -354,7 +513,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
       // Update velocities
       for (const n of nodes) {
         const dragId = dragRef.current
-          ? (dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`)
+          ? (dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : dragRef.current.type === 'hex' ? `h:${dragRef.current.id}` : `v:${dragRef.current.id}`)
           : null
         if (n.id === dragId) { n.vx = 0; n.vy = 0; continue }
         // Also freeze videos of a dragged playlist (they move directly above)
@@ -436,6 +595,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     let cancelled = false
     setLoading(true)
 
+    // Fetch core graph data (playlists + sources)
     Promise.all([
       fetchPlaylistGraph(user.id),
       fetchSourceGraph(user.id),
@@ -506,8 +666,31 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
       })
       .catch(err => console.warn('PlaylistGraphView fetch error:', err))
       .finally(() => { if (!cancelled) setLoading(false) })
+
+    // Fetch anchors & skills separately so failures don't break the core graph
+    fetchGraphAnchors(user.id, 200)
+      .then(data => { if (!cancelled) setAllGraphAnchors(data) })
+      .catch(err => console.warn('PlaylistGraphView anchor fetch error:', err))
+
+    fetchGraphSkills(user.id, 50)
+      .then(data => { if (!cancelled) setAllGraphSkills(data) })
+      .catch(err => console.warn('PlaylistGraphView skill fetch error:', err))
     return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
+
+  // Fetch full anchor candidate data when an anchor is selected
+  useEffect(() => {
+    if (!selectedAnchorId || !user) {
+      setSelectedAnchorData(null)
+      return
+    }
+    let cancelled = false
+    fetchSingleCandidateWithNode(user.id, selectedAnchorId)
+      .then(data => { if (!cancelled) setSelectedAnchorData(data) })
+      .catch(() => { if (!cancelled) setSelectedAnchorData(null) })
+    return () => { cancelled = true }
+  }, [selectedAnchorId, user])
 
   // Auto-select source from URL param (e.g. navigating from Home → Graph button)
   const hasAutoSelectedRef = useRef(false)
@@ -571,6 +754,10 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     const el = containerRef.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
+      // Don't zoom when scrolling inside a detail panel
+      const target = e.target as HTMLElement
+      if (target.closest('[data-panel]')) return
+
       e.preventDefault()
       const svg = svgRef.current
       if (!svg) return
@@ -599,12 +786,14 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
       else if (e.key === '0') { resetCamera(); e.preventDefault() }
       else if (e.key === 'Escape') {
         if (exploringVideoId) setExploringVideoId(null)
+        else if (selectedAnchorId) setSelectedAnchorId(null)
+        else if (selectedSkillId) setSelectedSkillId(null)
         else if (selectedPlaylistId) setSelectedPlaylistId(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoomIn, zoomOut, resetCamera, exploringVideoId, selectedPlaylistId])
+  }, [zoomIn, zoomOut, resetCamera, exploringVideoId, selectedPlaylistId, selectedAnchorId, selectedSkillId])
 
   // ─── SVG pan ──────────────────────────────────────────────────────────────
 
@@ -634,12 +823,14 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     if (e.target === e.currentTarget && !hasDraggedRef.current) {
       setSelectedPlaylistId(null)
       setExploringVideoId(null)
+      setSelectedAnchorId(null)
+      setSelectedSkillId(null)
     }
   }
 
   // ─── Drag handler ──────────────────────────────────────────────────────────
 
-  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, nodeType: 'playlist' | 'video') => {
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, nodeType: 'playlist' | 'video' | 'hex') => {
     e.stopPropagation()
     hasDraggedRef.current = false
     const cam = cameraRef.current
@@ -647,7 +838,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     if (!rect) return
     const worldX = (e.clientX - rect.left - cam.panX) / cam.zoom
     const worldY = (e.clientY - rect.top - cam.panY) / cam.zoom
-    const liveId = nodeType === 'playlist' ? `p:${nodeId}` : `v:${nodeId}`
+    const liveId = nodeType === 'playlist' ? `p:${nodeId}` : nodeType === 'hex' ? `h:${nodeId}` : `v:${nodeId}`
     const node = liveNodesRef.current.find(n => n.id === liveId)
     if (!node) return
     dragRef.current = { id: nodeId, offsetX: worldX - node.x, offsetY: worldY - node.y, type: nodeType }
@@ -660,13 +851,13 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
       const r2 = svgRef.current.getBoundingClientRect()
       const wx = (ev.clientX - r2.left - cam2.panX) / cam2.zoom
       const wy = (ev.clientY - r2.top - cam2.panY) / cam2.zoom
-      const lid = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`
+      const lid = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : dragRef.current.type === 'hex' ? `h:${dragRef.current.id}` : `v:${dragRef.current.id}`
       const n = liveNodesRef.current.find(nd => nd.id === lid)
       if (n) { n.x = wx - dragRef.current.offsetX; n.y = wy - dragRef.current.offsetY }
     }
     const onUp = () => {
       if (dragRef.current) {
-        const lid = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : `v:${dragRef.current.id}`
+        const lid = dragRef.current.type === 'playlist' ? `p:${dragRef.current.id}` : dragRef.current.type === 'hex' ? `h:${dragRef.current.id}` : `v:${dragRef.current.id}`
         const n = liveNodesRef.current.find(nd => nd.id === lid)
         if (n) { n.vx = 0; n.vy = 0 }
       }
@@ -689,6 +880,24 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
   const handlePlaylistCenterClick = useCallback((playlistId: string) => {
     if (hasDraggedRef.current) return
     setSelectedPlaylistId(prev => prev === playlistId ? null : playlistId)
+    setExploringVideoId(null)
+    setSelectedAnchorId(null)
+    setSelectedSkillId(null)
+  }, [])
+
+  const handleAnchorClick = useCallback((anchorId: string) => {
+    if (hasDraggedRef.current) return
+    setSelectedAnchorId(prev => prev === anchorId ? null : anchorId)
+    setSelectedSkillId(null)
+    setSelectedPlaylistId(null)
+    setExploringVideoId(null)
+  }, [])
+
+  const handleSkillClick = useCallback((skillId: string) => {
+    if (hasDraggedRef.current) return
+    setSelectedSkillId(prev => prev === skillId ? null : skillId)
+    setSelectedAnchorId(null)
+    setSelectedPlaylistId(null)
     setExploringVideoId(null)
   }, [])
 
@@ -738,6 +947,16 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
           onMouseLeave={handleSvgMouseUp}
           onClick={handleSvgClick}
         >
+          <defs>
+            <filter id="glow-amber" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+            </filter>
+            <filter id="glow-teal" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+            </filter>
+          </defs>
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
 
             {/* 1. Spoke lines — center to each video (use live positions) */}
@@ -758,8 +977,8 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     x1={center.x} y1={center.y}
                     x2={vPos.x} y2={vPos.y}
                     stroke={color}
-                    strokeWidth={1.2}
-                    strokeOpacity={0.18}
+                    strokeWidth={0.8}
+                    strokeOpacity={0.06}
                   />
                 )
               })
@@ -780,14 +999,14 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
 
               // Cross-cluster edges are thicker and more visible; intra-cluster are subtler
               const baseWidth = edge.isCrossCluster
-                ? 0.8 + weightNorm * 1.5
-                : 0.4 + weightNorm * 0.8
-              const baseOpacity = edge.isCrossCluster ? 0.15 : 0.07
+                ? 0.5 + weightNorm * 0.8
+                : 0.3 + weightNorm * 0.4
+              const baseOpacity = edge.isCrossCluster ? 0.04 : 0.02
 
               // When hovering, highlighted edges pop, others fade
               let stroke = 'rgba(120,130,145,1)'
               let strokeWidth = baseWidth
-              let strokeOpacity = hasHover ? 0.03 : baseOpacity
+              let strokeOpacity = hasHover ? 0.01 : baseOpacity
 
               if (isHighlighted) {
                 stroke = edge.isCrossCluster ? 'var(--color-accent-500)' : playlistColorMap.get(sourceToPlaylist.get(edge.fromSourceId)!) ?? 'var(--color-accent-500)'
@@ -854,21 +1073,24 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                         <circle r={r} fill={`${color}20`} stroke={color} strokeWidth={1.5} />
                       </g>
 
-                      <text
-                        y={r + 10}
-                        textAnchor="middle"
-                        style={{
-                          fontFamily: 'var(--font-body)',
-                          fontSize: 7,
-                          fontWeight: isHovered ? 600 : 500,
-                          fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                          pointerEvents: 'none',
-                          userSelect: 'none',
-                          transition: 'fill 0.15s ease',
-                        }}
-                      >
-                        {label}
-                      </text>
+                      {/* Label: always on hover/selected, progressive density when zoomed */}
+                      {(isHovered || isExploring || labelVisibleIds.has(video.sourceId)) && (
+                        <text
+                          y={r + 10}
+                          textAnchor="middle"
+                          style={{
+                            fontFamily: 'var(--font-body)',
+                            fontSize: 8,
+                            fontWeight: isHovered ? 600 : 400,
+                            fill: isExploring ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : 'var(--color-text-tertiary, var(--color-text-secondary))',
+                            pointerEvents: 'none',
+                            userSelect: 'none',
+                            opacity: isHovered || isExploring ? 1 : 0.7,
+                          }}
+                        >
+                          {label}
+                        </text>
+                      )}
                     </g>
                   </g>
                 )
@@ -938,6 +1160,193 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     >
                       {pVideos.length} {playlist.id.startsWith('__type__') ? 'sources' : 'videos'}
                     </text>
+                  </g>
+                </g>
+              )
+            })}
+
+            {/* 5. Anchor edges — amber dotted lines to connected sources */}
+            {showAnchors && hexPositions.filter(h => h.kind === 'anchor').map(hex => {
+              const hexLive = livePositions.get(`h:${hex.id}`)
+              const hexPos = hexLive ?? { x: hex.x, y: hex.y }
+              const rawId = hex.id.slice(2)
+              const anchor = anchorById.get(rawId)
+              if (!anchor) return null
+              const isHex = hoveredHexId === hex.id || selectedAnchorId === rawId
+              return anchor.connectedSourceIds.map(sid => {
+                const vLive = livePositions.get(`v:${sid}`)
+                const vStatic = videoPositions.get(sid)
+                const vPos = vLive ?? vStatic
+                if (!vPos) return null
+                const isSourceHovered = hoveredVideoId === sid
+                const highlight = isHex || isSourceHovered
+                return (
+                  <line
+                    key={`ae-${hex.id}-${sid}`}
+                    x1={hexPos.x} y1={hexPos.y}
+                    x2={vPos.x} y2={vPos.y}
+                    stroke={ANCHOR_COLOR}
+                    strokeWidth={highlight ? 1.5 : 0.8}
+                    strokeOpacity={highlight ? 0.45 : 0.10}
+                    strokeDasharray="3,3"
+                    filter={highlight ? 'url(#glow-amber)' : undefined}
+                    style={{ transition: 'stroke-opacity 0.15s ease' }}
+                  />
+                )
+              })
+            })}
+
+            {/* 6. Skill edges — teal dotted lines to connected sources */}
+            {showSkills && hexPositions.filter(h => h.kind === 'skill').map(hex => {
+              const hexLive = livePositions.get(`h:${hex.id}`)
+              const hexPos = hexLive ?? { x: hex.x, y: hex.y }
+              const rawId = hex.id.slice(2)
+              const skill = skillById.get(rawId)
+              if (!skill) return null
+              const isHex = hoveredHexId === hex.id || selectedSkillId === rawId
+              return skill.sourceIds.map(sid => {
+                const vLive = livePositions.get(`v:${sid}`)
+                const vStatic = videoPositions.get(sid)
+                const vPos = vLive ?? vStatic
+                if (!vPos) return null
+                const isSourceHovered = hoveredVideoId === sid
+                const highlight = isHex || isSourceHovered
+                return (
+                  <line
+                    key={`se-${hex.id}-${sid}`}
+                    x1={hexPos.x} y1={hexPos.y}
+                    x2={vPos.x} y2={vPos.y}
+                    stroke={SKILL_COLOR}
+                    strokeWidth={highlight ? 1.5 : 0.8}
+                    strokeOpacity={highlight ? 0.45 : 0.10}
+                    strokeDasharray="3,3"
+                    filter={highlight ? 'url(#glow-teal)' : undefined}
+                    style={{ transition: 'stroke-opacity 0.15s ease' }}
+                  />
+                )
+              })
+            })}
+
+            {/* 7. Anchor hexagon nodes */}
+            {showAnchors && hexPositions.filter(h => h.kind === 'anchor').map(hex => {
+              const hexLive = livePositions.get(`h:${hex.id}`)
+              const pos = hexLive ?? { x: hex.x, y: hex.y }
+              const rawId = hex.id.slice(2)
+              const anchor = anchorById.get(rawId)
+              if (!anchor) return null
+              const isHovered = hoveredHexId === hex.id
+              const isSelected = selectedAnchorId === rawId
+              const isDragging = dragRef.current?.type === 'hex' && dragRef.current?.id === hex.id
+              const label = anchor.label.length > 18 ? anchor.label.slice(0, 17) + '\u2026' : anchor.label
+
+              return (
+                <g
+                  key={`hex-${hex.id}`}
+                  onMouseDown={e => handleNodeMouseDown(e, hex.id, 'hex')}
+                  onMouseEnter={() => { if (!dragRef.current) setHoveredHexId(hex.id) }}
+                  onMouseLeave={() => { if (!dragRef.current) setHoveredHexId(null) }}
+                  onClick={() => handleAnchorClick(rawId)}
+                  style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
+                >
+                  <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    <g transform={`scale(${isHovered ? 1.08 : 1})`} style={{ transition: 'transform 0.15s ease' }}>
+                    {/* Glow ring on hover/selected */}
+                    {(isHovered || isSelected) && (
+                      <path
+                        d={hexagonPath(hex.radius + 3)}
+                        fill="none"
+                        stroke={isSelected ? 'var(--color-accent-500)' : `${ANCHOR_COLOR}55`}
+                        strokeWidth={1}
+                        opacity={0.6}
+                      />
+                    )}
+                    <path
+                      d={hexagonPath(hex.radius)}
+                      fill={`${ANCHOR_COLOR}12`}
+                      stroke={ANCHOR_COLOR}
+                      strokeWidth={1.5}
+                      strokeDasharray={isSelected ? 'none' : '3 1.5'}
+                    />
+                    </g>
+                    {(isHovered || isSelected || camera.zoom > 1.5) && (
+                      <text
+                        y={hex.radius + 8}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-body)',
+                          fontSize: 7,
+                          fontWeight: isHovered ? 600 : 500,
+                          fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : ANCHOR_COLOR,
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          transition: 'fill 0.15s ease',
+                        }}
+                      >
+                        {label}
+                      </text>
+                    )}
+                  </g>
+                </g>
+              )
+            })}
+
+            {/* 8. Skill hexagon nodes */}
+            {showSkills && hexPositions.filter(h => h.kind === 'skill').map(hex => {
+              const hexLive = livePositions.get(`h:${hex.id}`)
+              const pos = hexLive ?? { x: hex.x, y: hex.y }
+              const rawId = hex.id.slice(2)
+              const skill = skillById.get(rawId)
+              if (!skill) return null
+              const isHovered = hoveredHexId === hex.id
+              const isSelected = selectedSkillId === rawId
+              const isDragging = dragRef.current?.type === 'hex' && dragRef.current?.id === hex.id
+              const label = skill.title.length > 18 ? skill.title.slice(0, 17) + '\u2026' : skill.title
+
+              return (
+                <g
+                  key={`hex-${hex.id}`}
+                  onMouseDown={e => handleNodeMouseDown(e, hex.id, 'hex')}
+                  onMouseEnter={() => { if (!dragRef.current) setHoveredHexId(hex.id) }}
+                  onMouseLeave={() => { if (!dragRef.current) setHoveredHexId(null) }}
+                  onClick={() => handleSkillClick(rawId)}
+                  style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
+                >
+                  <g transform={`translate(${pos.x}, ${pos.y})`}>
+                    <g transform={`scale(${isHovered ? 1.08 : 1})`} style={{ transition: 'transform 0.15s ease' }}>
+                    {(isHovered || isSelected) && (
+                      <path
+                        d={hexagonPath(hex.radius + 3)}
+                        fill="none"
+                        stroke={isSelected ? 'var(--color-accent-500)' : `${SKILL_COLOR}55`}
+                        strokeWidth={1}
+                        opacity={0.6}
+                      />
+                    )}
+                    <path
+                      d={hexagonPath(hex.radius)}
+                      fill={`${SKILL_COLOR}12`}
+                      stroke={SKILL_COLOR}
+                      strokeWidth={1.5}
+                      strokeDasharray={isSelected ? 'none' : '3 1.5'}
+                    />
+                    </g>
+                    {(isHovered || isSelected || camera.zoom > 1.5) && (
+                      <text
+                        y={hex.radius + 8}
+                        textAnchor="middle"
+                        style={{
+                          fontFamily: 'var(--font-body)',
+                          fontSize: 7,
+                          fontWeight: isHovered ? 600 : 500,
+                          fill: isSelected ? 'var(--color-accent-500)' : isHovered ? 'var(--color-text-primary)' : SKILL_COLOR,
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          transition: 'fill 0.15s ease',
+                        }}
+                      >
+                        {label}
+                      </text>
+                    )}
                   </g>
                 </g>
               )
@@ -1037,6 +1446,27 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         />
       )}
 
+      {/* Right-side detail panel: anchor */}
+      {selectedAnchorData && (
+        <div
+          data-panel
+          style={{ position: 'absolute', top: 0, right: 0, width: 340, height: '100%', zIndex: 40, overflowY: 'auto', background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)' }}
+        >
+          <AnchorDetailPanel
+            candidate={selectedAnchorData}
+            onClose={() => setSelectedAnchorId(null)}
+            onConfirm={() => {}}
+            onDismiss={() => {}}
+            onArchive={() => {}}
+          />
+        </div>
+      )}
+
+      {/* Right-side detail panel: skill */}
+      {selectedSkill && (
+        <PlaylistSkillPanel skill={selectedSkill} onClose={() => setSelectedSkillId(null)} />
+      )}
+
       {/* Legend — bottom-left, collapsed by default */}
       <div
         style={{
@@ -1079,6 +1509,96 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                 </div>
               )
             })}
+            {showAnchors && (
+              <div className="flex items-center gap-2" style={{ marginTop: 4 }}>
+                <span style={{ width: 7, height: 7, background: `${ANCHOR_COLOR}22`, border: `1.5px solid ${ANCHOR_COLOR}`, flexShrink: 0, clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }} />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: ANCHOR_COLOR }}>
+                  Anchors
+                </span>
+              </div>
+            )}
+            {showSkills && (
+              <div className="flex items-center gap-2">
+                <span style={{ width: 7, height: 7, background: `${SKILL_COLOR}22`, border: `1.5px solid ${SKILL_COLOR}`, flexShrink: 0, clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }} />
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 500, color: SKILL_COLOR }}>
+                  Skills
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Anchor/Skill controls — top-left */}
+      <div
+        style={{
+          position: 'absolute', top: 16, left: 16,
+          background: 'rgba(255,255,255,0.92)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8, padding: '8px 12px',
+          display: 'flex', flexDirection: 'column', gap: 8,
+          zIndex: 20, minWidth: 160,
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowAnchors(prev => !prev)}
+            className="flex items-center gap-1.5 cursor-pointer"
+            style={{
+              padding: '5px 13px', borderRadius: 20,
+              fontSize: 12, fontFamily: 'var(--font-body)', fontWeight: 600,
+              background: showAnchors ? '#fef3c7' : 'transparent',
+              border: `1px solid ${showAnchors ? 'rgba(217,119,6,0.15)' : 'var(--border-subtle)'}`,
+              color: showAnchors ? ANCHOR_COLOR : 'var(--color-text-secondary)',
+            }}
+          >
+            <span style={{ width: 6, height: 6, background: ANCHOR_COLOR, borderRadius: 1, transform: 'rotate(45deg)', opacity: showAnchors ? 1 : 0.4 }} />
+            Anchors
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSkills(prev => !prev)}
+            className="flex items-center gap-1.5 cursor-pointer"
+            style={{
+              padding: '5px 13px', borderRadius: 20,
+              fontSize: 12, fontFamily: 'var(--font-body)', fontWeight: 600,
+              background: showSkills ? '#cffafe' : 'transparent',
+              border: `1px solid ${showSkills ? 'rgba(8,145,178,0.15)' : 'var(--border-subtle)'}`,
+              color: showSkills ? SKILL_COLOR : 'var(--color-text-secondary)',
+            }}
+          >
+            <span style={{ width: 6, height: 6, background: SKILL_COLOR, borderRadius: 1, transform: 'rotate(45deg)', opacity: showSkills ? 1 : 0.4 }} />
+            Skills
+          </button>
+        </div>
+        {showAnchors && (
+          <div className="flex items-center gap-2">
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: ANCHOR_COLOR, fontWeight: 600, minWidth: 52 }}>
+              Top {anchorLimit} anchors
+            </span>
+            <input
+              type="range"
+              min={10} max={200} step={10}
+              value={anchorLimit}
+              onChange={e => setAnchorLimit(Number(e.target.value))}
+              style={{ width: 80, accentColor: ANCHOR_COLOR }}
+            />
+          </div>
+        )}
+        {showSkills && (
+          <div className="flex items-center gap-2">
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: SKILL_COLOR, fontWeight: 600, minWidth: 52 }}>
+              Top {skillLimit} skills
+            </span>
+            <input
+              type="range"
+              min={5} max={50} step={5}
+              value={skillLimit}
+              onChange={e => setSkillLimit(Number(e.target.value))}
+              style={{ width: 80, accentColor: SKILL_COLOR }}
+            />
           </div>
         )}
       </div>
@@ -1104,6 +1624,16 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: 'var(--color-text-secondary)' }}>
           <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700, color: 'var(--color-text-primary)' }}>{crossPlaylistVideoEdges.length}</strong> cross-connections
         </span>
+        {showAnchors && graphAnchors.length > 0 && (
+          <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: ANCHOR_COLOR }}>
+            <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700 }}>{hexPositions.filter(h => h.kind === 'anchor').length}</strong> anchors
+          </span>
+        )}
+        {showSkills && graphSkills.length > 0 && (
+          <span style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: SKILL_COLOR }}>
+            <strong style={{ fontFamily: 'var(--font-display)', fontWeight: 700 }}>{hexPositions.filter(h => h.kind === 'skill').length}</strong> skills
+          </span>
+        )}
       </div>
 
       {/* Zoom controls + Reset — bottom-right */}
