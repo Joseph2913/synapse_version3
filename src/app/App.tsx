@@ -5,7 +5,7 @@ import { ProcessingProvider } from './providers/ProcessingProvider'
 import { ExploreDataProvider } from './providers/ExploreDataProvider'
 import { HomeDashboardProvider } from './providers/HomeDashboardProvider'
 import { Router } from './Router'
-import { LoginPage } from '../components/auth/LoginPage'
+import { LandingPage } from '../pages/Landing/LandingPage'
 import { useAuth } from '../hooks/useAuth'
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -38,7 +38,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }
 
   if (!session) {
-    return <LoginPage />
+    return <LandingPage />
   }
 
   return <>{children}</>
