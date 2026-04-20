@@ -3614,7 +3614,7 @@ async function handleMcpRequest(
     case 'initialize':
       return jsonRpcResult(reqId, {
         protocolVersion: '2025-03-26',
-        capabilities: { tools: { outputSchemas: true } },
+        capabilities: { tools: {} },
         serverInfo: { name: 'synapse', version: '1.1.0' },
       })
 
