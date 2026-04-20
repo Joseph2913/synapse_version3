@@ -2,8 +2,7 @@
  * api/mcp.ts
  *
  * Synapse MCP Server — Vercel serverless function implementing MCP Streamable HTTP transport.
- * Exposes 17 tools: 12 knowledge graph tools + 3 skill library tools + 1 advisory council tool + 1 write tool (send_to_synapse).
- * All tools declare outputSchema for structured output (MCP progressive composition).
+ * Exposes 16 tools: 12 knowledge graph tools + 3 skill library tools + 1 write tool (send_to_synapse).
  *
  * CRITICAL: Fully self-contained. No local imports. All helpers defined inline.
  * PRD-24: MCP Server & API Key Management
@@ -42,7 +41,6 @@ interface ToolDescriptor {
   name: string
   description: string
   inputSchema: Record<string, unknown>
-  outputSchema?: Record<string, unknown>
 }
 
 interface ToolContent {
@@ -393,31 +391,6 @@ const TOOLS: ToolDescriptor[] = [
       },
       required: ['query'],
     },
-    outputSchema: {
-      type: 'object',
-      description: 'RAG answer synthesised from source chunks, with cited sources and connected entities.',
-      properties: {
-        answer: { type: 'string', description: 'Gemini-generated answer grounded in retrieved source passages.' },
-        sources: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              source_id: { type: 'string' },
-              title: { type: 'string' },
-              source_type: { type: 'string' },
-              relevance: { type: 'number', description: 'Hybrid relevance score (0-1).' },
-            },
-          },
-          description: 'De-duplicated sources that contributed to the answer.',
-        },
-        entities: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Labels of anchor entities connected to the matched content.',
-        },
-      },
-    },
   },
   {
     name: 'search_entities',
@@ -443,25 +416,6 @@ const TOOLS: ToolDescriptor[] = [
       },
       required: ['query'],
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        entities: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string' },
-              entity_type: { type: 'string' },
-              description: { type: ['string', 'null'] },
-              connection_count: { type: 'number' },
-              similarity: { type: 'number', description: 'Semantic similarity score (0-1) or 0 for text matches.' },
-            },
-          },
-          description: 'Matching entities sorted by relevance.',
-        },
-      },
-    },
   },
   {
     name: 'get_entity',
@@ -476,37 +430,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['label'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        label: { type: 'string' },
-        entity_type: { type: 'string' },
-        confidence: { type: ['number', 'null'] },
-        description: { type: ['string', 'null'] },
-        quote: { type: ['string', 'null'], description: 'Verbatim quote from the source.' },
-        source: {
-          type: ['object', 'null'],
-          properties: {
-            source_id: { type: 'string' },
-            title: { type: 'string' },
-            source_type: { type: 'string' },
-          },
-        },
-        participants: { type: ['array', 'null'], items: { type: 'string' } },
-        connections: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string' },
-              entity_type: { type: 'string' },
-              relation_type: { type: 'string' },
-              direction: { type: 'string', enum: ['outgoing', 'incoming'] },
-            },
-          },
-        },
-      },
     },
   },
   {
@@ -525,18 +448,6 @@ const TOOLS: ToolDescriptor[] = [
       },
       required: ['label'],
     },
-    outputSchema: {
-      type: 'object',
-      description: 'Tree structure of connected entities, rendered as indented text with relationship arrows.',
-      properties: {
-        root: { type: 'string', description: 'Root entity label and type.' },
-        tree: {
-          type: 'string',
-          description: 'Indented text tree showing connected entities at each hop level with relationship arrows.',
-        },
-        total_nodes: { type: 'number', description: 'Total unique nodes traversed (max 30).' },
-      },
-    },
   },
   {
     name: 'list_anchors',
@@ -545,27 +456,6 @@ const TOOLS: ToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {},
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        total: { type: 'number' },
-        anchors_by_type: {
-          type: 'object',
-          description: 'Anchors grouped by entity_type.',
-          additionalProperties: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                label: { type: 'string' },
-                description: { type: ['string', 'null'] },
-                connection_count: { type: 'number' },
-              },
-            },
-          },
-        },
-      },
     },
   },
   {
@@ -598,23 +488,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
     },
-    outputSchema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          source_id: { type: 'string' },
-          title: { type: 'string' },
-          source_type: { type: 'string', enum: ['Meeting', 'YouTube', 'Research', 'Note', 'Document'] },
-          created_at: { type: 'string', format: 'date-time' },
-          participants: { type: ['array', 'null'], items: { type: 'string' } },
-          entity_count: { type: 'number' },
-          indexing_status: { type: 'string', enum: ['complete', 'partial', 'pending'] },
-          source_url: { type: ['string', 'null'] },
-        },
-      },
-      description: 'Sources sorted by created_at descending, with indexing status for each.',
-    },
   },
   {
     name: 'get_source_content',
@@ -643,23 +516,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['query'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        source_id: { type: 'string' },
-        title: { type: 'string' },
-        source_type: { type: 'string' },
-        source_url: { type: ['string', 'null'] },
-        created_at: { type: 'string', format: 'date-time' },
-        participants: { type: ['array', 'null'], items: { type: 'string' } },
-        metadata: { type: 'object', description: 'Source-type-specific metadata (video_id, duration, etc.).' },
-        content: { type: ['string', 'null'], description: 'Full raw content. Null if include_content=false.' },
-        content_length: { type: 'number' },
-        content_truncated: { type: 'boolean' },
-        entity_count: { type: 'number' },
-        chunk_count: { type: 'number' },
-      },
     },
   },
   {
@@ -701,23 +557,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
     },
-    outputSchema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          source_id: { type: 'string' },
-          title: { type: 'string' },
-          source_type: { type: 'string' },
-          source_url: { type: ['string', 'null'] },
-          created_at: { type: 'string', format: 'date-time' },
-          participants: { type: ['array', 'null'], items: { type: 'string' } },
-          metadata: { type: 'object' },
-          entity_count: { type: 'number' },
-          content_preview: { type: 'string', description: 'First 300 characters of the source content.' },
-        },
-      },
-    },
   },
   {
     name: 'get_meeting_brief',
@@ -736,98 +575,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['query'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        meeting: {
-          type: 'object',
-          properties: {
-            source_id: { type: 'string' },
-            title: { type: 'string' },
-            created_at: { type: 'string', format: 'date-time' },
-            participants: { type: ['array', 'null'], items: { type: 'string' } },
-            source_url: { type: ['string', 'null'] },
-            duration: { type: ['string', 'null'] },
-          },
-        },
-        decisions: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string' },
-              description: { type: 'string' },
-              confidence: { type: 'number' },
-              quote: { type: ['string', 'null'] },
-            },
-          },
-        },
-        action_items: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string' },
-              description: { type: 'string' },
-              confidence: { type: 'number' },
-              quote: { type: ['string', 'null'] },
-            },
-          },
-        },
-        key_insights: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string' },
-              entity_type: { type: 'string' },
-              description: { type: 'string' },
-              confidence: { type: 'number' },
-              quote: { type: ['string', 'null'] },
-            },
-          },
-        },
-        topics_discussed: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { label: { type: 'string' }, description: { type: 'string' } },
-          },
-        },
-        people_mentioned: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { label: { type: 'string' }, description: { type: 'string' } },
-          },
-        },
-        risks_and_blockers: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string' },
-              entity_type: { type: 'string' },
-              description: { type: 'string' },
-            },
-          },
-        },
-        related_sources: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              source_id: { type: 'string' },
-              title: { type: 'string' },
-              source_type: { type: 'string' },
-              shared_entity_count: { type: 'number' },
-            },
-          },
-        },
-        total_entities_extracted: { type: 'number' },
-        total_edges: { type: 'number' },
-      },
     },
   },
   {
@@ -857,46 +604,6 @@ const TOOLS: ToolDescriptor[] = [
       },
       required: ['query'],
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        source: {
-          type: 'object',
-          properties: {
-            source_id: { type: 'string' },
-            title: { type: 'string' },
-            source_type: { type: 'string' },
-            created_at: { type: 'string', format: 'date-time' },
-          },
-        },
-        related_sources: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              source_id: { type: 'string' },
-              title: { type: 'string' },
-              source_type: { type: 'string' },
-              created_at: { type: 'string', format: 'date-time' },
-              source_url: { type: ['string', 'null'] },
-              shared_entity_count: { type: 'number' },
-              shared_entities: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    label: { type: 'string' },
-                    entity_type: { type: 'string' },
-                    relation_type: { type: 'string' },
-                  },
-                },
-              },
-              relevance_summary: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
   },
   {
     name: 'get_meeting_notes',
@@ -915,36 +622,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['query'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        meeting: {
-          type: 'object',
-          properties: {
-            source_id: { type: 'string' },
-            title: { type: 'string' },
-            created_at: { type: 'string', format: 'date-time' },
-            participants: { type: ['array', 'null'], items: { type: 'string' } },
-            source_url: { type: ['string', 'null'] },
-            duration: { type: ['number', 'null'], description: 'Duration in seconds.' },
-          },
-        },
-        format: { type: 'string', enum: ['v1_markdown', 'v2_delimited', 'manual'] },
-        notes: { type: ['string', 'null'], description: 'Structured meeting notes (null for manual-paste meetings).' },
-        action_items_raw: { type: ['string', 'null'], description: 'Raw action items section if present.' },
-        extracted_entities: {
-          type: 'object',
-          properties: {
-            decisions: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, description: { type: ['string', 'null'] }, quote: { type: ['string', 'null'] } } } },
-            action_items: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, description: { type: ['string', 'null'] }, quote: { type: ['string', 'null'] } } } },
-            key_insights: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, type: { type: 'string' }, description: { type: ['string', 'null'] } } } },
-            topics: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, description: { type: ['string', 'null'] } } } },
-            people: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, description: { type: ['string', 'null'] } } } },
-          },
-        },
-        total_entities: { type: 'number' },
-      },
     },
   },
   {
@@ -970,26 +647,6 @@ const TOOLS: ToolDescriptor[] = [
       },
       required: ['query'],
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        meeting: {
-          type: 'object',
-          properties: {
-            source_id: { type: 'string' },
-            title: { type: 'string' },
-            created_at: { type: 'string', format: 'date-time' },
-            participants: { type: ['array', 'null'], items: { type: 'string' } },
-            source_url: { type: ['string', 'null'] },
-            duration: { type: ['number', 'null'] },
-          },
-        },
-        format: { type: 'string', enum: ['v1_markdown', 'v2_delimited', 'manual'] },
-        transcript: { type: ['string', 'null'], description: 'Verbatim transcript with speaker labels.' },
-        transcript_length: { type: 'number' },
-        transcript_truncated: { type: 'boolean' },
-      },
-    },
   },
 
   // ============================================
@@ -1014,30 +671,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        total: { type: 'number' },
-        skills_by_domain: {
-          type: 'object',
-          description: 'Skills grouped by domain.',
-          additionalProperties: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string', description: 'Kebab-case skill name for use with get_skill_content.' },
-                description: { type: 'string' },
-                confidence: { type: 'number' },
-                source_count: { type: 'number' },
-                status: { type: 'string', enum: ['active', 'draft'] },
-                updated_at: { type: 'string', format: 'date' },
-              },
-            },
-          },
-        },
-      },
-    },
   },
   {
     name: 'get_skill_content',
@@ -1052,29 +685,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['name'],
-    },
-    outputSchema: {
-      type: 'object',
-      description: 'Full skill content rendered as structured markdown.',
-      properties: {
-        title: { type: 'string' },
-        name: { type: 'string' },
-        domain: { type: ['string', 'null'] },
-        confidence: { type: 'number' },
-        source_count: { type: 'number' },
-        status: { type: 'string' },
-        tags: { type: 'array', items: { type: 'string' } },
-        quality_signals: {
-          type: 'object',
-          properties: {
-            instructional_ratio: { type: ['number', 'null'] },
-            generalizability: { type: ['number', 'null'] },
-            structural_density: { type: ['number', 'null'] },
-          },
-        },
-        description: { type: 'string', description: 'Triggering description for skill matching.' },
-        content: { type: 'string', description: 'Full methodology, examples, and source attribution in markdown.' },
-      },
     },
   },
   {
@@ -1095,27 +705,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['query'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        total: { type: 'number' },
-        skills: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string', description: 'Kebab-case skill name for use with get_skill_content.' },
-              domain: { type: ['string', 'null'] },
-              confidence: { type: 'number' },
-              source_count: { type: 'number' },
-              similarity: { type: 'number', description: 'Semantic similarity (0-1) or 0 for text matches.' },
-              description: { type: 'string' },
-            },
-          },
-        },
-        search_method: { type: 'string', enum: ['semantic', 'text_fallback'] },
-      },
     },
   },
   {
@@ -1145,95 +734,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['query'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        routing: {
-          type: 'object',
-          properties: {
-            classification: { type: 'string', enum: ['single_domain', 'cross_domain', 'meta'] },
-            agents_consulted: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  agent_name: { type: 'string' },
-                  relevance: { type: 'string', enum: ['primary', 'secondary'] },
-                  reason: { type: 'string' },
-                },
-              },
-            },
-            routing_rationale: { type: 'string' },
-          },
-        },
-        agent_perspectives: {
-          type: ['array', 'null'],
-          description: 'Individual agent analyses. Null if include_agent_reasoning=false.',
-          items: {
-            type: 'object',
-            properties: {
-              agent_name: { type: 'string' },
-              reasoning_style: { type: 'string' },
-              analysis: { type: 'string' },
-              key_claims: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    claim: { type: 'string' },
-                    evidence: { type: 'string' },
-                    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-                  },
-                },
-              },
-              coverage_assessment: { type: 'string', enum: ['strong', 'adequate', 'thin', 'gap'] },
-              coverage_note: { type: 'string' },
-              cross_domain_flags: { type: 'array', items: { type: 'string' } },
-              sources_cited: { type: 'array', items: { type: 'string' } },
-            },
-          },
-        },
-        synthesis: {
-          type: 'object',
-          properties: {
-            answer: { type: 'string' },
-            agreements: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  point: { type: 'string' },
-                  supporting_agents: { type: 'array', items: { type: 'string' } },
-                },
-              },
-            },
-            tensions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  point: { type: 'string' },
-                  agents_involved: { type: 'array', items: { type: 'string' } },
-                  nature: { type: 'string' },
-                },
-              },
-            },
-            emergent_insight: { type: ['string', 'null'] },
-            blind_spots: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  topic: { type: 'string' },
-                  relevant_gaps: { type: 'array', items: { type: 'string' } },
-                },
-              },
-            },
-            follow_up_suggestions: { type: 'array', items: { type: 'string' } },
-          },
-        },
-      },
     },
   },
   {
@@ -1265,14 +765,6 @@ const TOOLS: ToolDescriptor[] = [
         },
       },
       required: ['title', 'content'],
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        source_id: { type: 'string', description: 'UUID of the created knowledge source.' },
-        title: { type: 'string' },
-        status: { type: 'string', description: 'Pipeline status (e.g. "processing").' },
-      },
     },
   },
 ]
@@ -3615,7 +3107,7 @@ async function handleMcpRequest(
       return jsonRpcResult(reqId, {
         protocolVersion: '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'synapse', version: '1.1.0' },
+        serverInfo: { name: 'synapse', version: '1.0.0' },
       })
 
     case 'tools/list':
