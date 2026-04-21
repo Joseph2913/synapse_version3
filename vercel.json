@@ -2,11 +2,6 @@
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
-  "functions": {
-    "api/**/*.ts": {
-      "includeFiles": "lib/**"
-    }
-  },
   "crons": [
     {
       "path": "/api/youtube/poll-playlist",

@@ -1,0 +1,36 @@
+<svg version="1.1" id="Layer_1" xmlns:x="ns_extend;" xmlns:i="ns_ai;" xmlns:graph="ns_graphs;" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 185 73" style="enable-background:new 0 0 185 73;" xml:space="preserve">
+ <style type="text/css">
+  .st0{fill-rule:evenodd;clip-rule:evenodd;fill:#007AFF;}
+	.st1{fill:#007AFF;}
+ </style>
+ <metadata>
+  <sfw xmlns="ns_sfw;">
+   <slices>
+   </slices>
+   <sliceSourceBounds bottomLeftOrigin="true" height="73" width="185" x="0" y="0">
+   </sliceSourceBounds>
+  </sfw>
+ </metadata>
+ <desc>
+  Created with Sketch.
+ </desc>
+ <g id="otterLogo_horizontal_blu">
+  <g id="logo-otter">
+   <path id="Rectangle-3-Copy-5" class="st0" d="M119,1L119,1c5.5,0,10,4.5,10,10v51c0,5.5-4.5,10-10,10l0,0c-5.5,0-10-4.5-10-10V11
+			C109,5.5,113.5,1,119,1z">
+   </path>
+   <path id="Rectangle-3-Copy-4" class="st0" d="M91,1L91,1c5.5,0,10,4.5,10,10v51c0,5.5-4.5,10-10,10l0,0c-5.5,0-10-4.5-10-10V11
+			C81,5.5,85.5,1,91,1z">
+   </path>
+   <path id="Rectangle-3-Copy-3" class="st0" d="M147,24L147,24c5.5,0,10,4.5,10,10v6c0,5.5-4.5,10-10,10l0,0c-5.5,0-10-4.5-10-10v-6
+			C137,28.5,141.5,24,147,24z">
+   </path>
+   <path id="Rectangle-3-Copy-2" class="st0" d="M175,14L175,14c5.5,0,10,4.5,10,10v25c0,5.5-4.5,10-10,10l0,0c-5.5,0-10-4.5-10-10
+			V24C165,18.5,169.5,14,175,14z">
+   </path>
+   <path id="Mask-Copy" class="st1" d="M36.5,53.8c9.7,0,17.6-7.9,17.6-17.6s-7.9-17.6-17.6-17.6S19,26.6,19,36.3
+			S26.8,53.8,36.5,53.8z M36.5,73C16.3,73,0,56.7,0,36.5S16.3,0,36.5,0S73,16.3,73,36.5S56.7,73,36.5,73z">
+   </path>
+  </g>
+ </g>
+</svg>

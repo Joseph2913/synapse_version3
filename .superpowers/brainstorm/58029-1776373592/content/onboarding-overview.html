@@ -1,0 +1,828 @@
+<!-- Onboarding Flow Overview - Full Wizard Mockup -->
+<style>
+  :root {
+    --syn-bg: #f7f7f7;
+    --syn-card: #ffffff;
+    --syn-accent: #d63a00;
+    --syn-accent-50: #fff5f0;
+    --syn-accent-100: #ffe0cc;
+    --syn-text-primary: #1a1a1a;
+    --syn-text-body: #3d3d3d;
+    --syn-text-secondary: #808080;
+    --syn-border: rgba(0,0,0,0.06);
+    --syn-border-default: rgba(0,0,0,0.10);
+    --syn-font-display: 'Cabinet Grotesk', system-ui, sans-serif;
+    --syn-font-body: 'DM Sans', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body { background: #1a1a1a !important; }
+
+  .flow-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 20px;
+    font-family: var(--syn-font-body);
+  }
+
+  .flow-title {
+    font-family: var(--syn-font-display);
+    font-size: 22px;
+    font-weight: 800;
+    color: #fff;
+    margin-bottom: 4px;
+    text-align: center;
+  }
+  .flow-subtitle {
+    font-size: 13px;
+    color: #999;
+    margin-bottom: 28px;
+    text-align: center;
+  }
+
+  /* Step progress bar */
+  .step-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 32px;
+    padding: 0 40px;
+  }
+  .step-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    cursor: pointer;
+    position: relative;
+  }
+  .step-dot.active {
+    background: var(--syn-accent);
+    color: #fff;
+    box-shadow: 0 0 0 4px rgba(214,58,0,0.15);
+  }
+  .step-dot.complete {
+    background: var(--syn-accent);
+    color: #fff;
+    opacity: 0.7;
+  }
+  .step-dot.upcoming {
+    background: rgba(255,255,255,0.08);
+    color: #666;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .step-connector {
+    height: 2px;
+    flex: 1;
+    max-width: 80px;
+  }
+  .step-connector.done { background: rgba(214,58,0,0.4); }
+  .step-connector.pending { background: rgba(255,255,255,0.08); }
+
+  .step-labels {
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    margin-top: -20px;
+    margin-bottom: 28px;
+    padding: 0 20px;
+  }
+  .step-label {
+    width: 120px;
+    text-align: center;
+    font-size: 10px;
+    color: #666;
+    font-weight: 500;
+  }
+  .step-label.active { color: var(--syn-accent); }
+
+  /* Screen cards */
+  .screens-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .screen-card {
+    background: var(--syn-card);
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--syn-border);
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .screen-card:hover {
+    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+    transform: translateY(-2px);
+  }
+  .screen-card.selected {
+    border-color: var(--syn-accent) !important;
+    box-shadow: 0 0 0 3px rgba(214,58,0,0.12);
+  }
+
+  .screen-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--syn-border);
+    background: var(--syn-bg);
+  }
+  .screen-step-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--syn-accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .screen-step-title {
+    font-family: var(--syn-font-display);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--syn-text-primary);
+  }
+  .screen-step-desc {
+    font-size: 11px;
+    color: var(--syn-text-secondary);
+  }
+
+  .screen-body {
+    padding: 24px 20px;
+  }
+
+  /* Mockup elements */
+  .mock-wizard {
+    background: var(--syn-bg);
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid var(--syn-border);
+  }
+
+  .mock-section-title {
+    font-family: var(--syn-font-display);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--syn-text-primary);
+    margin-bottom: 4px;
+  }
+  .mock-section-sub {
+    font-size: 12px;
+    color: var(--syn-text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.5;
+  }
+
+  .mock-feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .mock-feature {
+    background: var(--syn-card);
+    border-radius: 10px;
+    padding: 14px;
+    border: 1px solid var(--syn-border);
+    text-align: center;
+  }
+  .mock-feature-icon {
+    font-size: 24px;
+    margin-bottom: 6px;
+  }
+  .mock-feature-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--syn-text-primary);
+  }
+  .mock-feature-desc {
+    font-size: 10px;
+    color: var(--syn-text-secondary);
+    margin-top: 2px;
+  }
+
+  .mock-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 24px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+  }
+  .mock-btn-primary {
+    background: var(--syn-accent);
+    color: #fff;
+  }
+  .mock-btn-secondary {
+    background: transparent;
+    color: var(--syn-text-secondary);
+    border: 1px solid var(--syn-border-default);
+  }
+  .mock-btn-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+
+  /* Upload area */
+  .mock-upload {
+    border: 2px dashed var(--syn-border-default);
+    border-radius: 12px;
+    padding: 28px;
+    text-align: center;
+    margin-bottom: 16px;
+    background: var(--syn-accent-50);
+  }
+  .mock-upload-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+    opacity: 0.6;
+  }
+  .mock-upload-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--syn-text-primary);
+  }
+  .mock-upload-sub {
+    font-size: 11px;
+    color: var(--syn-text-secondary);
+    margin-top: 2px;
+  }
+
+  /* Export instructions */
+  .mock-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--syn-border);
+  }
+  .mock-tab {
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--syn-text-secondary);
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+  }
+  .mock-tab.active {
+    color: var(--syn-accent);
+    border-bottom-color: var(--syn-accent);
+  }
+
+  .mock-instruction-list {
+    list-style: none;
+    padding: 0;
+  }
+  .mock-instruction-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--syn-border);
+    font-size: 12px;
+    color: var(--syn-text-body);
+    line-height: 1.5;
+  }
+  .mock-instruction-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--syn-accent-50);
+    color: var(--syn-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* Integration cards */
+  .mock-integration {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: var(--syn-card);
+    border-radius: 10px;
+    border: 1px solid var(--syn-border);
+    margin-bottom: 8px;
+  }
+  .mock-integration-logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .mock-integration-info {
+    flex: 1;
+  }
+  .mock-integration-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--syn-text-primary);
+  }
+  .mock-integration-desc {
+    font-size: 11px;
+    color: var(--syn-text-secondary);
+  }
+  .mock-connect-btn {
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--syn-accent);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  .mock-connected {
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #e8f5e9;
+    color: #2e7d32;
+    border: none;
+  }
+
+  /* YouTube playlist */
+  .mock-url-input {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .mock-url-input input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--syn-border-default);
+    font-size: 12px;
+    background: var(--syn-bg);
+    color: var(--syn-text-body);
+    font-family: var(--syn-font-body);
+  }
+
+  .mock-playlist-preview {
+    background: var(--syn-bg);
+    border-radius: 10px;
+    padding: 14px;
+    border: 1px solid var(--syn-border);
+    margin-bottom: 12px;
+  }
+  .mock-playlist-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--syn-text-primary);
+    margin-bottom: 4px;
+  }
+  .mock-playlist-meta {
+    font-size: 11px;
+    color: var(--syn-text-secondary);
+  }
+  .mock-limit-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--syn-accent-50);
+    border-radius: 8px;
+  }
+  .mock-limit-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--syn-text-primary);
+    white-space: nowrap;
+  }
+  .mock-slider {
+    flex: 1;
+    height: 4px;
+    background: var(--syn-accent-100);
+    border-radius: 2px;
+    position: relative;
+  }
+  .mock-slider-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 40%;
+    background: var(--syn-accent);
+    border-radius: 2px;
+  }
+  .mock-slider-thumb {
+    position: absolute;
+    left: 40%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 14px;
+    height: 14px;
+    background: var(--syn-accent);
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+  .mock-limit-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--syn-accent);
+    min-width: 60px;
+    text-align: right;
+  }
+
+  .note-box {
+    background: #fffbf5;
+    border-left: 3px solid var(--syn-accent);
+    border-radius: 0 8px 8px 0;
+    padding: 12px 14px;
+    font-size: 11px;
+    color: var(--syn-text-body);
+    line-height: 1.5;
+    margin-top: 8px;
+  }
+
+  /* Page nav icons */
+  .page-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .page-item {
+    background: var(--syn-card);
+    border-radius: 10px;
+    padding: 14px 10px;
+    border: 1px solid var(--syn-border);
+    text-align: center;
+  }
+  .page-icon {
+    font-size: 20px;
+    margin-bottom: 6px;
+  }
+  .page-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--syn-text-primary);
+  }
+  .page-desc {
+    font-size: 9px;
+    color: var(--syn-text-secondary);
+    margin-top: 2px;
+    line-height: 1.4;
+  }
+</style>
+
+<div class="flow-container">
+  <div class="flow-title">Synapse Onboarding Flow</div>
+  <div class="flow-subtitle">5-step wizard that appears after first sign-in. Each step is skippable except Step 0.</div>
+
+  <!-- Step Progress Bar -->
+  <div class="step-bar">
+    <div class="step-dot active" style="font-size:10px;">0</div>
+    <div class="step-connector done"></div>
+    <div class="step-dot upcoming">1</div>
+    <div class="step-connector pending"></div>
+    <div class="step-dot upcoming">2</div>
+    <div class="step-connector pending"></div>
+    <div class="step-dot upcoming">3</div>
+    <div class="step-connector pending"></div>
+    <div class="step-dot upcoming">4</div>
+  </div>
+
+  <!-- STEP 0: Welcome -->
+  <div class="screens-grid">
+    <div class="screen-card" data-choice="step0" onclick="toggleSelect(this)">
+      <div class="screen-header">
+        <div class="screen-step-badge">0</div>
+        <div>
+          <div class="screen-step-title">Welcome to Synapse</div>
+          <div class="screen-step-desc">Platform overview, pages, and what this tool does for you</div>
+        </div>
+      </div>
+      <div class="screen-body">
+        <div class="mock-wizard">
+          <div style="text-align:center; margin-bottom:20px;">
+            <div style="font-size:36px; margin-bottom:8px;">🔥</div>
+            <div class="mock-section-title">Your knowledge, connected.</div>
+            <div class="mock-section-sub" style="max-width:400px; margin:8px auto 0;">
+              Synapse transforms scattered knowledge from meetings, videos, documents, and notes into an interconnected graph you can explore, query, and build on.
+            </div>
+          </div>
+
+          <div class="page-grid">
+            <div class="page-item">
+              <div class="page-icon">🏠</div>
+              <div class="page-name">Home</div>
+              <div class="page-desc">Activity feed and knowledge stats</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">🔍</div>
+              <div class="page-name">Explore</div>
+              <div class="page-desc">Browse and visualize your knowledge graph</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">💬</div>
+              <div class="page-name">Ask</div>
+              <div class="page-desc">Chat with your knowledge using Graph RAG</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">✏️</div>
+              <div class="page-name">Capture</div>
+              <div class="page-desc">Add text, URLs, docs, and transcripts</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">⚡</div>
+              <div class="page-name">Automate</div>
+              <div class="page-desc">Connect services for auto-ingestion</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">🧭</div>
+              <div class="page-name">Orient</div>
+              <div class="page-desc">AI-generated knowledge briefings</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">📊</div>
+              <div class="page-name">Pipeline</div>
+              <div class="page-desc">Track extraction health and history</div>
+            </div>
+            <div class="page-item">
+              <div class="page-icon">⚙️</div>
+              <div class="page-name">Settings</div>
+              <div class="page-desc">Profile, anchors, and extraction config</div>
+            </div>
+          </div>
+
+          <div class="mock-btn-row" style="justify-content:center;">
+            <div class="mock-btn mock-btn-primary">Get Started →</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 1: Import AI History -->
+    <div class="screen-card" data-choice="step1" onclick="toggleSelect(this)">
+      <div class="screen-header">
+        <div class="screen-step-badge">1</div>
+        <div>
+          <div class="screen-step-title">Import Your AI History</div>
+          <div class="screen-step-desc">Upload your ChatGPT or Claude export to build your initial knowledge profile</div>
+        </div>
+      </div>
+      <div class="screen-body">
+        <div class="mock-wizard">
+          <div class="mock-section-title">Bring your conversations with you</div>
+          <div class="mock-section-sub">
+            Export your full history from ChatGPT or Claude. Synapse will analyze your conversations to build a profile of your interests, expertise, and key topics, then seed your knowledge graph with initial entities and anchors.
+          </div>
+
+          <div class="mock-tabs">
+            <div class="mock-tab active">ChatGPT</div>
+            <div class="mock-tab">Claude</div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div>
+              <div style="font-size:12px; font-weight:600; color:var(--syn-text-primary); margin-bottom:8px;">How to export from ChatGPT:</div>
+              <ol class="mock-instruction-list">
+                <li>
+                  <div class="mock-instruction-num">1</div>
+                  <div>Go to <strong>Settings → Data Controls → Export Data</strong></div>
+                </li>
+                <li>
+                  <div class="mock-instruction-num">2</div>
+                  <div>Click <strong>"Export"</strong> and wait for the email</div>
+                </li>
+                <li>
+                  <div class="mock-instruction-num">3</div>
+                  <div>Download the ZIP file from the email link</div>
+                </li>
+                <li>
+                  <div class="mock-instruction-num">4</div>
+                  <div>Upload the <strong>conversations.json</strong> file below</div>
+                </li>
+              </ol>
+            </div>
+
+            <div>
+              <div class="mock-upload">
+                <div class="mock-upload-icon">📁</div>
+                <div class="mock-upload-text">Drop conversations.json here</div>
+                <div class="mock-upload-sub">or click to browse files</div>
+              </div>
+
+              <div class="note-box">
+                <strong>What happens:</strong> Synapse reads your conversation topics and patterns to identify your professional context, interests, and recurring themes. It creates an initial set of entities (people, topics, projects) and anchors (your key focus areas). Your raw conversations are never stored.
+              </div>
+            </div>
+          </div>
+
+          <div class="mock-btn-row">
+            <div class="mock-btn mock-btn-secondary">Skip for now</div>
+            <div class="mock-btn mock-btn-primary">Process & Continue →</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2: Profile Review (Auto-generated) -->
+    <div class="screen-card" data-choice="step2" onclick="toggleSelect(this)">
+      <div class="screen-header">
+        <div class="screen-step-badge">2</div>
+        <div>
+          <div class="screen-step-title">Review Your Profile</div>
+          <div class="screen-step-desc">AI-generated profile and anchors from your import, ready for you to adjust</div>
+        </div>
+      </div>
+      <div class="screen-body">
+        <div class="mock-wizard">
+          <div class="mock-section-title">Here's what we learned about you</div>
+          <div class="mock-section-sub">
+            Based on your conversation history, we've built a profile and identified your key focus areas. Adjust anything that doesn't look right.
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div>
+              <div style="font-size:12px; font-weight:600; color:var(--syn-text-primary); margin-bottom:8px;">Professional Context</div>
+              <div style="background:var(--syn-bg); border-radius:8px; padding:12px; border:1px solid var(--syn-border); font-size:11px; color:var(--syn-text-body); line-height:1.6; margin-bottom:12px;">
+                Founder building a knowledge graph platform. Works across product strategy, AI/ML engineering, and client consulting. Thinks in systems and connections. Based in Australia.
+              </div>
+              <div style="font-size:12px; font-weight:600; color:var(--syn-text-primary); margin-bottom:8px;">Interests</div>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <span style="padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600; background:var(--syn-accent-50); color:var(--syn-accent); border:1px solid rgba(214,58,0,0.1);">Knowledge Graphs</span>
+                <span style="padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600; background:#f0f7ff; color:#1565c0; border:1px solid rgba(21,101,192,0.1);">AI Agents</span>
+                <span style="padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600; background:#f3e8ff; color:#7b1fa2; border:1px solid rgba(123,31,162,0.1);">Product Strategy</span>
+                <span style="padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600; background:#e8f5e9; color:#2e7d32; border:1px solid rgba(46,125,50,0.1);">Systems Thinking</span>
+                <span style="padding:4px 10px; border-radius:20px; font-size:10px; font-weight:600; background:#fff3e0; color:#e65100; border:1px solid rgba(230,81,0,0.1);">Consulting</span>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px; font-weight:600; color:var(--syn-text-primary); margin-bottom:8px;">Detected Anchors (Focus Areas)</div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--syn-card); border-radius:8px; border:1px solid var(--syn-border);">
+                  <div style="width:8px; height:8px; border-radius:50%; background:var(--syn-accent);"></div>
+                  <span style="font-size:11px; font-weight:600; color:var(--syn-text-primary); flex:1;">Synapse Platform</span>
+                  <span style="font-size:10px; color:var(--syn-text-secondary);">47 mentions</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--syn-card); border-radius:8px; border:1px solid var(--syn-border);">
+                  <div style="width:8px; height:8px; border-radius:50%; background:#1565c0;"></div>
+                  <span style="font-size:11px; font-weight:600; color:var(--syn-text-primary); flex:1;">AI Agent Architecture</span>
+                  <span style="font-size:10px; color:var(--syn-text-secondary);">31 mentions</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--syn-card); border-radius:8px; border:1px solid var(--syn-border);">
+                  <div style="width:8px; height:8px; border-radius:50%; background:#7b1fa2;"></div>
+                  <span style="font-size:11px; font-weight:600; color:var(--syn-text-primary); flex:1;">Client Consulting</span>
+                  <span style="font-size:10px; color:var(--syn-text-secondary);">22 mentions</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--syn-card); border-radius:8px; border:1px solid var(--syn-border);">
+                  <div style="width:8px; height:8px; border-radius:50%; background:#2e7d32;"></div>
+                  <span style="font-size:11px; font-weight:600; color:var(--syn-text-primary); flex:1;">Graph RAG</span>
+                  <span style="font-size:10px; color:var(--syn-text-secondary);">18 mentions</span>
+                </div>
+              </div>
+              <div class="note-box" style="margin-top:12px;">
+                Anchors are your key focus areas. Synapse uses them to prioritize what gets extracted and how your knowledge is organized. You can always change these later in Settings.
+              </div>
+            </div>
+          </div>
+
+          <div class="mock-btn-row">
+            <div class="mock-btn mock-btn-secondary">Edit Profile</div>
+            <div class="mock-btn mock-btn-primary">Looks Good →</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3: Connect Meetings -->
+    <div class="screen-card" data-choice="step3" onclick="toggleSelect(this)">
+      <div class="screen-header">
+        <div class="screen-step-badge">3</div>
+        <div>
+          <div class="screen-step-title">Connect Meeting Services</div>
+          <div class="screen-step-desc">Auto-ingest transcripts from your meetings</div>
+        </div>
+      </div>
+      <div class="screen-body">
+        <div class="mock-wizard">
+          <div class="mock-section-title">Auto-capture your meetings</div>
+          <div class="mock-section-sub">
+            Connect your meeting tools and Synapse will automatically ingest transcripts, extract entities, and add them to your knowledge graph.
+          </div>
+
+          <div class="mock-integration" style="border-color:rgba(21,101,192,0.15);">
+            <div class="mock-integration-logo" style="background:#e3f2fd;">
+              <span style="font-size:20px;">📅</span>
+            </div>
+            <div class="mock-integration-info">
+              <div class="mock-integration-name">Microsoft Teams / Outlook</div>
+              <div class="mock-integration-desc">Calendar events and Teams meeting transcripts</div>
+            </div>
+            <button class="mock-connect-btn">Connect</button>
+          </div>
+
+          <div class="mock-integration" style="border-color:rgba(46,125,50,0.15);">
+            <div class="mock-integration-logo" style="background:#e8f5e9;">
+              <span style="font-size:20px;">📹</span>
+            </div>
+            <div class="mock-integration-info">
+              <div class="mock-integration-name">Google Meet</div>
+              <div class="mock-integration-desc">Google Calendar events and Meet recordings</div>
+            </div>
+            <button class="mock-connect-btn">Connect</button>
+          </div>
+
+          <div class="mock-integration" style="border-color:rgba(123,31,162,0.15);">
+            <div class="mock-integration-logo" style="background:#f3e8ff;">
+              <span style="font-size:20px;">🎙</span>
+            </div>
+            <div class="mock-integration-info">
+              <div class="mock-integration-name">Otter.ai / Granola / Read AI</div>
+              <div class="mock-integration-desc">Import transcripts from meeting note-taking tools</div>
+            </div>
+            <button class="mock-connect-btn">Connect</button>
+          </div>
+
+          <div class="mock-btn-row">
+            <div class="mock-btn mock-btn-secondary">Skip for now</div>
+            <div class="mock-btn mock-btn-primary">Continue →</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 4: YouTube Playlist -->
+    <div class="screen-card" data-choice="step4" onclick="toggleSelect(this)">
+      <div class="screen-header">
+        <div class="screen-step-badge">4</div>
+        <div>
+          <div class="screen-step-title">Connect a YouTube Playlist</div>
+          <div class="screen-step-desc">Ingest videos from a playlist with configurable limits</div>
+        </div>
+      </div>
+      <div class="screen-body">
+        <div class="mock-wizard">
+          <div class="mock-section-title">Learn from your video library</div>
+          <div class="mock-section-sub">
+            Paste a YouTube playlist URL and Synapse will extract transcripts, identify entities, and connect concepts across videos.
+          </div>
+
+          <div class="mock-url-input">
+            <input type="text" placeholder="https://youtube.com/playlist?list=..." readonly />
+            <div class="mock-btn mock-btn-primary" style="padding:8px 16px; white-space:nowrap;">Fetch Playlist</div>
+          </div>
+
+          <div class="mock-playlist-preview">
+            <div class="mock-playlist-name">📺 AI & Machine Learning Deep Dives</div>
+            <div class="mock-playlist-meta">142 videos · Last updated 3 days ago</div>
+
+            <div class="mock-limit-bar">
+              <div class="mock-limit-label">Videos to process:</div>
+              <div class="mock-slider">
+                <div class="mock-slider-fill"></div>
+                <div class="mock-slider-thumb"></div>
+              </div>
+              <div class="mock-limit-value">25 / 142</div>
+            </div>
+          </div>
+
+          <div class="note-box">
+            <strong>Processing time:</strong> Each video takes about 30-60 seconds to transcribe and extract. 25 videos will take roughly 15-25 minutes. You can use Synapse while this runs in the background.
+          </div>
+
+          <div class="mock-btn-row">
+            <div class="mock-btn mock-btn-secondary">Skip for now</div>
+            <div class="mock-btn mock-btn-primary">Start Processing & Finish Setup →</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="text-align:center; margin-top:24px; padding:16px; background:rgba(214,58,0,0.06); border-radius:12px;">
+    <div style="font-size:13px; font-weight:600; color:var(--syn-text-primary); margin-bottom:4px;">Click any step card to select it for discussion</div>
+    <div style="font-size:11px; color:var(--syn-text-secondary);">Each step is shown as a full-screen wizard panel. Steps 1-4 are skippable. Step 2 only appears if Step 1 is completed.</div>
+  </div>
+</div>
