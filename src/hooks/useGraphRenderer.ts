@@ -133,12 +133,12 @@ function drawAnchorNode(
 
   // Ambient glow rings
   ctx.beginPath()
-  ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2)
-  ctx.fillStyle = `${node.color}0A`
+  ctx.arc(node.x, node.y, r + 10, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}1A`
   ctx.fill()
   ctx.beginPath()
-  ctx.arc(node.x, node.y, r + 3, 0, Math.PI * 2)
-  ctx.fillStyle = `${node.color}0F`
+  ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}35`
   ctx.fill()
 
   // Solid filled circle
@@ -196,12 +196,12 @@ function drawGravityAnchorNode(
 
   // Ambient glow rings
   ctx.beginPath()
-  ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2)
-  ctx.fillStyle = `${node.color}0A`
+  ctx.arc(node.x, node.y, r + 10, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}1A`
   ctx.fill()
   ctx.beginPath()
-  ctx.arc(node.x, node.y, r + 3, 0, Math.PI * 2)
-  ctx.fillStyle = `${node.color}0F`
+  ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2)
+  ctx.fillStyle = `${node.color}35`
   ctx.fill()
 
   // Subtle glow ring showing gravity field

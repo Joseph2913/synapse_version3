@@ -149,8 +149,8 @@ export interface AnchorUserConfig {
   // How often the scoring engine runs
   suggestionFrequency:  'per_extraction' | 'daily' | 'weekly'
 
-  // Score threshold for surfacing a candidate as 'suggested'
-  // Maps to UI slider: 'conservative' ≈ 0.72, 'balanced' ≈ 0.60, 'aggressive' ≈ 0.45
+  // Score threshold for quiet auto-confirm (auto-promoted, shown in "recently added")
+  // Maps to UI slider: 'conservative' ≈ 0.50, 'balanced' ≈ 0.38, 'aggressive' ≈ 0.33
   suggestionThreshold:  number
 
   // Days before an unreviewed 'suggested' candidate auto-reverts to 'pending'
@@ -171,7 +171,7 @@ export interface AnchorUserConfig {
 
 export const DEFAULT_ANCHOR_USER_CONFIG: AnchorUserConfig = {
   suggestionFrequency:         'per_extraction',
-  suggestionThreshold:         0.25,
+  suggestionThreshold:         0.38,
   autoDismissAfterDays:        14,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
@@ -180,17 +180,28 @@ export const DEFAULT_ANCHOR_USER_CONFIG: AnchorUserConfig = {
 }
 
 // ─── Threshold presets ────────────────────────────────────────────────────────
-// Maps to the Conservative / Balanced / Aggressive slider in the UI.
+// Two-zone auto-confirm system — no manual review queue.
+//
+// ≥ 0.50  → Auto-confirm (high confidence, silently promoted)
+// 0.38–0.49 → Quiet auto-confirm (auto-promoted, shown in "recently added")
+// < 0.38  → Hidden (pending, never surfaced to user)
+//
+// The suggestion threshold is the floor for quiet auto-confirm (0.38).
+// Nothing below 0.33 is ever persisted as a candidate going forward.
 
 export const THRESHOLD_PRESETS = {
-  conservative: 0.40,
-  balanced:     0.25,
-  aggressive:   0.15,
+  conservative: 0.50,
+  balanced:     0.38,
+  aggressive:   0.33,
 } as const
 
-// Auto-confirm threshold: nodes scoring at or above this are automatically
-// confirmed as anchors (is_anchor = true) without user review.
-export const AUTO_CONFIRM_THRESHOLD = 0.45
+// Auto-confirm threshold: nodes scoring at or above this are silently
+// confirmed as anchors (is_anchor = true) — high confidence, no UI trace.
+export const AUTO_CONFIRM_THRESHOLD = 0.50
+
+// Quiet auto-confirm threshold: nodes scoring in [0.38, 0.50) are
+// auto-confirmed but shown in a "recently added" list for optional review.
+export const QUIET_AUTO_CONFIRM_THRESHOLD = 0.38
 
 export type ThresholdPreset = keyof typeof THRESHOLD_PRESETS
 

@@ -104,7 +104,7 @@ export function SkillCard({ skill, isSelected, onClick }: SkillCardProps) {
   return (
     <SpotlightCard
       onClick={onClick}
-      color={`${domainColor}50`}
+      color={`${domainColor}10`}
       style={{
         background: isSelected
           ? 'var(--color-accent-50)'

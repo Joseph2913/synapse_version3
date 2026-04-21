@@ -13,8 +13,8 @@ interface SpotlightCardProps {
 
 export function SpotlightCard({
   children,
-  color = 'rgba(214, 58, 0, 0.4)',
-  radius = 200,
+  color = 'rgba(214, 58, 0, 0.06)',
+  radius = 140,
   className,
   style,
   onClick,
@@ -57,17 +57,12 @@ export function SpotlightCard({
         aria-hidden
         style={{
           position: 'absolute',
-          inset: -1,
+          inset: 0,
           borderRadius: 'inherit',
           pointerEvents: 'none',
           opacity: active ? 1 : 0,
-          transition: 'opacity 0.3s var(--ease-out-expo)',
-          background: `radial-gradient(${radius}px circle at ${pos.x}px ${pos.y}px, ${color}, transparent 65%)`,
-          padding: 1,
-          WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
-          mask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
-          WebkitMaskComposite: 'xor',
-          maskComposite: 'exclude' as React.CSSProperties['maskComposite'],
+          transition: 'opacity 0.25s var(--ease-out-expo)',
+          background: `radial-gradient(${radius}px circle at ${pos.x}px ${pos.y}px, ${color}, transparent 70%)`,
         }}
       />
     </div>

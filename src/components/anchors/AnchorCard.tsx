@@ -74,7 +74,7 @@ export function AnchorCard({ candidate, isSelected, onClick, onConfirm, onDismis
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className="cursor-pointer"
-      color={`${entityColor}50`}
+      color={`${entityColor}10`}
       style={{
         position: 'relative',
         overflow: 'hidden',

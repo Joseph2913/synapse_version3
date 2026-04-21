@@ -21,10 +21,11 @@ function verifyCronAuth(req: VercelRequest): boolean {
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
-const AUTO_CONFIRM_THRESHOLD = 0.45
+const AUTO_CONFIRM_THRESHOLD = 0.50
+const QUIET_AUTO_CONFIRM_THRESHOLD = 0.38
 
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.25,
+  suggestionThreshold:         0.38,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
   autoDismissAfterDays:        14,
@@ -257,25 +258,36 @@ async function runLifecycleTransitions(
   const now = new Date()
   let autoDismissed = 0, markedDormant = 0, resurfaced = 0, healed = 0
 
-  // 1. Auto-dismiss: 'suggested' candidates past autoDismissAfterDays with no user action
-  const autoDismissCutoff = new Date(now.getTime() - (config.autoDismissAfterDays as number) * 86400000).toISOString()
-  const { data: stale } = await supabase
+  // 1. Demote any legacy 'suggested' candidates to 'pending' (no manual review queue).
+  // With the two-zone auto-confirm system, 'suggested' is no longer used going forward.
+  const { data: legacySuggested } = await supabase
     .from('anchor_candidates')
-    .select('id, dismiss_count')
+    .select('id, composite_score')
     .eq('user_id', userId)
     .eq('status', 'suggested')
-    .lt('suggested_at', autoDismissCutoff)
 
-  if (stale && stale.length > 0) {
-    for (const row of stale) {
-      const resurface = new Date(now.getTime() + (config.resurfaceCooldownDays as number) * 86400000).toISOString()
-      await supabase.from('anchor_candidates').update({
-        status:          'dismissed',
-        reviewed_at:     now.toISOString(),
-        resurface_after: resurface,
-        dismiss_count:   (row.dismiss_count as number ?? 0) + 1,
-      }).eq('id', row.id as string)
-      autoDismissed++
+  if (legacySuggested && legacySuggested.length > 0) {
+    for (const row of legacySuggested) {
+      const score = row.composite_score as number
+      if (score >= 0.38) {
+        // Quiet auto-confirm: promote to confirmed
+        await supabase.from('anchor_candidates').update({
+          status:      'confirmed',
+          reviewed_at: now.toISOString(),
+        }).eq('id', row.id as string)
+        // Also set is_anchor on the node
+        const { data: cand } = await supabase.from('anchor_candidates').select('node_id').eq('id', row.id as string).maybeSingle()
+        if (cand?.node_id) {
+          await supabase.from('knowledge_nodes').update({ is_anchor: true }).eq('id', cand.node_id as string)
+        }
+      } else {
+        // Below threshold: demote to pending
+        await supabase.from('anchor_candidates').update({
+          status:       'pending',
+          suggested_at: null,
+        }).eq('id', row.id as string)
+        autoDismissed++
+      }
     }
   }
 
@@ -343,12 +355,18 @@ async function runLifecycleTransitions(
     .lt('resurface_after', now.toISOString())
 
   for (const row of readyToResurface ?? []) {
-    if ((row.composite_score as number) >= (config.suggestionThreshold as number)) {
+    if ((row.composite_score as number) >= 0.38) {
+      // Auto-confirm (quiet or full) — no manual review queue
       await supabase.from('anchor_candidates').update({
-        status:          'suggested',
-        suggested_at:    now.toISOString(),
+        status:          'confirmed',
+        reviewed_at:     now.toISOString(),
         resurface_after: null,
       }).eq('id', row.id as string)
+      // Set is_anchor on the node
+      const { data: cand } = await supabase.from('anchor_candidates').select('node_id').eq('id', row.id as string).maybeSingle()
+      if (cand?.node_id) {
+        await supabase.from('knowledge_nodes').update({ is_anchor: true }).eq('id', cand.node_id as string)
+      }
       resurfaced++
     } else {
       await supabase.from('anchor_candidates').update({
@@ -634,14 +652,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const candidate of scored) {
         const nodeId = candidate.signals.nodeId
         const existing = existingMap.get(nodeId)
+        // Two-zone system: auto-confirm (≥0.50) and quiet auto-confirm (0.38–0.49).
+        // Everything below 0.38 stays pending/hidden — no manual review queue.
         const shouldAutoConfirm = candidate.compositeScore >= AUTO_CONFIRM_THRESHOLD
-        const shouldSurface = candidate.compositeScore >= (config.suggestionThreshold as number)
-
-        // Determine target status
-        let targetStatus: string
-        if (shouldAutoConfirm) targetStatus = 'confirmed'
-        else if (shouldSurface) targetStatus = 'suggested'
-        else targetStatus = 'pending'
+        const shouldQuietConfirm = candidate.compositeScore >= QUIET_AUTO_CONFIRM_THRESHOLD
+        const shouldConfirm = shouldAutoConfirm || shouldQuietConfirm
 
         if (existing) {
           const updatePayload: Record<string, unknown> = {
@@ -663,23 +678,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             threshold_at_scoring: config.suggestionThreshold,
           }
 
-          // Auto-confirm: upgrade pending/suggested → confirmed
-          if (shouldAutoConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
+          // Auto-confirm or quiet auto-confirm: upgrade pending/suggested → confirmed
+          if (shouldConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
             updatePayload.status = 'confirmed'
             updatePayload.reviewed_at = nowStr
             updatePayload.suggested_at = updatePayload.suggested_at ?? nowStr
             autoConfirmed++
             // Set is_anchor on the node
             await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', nodeId)
-          } else if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
-            updatePayload.status = 'suggested'
-            updatePayload.suggested_at = nowStr
-            surfaced++
+          }
+          // Below threshold: if currently 'suggested' (legacy), demote to 'pending'
+          if (!shouldConfirm && existing.status === 'suggested') {
+            updatePayload.status = 'pending'
+            updatePayload.suggested_at = null
           }
 
           await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
         } else {
-          const insertStatus = shouldAutoConfirm ? 'confirmed' : (shouldSurface ? 'suggested' : 'pending')
+          const insertStatus = shouldConfirm ? 'confirmed' : 'pending'
           await sb.from('anchor_candidates').insert({
             user_id: userId, node_id: nodeId,
             composite_score:     candidate.compositeScore,
@@ -698,7 +714,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             scoring_profile:     config.scoringProfile,
             reasoning_text:      candidate.reasoningText,
             threshold_at_scoring: config.suggestionThreshold,
-            suggested_at:        insertStatus !== 'pending' ? nowStr : null,
+            suggested_at:        insertStatus === 'confirmed' ? nowStr : null,
             reviewed_at:         insertStatus === 'confirmed' ? nowStr : null,
             first_scored_at:     nowStr,
             last_scored_at:      nowStr,
@@ -706,8 +722,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (insertStatus === 'confirmed') {
             autoConfirmed++
             await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', nodeId)
-          } else if (insertStatus === 'suggested') {
-            surfaced++
           }
         }
       }

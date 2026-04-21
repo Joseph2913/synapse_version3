@@ -29,10 +29,11 @@ async function resolveUserId(req: VercelRequest): Promise<string | null> {
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
-const AUTO_CONFIRM_THRESHOLD = 0.45
+const AUTO_CONFIRM_THRESHOLD = 0.50
+const QUIET_AUTO_CONFIRM_THRESHOLD = 0.38
 
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.25,
+  suggestionThreshold:         0.38,
   dormantAfterDays:            60,
   resurfaceCooldownDays:       30,
   autoDismissAfterDays:        14,
@@ -464,8 +465,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (isDupCandidate) { scored++; continue }
 
+        // Two-zone system: auto-confirm (≥0.50) and quiet auto-confirm (0.38–0.49).
+        // Everything below 0.38 stays pending/hidden — no manual review queue.
         const shouldAutoConfirm = composite >= AUTO_CONFIRM_THRESHOLD
-        const shouldSurface = composite >= (config.suggestionThreshold as number)
+        const shouldQuietConfirm = composite >= QUIET_AUTO_CONFIRM_THRESHOLD
+        const shouldConfirm = shouldAutoConfirm || shouldQuietConfirm
         const existing = existingMap.get(m.nodeId)
         const daysActive = nodeRow?.created_at
           ? Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000) : 0
@@ -482,21 +486,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             scoring_profile: config.scoringProfile, reasoning_text: parts.join(', ') + '.',
             last_scored_at: nowStr, threshold_at_scoring: config.suggestionThreshold,
           }
-          // Auto-confirm: upgrade pending/suggested → confirmed
-          if (shouldAutoConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
+          // Auto-confirm or quiet auto-confirm: upgrade pending/suggested → confirmed
+          if (shouldConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
             updatePayload.status = 'confirmed'
             updatePayload.reviewed_at = nowStr
             updatePayload.suggested_at = updatePayload.suggested_at ?? nowStr
             surfaced++
             await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', m.nodeId)
-          } else if (!protectedStatuses.includes(existing.status as string) && shouldSurface && existing.status === 'pending') {
-            updatePayload.status = 'suggested'
-            updatePayload.suggested_at = nowStr
-            surfaced++
+          }
+          // Below threshold: if currently 'suggested' (legacy), demote to 'pending'
+          if (!shouldConfirm && existing.status === 'suggested') {
+            updatePayload.status = 'pending'
+            updatePayload.suggested_at = null
           }
           await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
         } else {
-          const insertStatus = shouldAutoConfirm ? 'confirmed' : (shouldSurface ? 'suggested' : 'pending')
+          const insertStatus = shouldConfirm ? 'confirmed' : 'pending'
           await sb.from('anchor_candidates').insert({
             user_id: userId, node_id: m.nodeId,
             composite_score: composite, centrality_score: centralityScore,
@@ -509,14 +514,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             status: insertStatus, scoring_profile: config.scoringProfile,
             reasoning_text: parts.join(', ') + '.',
             threshold_at_scoring: config.suggestionThreshold,
-            suggested_at: insertStatus !== 'pending' ? nowStr : null,
+            suggested_at: insertStatus === 'confirmed' ? nowStr : null,
             reviewed_at: insertStatus === 'confirmed' ? nowStr : null,
             first_scored_at: nowStr, last_scored_at: nowStr,
           })
           if (insertStatus === 'confirmed') {
             await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', m.nodeId)
-            surfaced++
-          } else if (insertStatus === 'suggested') {
             surfaced++
           }
         }
