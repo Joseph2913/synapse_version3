@@ -333,46 +333,62 @@ async function extractKnowledgeForItem(
     // that returned this item, so no separate UPDATE is needed here.
 
     // ── STEP 1: SAVE SOURCE ─────────────────────────────────────────────────────
-    // Upsert on (user_id, source_type, source_url). The unique index enforces
-    // that this combination can appear at most once per user — if a prior run
-    // already saved this video, we reuse that row instead of creating a new one.
-    const { data: sourceData, error: sourceError } = await supabase
+    // Check-then-insert-or-update. We cannot use Postgres ON CONFLICT because
+    // the uniqueness rule is a partial index (WHERE source_url IS NOT NULL),
+    // which ON CONFLICT won't match. The partial unique index remains as the
+    // final safety net against races.
+    const sourcePayload = {
+      user_id: item.user_id,
+      title: item.video_title ?? `YouTube: ${item.video_id}`,
+      source_type: 'YouTube',
+      source_url: item.video_url,
+      content: transcript.slice(0, MAX_TRANSCRIPT_CHARS),
+      metadata: {
+        video_id: item.video_id,
+        duration_seconds: item.duration_seconds,
+        published_at: item.published_at,
+        transcript_source: 'decoupled_pipeline',
+      },
+    };
+
+    const { data: existingSource } = await supabase
       .from('knowledge_sources')
-      .upsert(
-        {
-          user_id: item.user_id,
-          title: item.video_title ?? `YouTube: ${item.video_id}`,
-          source_type: 'YouTube',
-          source_url: item.video_url,
-          content: transcript.slice(0, MAX_TRANSCRIPT_CHARS),
-          metadata: {
-            video_id: item.video_id,
-            duration_seconds: item.duration_seconds,
-            published_at: item.published_at,
-            transcript_source: 'decoupled_pipeline',
-          },
-        },
-        { onConflict: 'user_id,source_type,source_url' }
-      )
       .select('id')
-      .single();
+      .eq('user_id', item.user_id)
+      .eq('source_type', 'YouTube')
+      .eq('source_url', item.video_url)
+      .maybeSingle();
 
-    if (sourceError || !sourceData) {
-      throw new Error(`Failed to save source: ${sourceError?.message}`);
-    }
-    const sourceId = sourceData.id as string;
+    let sourceId: string;
+    if (existingSource?.id) {
+      sourceId = existingSource.id as string;
+      // Refresh the row with the latest transcript/metadata and clear any
+      // prior nodes/edges so this run's extraction replaces them cleanly.
+      await supabase
+        .from('knowledge_sources')
+        .update(sourcePayload)
+        .eq('id', sourceId);
 
-    // If an upsert reused a prior row, clear its old nodes/edges so this
-    // run's extraction replaces them cleanly (no mix of old + new entities).
-    const { data: priorNodes } = await supabase
-      .from('knowledge_nodes')
-      .select('id')
-      .eq('source_id', sourceId);
-    const priorNodeIds = (priorNodes ?? []).map((n: { id: string }) => n.id);
-    if (priorNodeIds.length > 0) {
-      await supabase.from('knowledge_edges').delete()
-        .or(`source_node_id.in.(${priorNodeIds.join(',')}),target_node_id.in.(${priorNodeIds.join(',')})`);
-      await supabase.from('knowledge_nodes').delete().eq('source_id', sourceId);
+      const { data: priorNodes } = await supabase
+        .from('knowledge_nodes')
+        .select('id')
+        .eq('source_id', sourceId);
+      const priorNodeIds = (priorNodes ?? []).map((n: { id: string }) => n.id);
+      if (priorNodeIds.length > 0) {
+        await supabase.from('knowledge_edges').delete()
+          .or(`source_node_id.in.(${priorNodeIds.join(',')}),target_node_id.in.(${priorNodeIds.join(',')})`);
+        await supabase.from('knowledge_nodes').delete().eq('source_id', sourceId);
+      }
+    } else {
+      const { data: inserted, error: insertErr } = await supabase
+        .from('knowledge_sources')
+        .insert(sourcePayload)
+        .select('id')
+        .single();
+      if (insertErr || !inserted) {
+        throw new Error(`Failed to save source: ${insertErr?.message}`);
+      }
+      sourceId = inserted.id as string;
     }
 
     await supabase
