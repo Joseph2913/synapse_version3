@@ -5,7 +5,7 @@ import {
   runExtractionCore,
   type Anchor,
   type UserProfile,
-} from '../_shared/extract-pipeline';
+} from '../../lib/extract-pipeline';
 
 // Allow up to 120s on Vercel Pro (heavy Gemini extraction + embeddings)
 export const maxDuration = 120;
@@ -125,6 +125,21 @@ async function extractKnowledgeForItem(
   itemStartTime: number
 ): Promise<{ success: boolean; nodesCreated: number; edgesCreated: number; error?: string }> {
   const transcript = item.transcript;
+
+  // Guard: videos that never got a usable transcript (YouTube caption API
+  // returned nothing) can't be extracted. Fail them fast with a clear reason
+  // instead of crashing inside the shared extractor on a null slice.
+  if (!transcript || transcript.trim().length < 50) {
+    await supabase
+      .from('youtube_ingestion_queue')
+      .update({
+        status: 'failed',
+        error_message: 'No usable transcript (video has no captions or transcript fetch failed)',
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', item.id);
+    return { success: false, nodesCreated: 0, edgesCreated: 0, error: 'No transcript' };
+  }
 
   try {
     // Note: status is already 'extracting' with started_at set — the atomic

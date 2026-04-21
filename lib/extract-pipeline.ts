@@ -286,6 +286,13 @@ export async function extractEntities(
   content: string,
   systemPrompt: string
 ): Promise<ExtractionResult> {
+  // Defensive guard: upstream routes should validate content, but if a null
+  // or empty string reaches us we want a clear error instead of a TypeError
+  // deep inside the fetch body builder.
+  if (!content || content.trim().length === 0) {
+    throw new Error('extractEntities called with empty content');
+  }
+
   const response = await fetchWithRetry(
     `${GEMINI_BASE}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {

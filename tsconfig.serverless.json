@@ -9,5 +9,5 @@
     "esModuleInterop": true,
     "outDir": ".vercel/output/functions"
   },
-  "include": ["api/**/*.ts"]
+  "include": ["api/**/*.ts", "lib/**/*.ts"]
 }

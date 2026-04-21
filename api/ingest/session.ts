@@ -7,7 +7,7 @@ import {
   stripMarkdown,
   type Anchor,
   type UserProfile,
-} from '../_shared/extract-pipeline';
+} from '../../lib/extract-pipeline';
 
 // Allow up to 120s on Vercel Pro (Gemini extraction + embeddings)
 export const maxDuration = 120;
