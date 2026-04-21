@@ -1,20 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import {
+  runExtractionCore,
+  type Anchor,
+  type UserProfile,
+} from '../_shared/extract-pipeline';
 
 export const maxDuration = 120;
 
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 const MAX_ITEMS_PER_BATCH = 2;
 const MAX_CONTENT_CHARS = 100_000;
-const EMBEDDING_CONCURRENCY = 5;
 const TIME_BUDGET_MS = 50_000;
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -31,14 +33,17 @@ interface QueueItem {
   attendees: string | null;
 }
 
-// ─── PARTICIPANT PARSER (inlined — serverless cannot import local files) ──────
+// ─── PARTICIPANT PARSER ────────────────────────────────────────────────────────
+// Microsoft-specific: content headers may contain a "**Participants**: ..."
+// line that we want to promote into the knowledge_sources.participants column
+// for searchability. Kept inline because it's genuinely specific to this
+// integration's content format.
 
 function toTitleCase(name: string): string {
   return name.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
 
 function parseMeetingParticipants(content: string, attendeesJson: string | null): string[] | null {
-  // Strategy 1: Parse from content header
   if (content) {
     const lines = content.split('\n').slice(0, 30);
     for (const line of lines) {
@@ -59,7 +64,6 @@ function parseMeetingParticipants(content: string, attendeesJson: string | null)
       if (result.length > 0) return [...new Set(result)];
     }
   }
-  // Strategy 2: Fall back to attendees from queue metadata
   if (attendeesJson) {
     try {
       const attendees = JSON.parse(attendeesJson) as string[];
@@ -69,27 +73,6 @@ function parseMeetingParticipants(content: string, attendeesJson: string | null)
     } catch { /* ignore parse errors */ }
   }
   return null;
-}
-
-interface ExtractionResult {
-  entities: Array<{
-    label: string;
-    entity_type: string;
-    description: string;
-    confidence: number;
-    tags: string[];
-  }>;
-  relationships: Array<{
-    source: string;
-    target: string;
-    relation_type: string;
-    evidence: string;
-  }>;
-}
-
-interface UserProfile {
-  professional_context?: { role?: string; current_projects?: string };
-  personal_interests?: { topics?: string };
 }
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
@@ -110,100 +93,10 @@ async function getUserFromToken(req: VercelRequest): Promise<string | null> {
   return data?.user?.id ?? null;
 }
 
-// ─── GEMINI ───────────────────────────────────────────────────────────────────
-
-async function callGemini(systemPrompt: string, content: string): Promise<ExtractionResult> {
-  const res = await fetch(`${GEMINI_BASE}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: content.slice(0, MAX_CONTENT_CHARS) }] }],
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-      },
-    }),
-  });
-
-  if (!res.ok) throw new Error(`Gemini API error: ${res.status}`);
-
-  const data = await res.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  return JSON.parse(text) as ExtractionResult;
-}
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  const res = await fetch(`${GEMINI_BASE}/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'models/text-embedding-004',
-      content: { parts: [{ text }] },
-    }),
-  });
-  if (!res.ok) throw new Error(`Embedding API error: ${res.status}`);
-  const data = await res.json() as { embedding?: { values?: number[] } };
-  return data.embedding?.values || [];
-}
-
-async function batchGenerateEmbeddings(texts: string[]): Promise<number[][]> {
-  const results: number[][] = [];
-  for (let i = 0; i < texts.length; i += EMBEDDING_CONCURRENCY) {
-    const batch = texts.slice(i, i + EMBEDDING_CONCURRENCY);
-    const embeddings = await Promise.all(batch.map(t => generateEmbedding(t).catch(() => [])));
-    results.push(...embeddings);
-  }
-  return results;
-}
-
-// ─── EXTRACTION ───────────────────────────────────────────────────────────────
-
-function buildSystemPrompt(
-  resourceType: string,
-  profile: UserProfile | null,
-  mode: string,
-  anchorLabels: string[]
-): string {
-  const typeLabel = resourceType === 'meeting_transcript'
-    ? 'meeting transcript'
-    : resourceType === 'calendar_event'
-      ? 'calendar event'
-      : 'email';
-
-  let prompt = `You are an expert knowledge extraction AI. Analyze this ${typeLabel} and extract structured entities and relationships.
-
-Return a JSON object with:
-- "entities": array of { "label": string, "entity_type": string, "description": string, "confidence": number (0-1), "tags": string[] }
-- "relationships": array of { "source": string, "target": string, "relation_type": string, "evidence": string }
-
-Entity types: Person, Organization, Team, Topic, Project, Goal, Action, Risk, Blocker, Decision, Insight, Question, Idea, Concept, Takeaway, Lesson, Document, Event, Location, Technology, Product, Metric, Hypothesis
-
-Relationship types: leads_to, supports, blocks, depends_on, part_of, authored, mentions, conflicts_with, relates_to, enables, created, achieved, produced, contradicts, risks, prevents, challenges, inhibits, connected_to, owns, associated_with`;
-
-  if (mode === 'strategic') {
-    prompt += '\n\nFocus on high-level strategic concepts: decisions, goals, risks, and key insights. Skip minor details.';
-  } else if (mode === 'actionable') {
-    prompt += '\n\nFocus on actionable items: actions, goals, blockers, decisions, deadlines. Prioritize what needs to happen next.';
-  } else if (mode === 'relational') {
-    prompt += '\n\nFocus on connections between people, teams, and projects. Map who works with whom and on what.';
-  }
-
-  if (profile?.professional_context?.role) {
-    prompt += `\n\nThe user is a ${profile.professional_context.role}.`;
-  }
-
-  if (anchorLabels.length > 0) {
-    prompt += `\n\nPay special attention to concepts related to these focus areas (anchors): ${anchorLabels.join(', ')}. Create relationships connecting extracted entities to these anchors where relevant.`;
-  }
-
-  return prompt;
-}
-
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
+  if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
@@ -225,78 +118,73 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .order('created_at', { ascending: true })
       .limit(MAX_ITEMS_PER_BATCH);
 
-    if (userId) {
-      query = query.eq('user_id', userId);
-    }
+    if (userId) query = query.eq('user_id', userId);
 
     const { data: items } = await query;
-
-    if (!items?.length) {
-      return res.status(200).json({ processed: 0 });
-    }
+    if (!items?.length) return res.status(200).json({ processed: 0 });
 
     let processed = 0;
 
     for (const item of items as QueueItem[]) {
       if (Date.now() - startTime > TIME_BUDGET_MS) break;
 
-      // Mark as extracting
+      // Mark claimed
       await supabase.from('microsoft_ingestion_queue').update({
         status: 'extracting',
         started_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }).eq('id', item.id);
 
+      const itemStartTime = Date.now();
       try {
-        // Fetch user profile and integration settings
-        const [profileRes, integrationRes] = await Promise.all([
+        // ── Fetch extraction config (profile, integration settings, anchors) ──
+        const [profileRes, integrationRes, anchorsRes, extractionSettingsRes] = await Promise.all([
           supabase.from('user_profiles').select('*').eq('user_id', item.user_id).maybeSingle(),
-          supabase.from('microsoft_integrations').select('extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions').eq('user_id', item.user_id).maybeSingle(),
+          supabase
+            .from('microsoft_integrations')
+            .select('extraction_mode, anchor_emphasis, linked_anchor_ids, custom_instructions')
+            .eq('user_id', item.user_id)
+            .maybeSingle(),
+          supabase
+            .from('knowledge_nodes')
+            .select('label, entity_type, description')
+            .eq('user_id', item.user_id)
+            .eq('is_anchor', true)
+            .limit(10),
+          supabase.from('extraction_settings').select('default_mode, default_anchor_emphasis').eq('user_id', item.user_id).maybeSingle(),
         ]);
 
-        const profile = profileRes.data as UserProfile | null;
-        const settings = integrationRes.data as { extraction_mode: string; linked_anchor_ids: string[] | null } | null;
-        const mode = settings?.extraction_mode || 'comprehensive';
+        const userProfile = profileRes.data as UserProfile | null;
+        const integrationSettings = integrationRes.data as {
+          extraction_mode: string | null;
+          anchor_emphasis: string | null;
+          linked_anchor_ids: string[] | null;
+          custom_instructions: string | null;
+        } | null;
+        const defaults = extractionSettingsRes.data as { default_mode: string; default_anchor_emphasis: string } | null;
 
-        // Fetch anchor labels if linked
-        let anchorLabels: string[] = [];
-        if (settings?.linked_anchor_ids?.length) {
-          const { data: anchors } = await supabase
-            .from('knowledge_nodes')
-            .select('label')
-            .in('id', settings.linked_anchor_ids);
-          anchorLabels = (anchors || []).map((a: { label: string }) => a.label);
-        }
+        const extractionMode = integrationSettings?.extraction_mode ?? defaults?.default_mode ?? 'comprehensive';
+        const anchorEmphasis = integrationSettings?.anchor_emphasis ?? defaults?.default_anchor_emphasis ?? 'standard';
 
-        const systemPrompt = buildSystemPrompt(item.resource_type, profile, mode, anchorLabels);
-        const result = await callGemini(systemPrompt, item.content);
+        // Full anchor context — before consolidation, Microsoft only passed
+        // anchor labels as a comma-separated string to Gemini. Now it gets
+        // the same rich anchor context (type + description) every other
+        // pipeline uses.
+        const anchors = (anchorsRes.data ?? []) as Anchor[];
 
-        if (!result.entities?.length) {
-          await supabase.from('microsoft_ingestion_queue').update({
-            status: 'completed',
-            nodes_created: 0,
-            edges_created: 0,
-            completed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          }).eq('id', item.id);
-          processed++;
-          continue;
-        }
-
-        // Determine source type
+        // ── Determine source shape ──
         const sourceType = item.resource_type === 'meeting_transcript' || item.resource_type === 'calendar_event'
           ? 'Meeting' : 'Research';
 
-        // Parse participants for meeting sources
         const participants = sourceType === 'Meeting'
           ? parseMeetingParticipants(item.content, item.attendees)
           : null;
 
-        // Save knowledge source
+        // ── Save the source row first (shared core needs sourceId) ──
         const insertRow: Record<string, unknown> = {
           user_id: item.user_id,
           title: item.title || 'Microsoft 365 Import',
-          content: item.content.slice(0, 50000),
+          content: item.content.slice(0, MAX_CONTENT_CHARS),
           source_type: sourceType,
           metadata: {
             provider: 'microsoft',
@@ -307,113 +195,62 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             attendees: item.attendees ? JSON.parse(item.attendees) : null,
           },
         };
-        if (participants) {
-          insertRow.participants = participants;
-        }
+        if (participants) insertRow.participants = participants;
 
-        const { data: source } = await supabase
+        const { data: source, error: sourceErr } = await supabase
           .from('knowledge_sources')
           .insert(insertRow)
           .select('id')
           .single();
+        if (sourceErr || !source) throw new Error(`Failed to save source: ${sourceErr?.message}`);
+        const sourceId = (source as { id: string }).id;
 
-        const sourceId = source?.id;
+        // ── Run the shared extraction pipeline ──
+        const coreResult = await runExtractionCore({
+          content: item.content,
+          promptConfig: {
+            mode: extractionMode,
+            anchorEmphasis,
+            anchors,
+            userProfile,
+            customInstructions: integrationSettings?.custom_instructions ?? null,
+          },
+          source: {
+            sourceId,
+            sourceType,
+            sourceUrl: null,
+            sourceLabel: item.title ?? 'Microsoft 365',
+          },
+          userId: item.user_id,
+          supabase,
+          options: { itemStartTime },
+        });
 
-        // Save nodes
-        const nodeInserts = result.entities.map(e => ({
-          user_id: item.user_id,
-          label: e.label,
-          entity_type: e.entity_type,
-          description: e.description,
-          confidence: e.confidence,
-          source: item.title || 'Microsoft 365',
-          source_type: sourceType,
-          source_id: sourceId,
-          tags: e.tags || [],
-          is_anchor: false,
-          is_merged: false,
-        }));
-
-        const { data: savedNodes } = await supabase
-          .from('knowledge_nodes')
-          .insert(nodeInserts)
-          .select('id, label');
-
-        const nodeMap = new Map<string, string>();
-        for (const node of savedNodes || []) {
-          nodeMap.set((node as { id: string; label: string }).label.toLowerCase(), (node as { id: string; label: string }).id);
-        }
-
-        // Save edges
-        let edgesCreated = 0;
-        if (result.relationships?.length && nodeMap.size > 0) {
-          const edgeInserts = result.relationships
-            .map(r => {
-              const sourceId = nodeMap.get(r.source.toLowerCase());
-              const targetId = nodeMap.get(r.target.toLowerCase());
-              if (!sourceId || !targetId || sourceId === targetId) return null;
-              return {
-                user_id: item.user_id,
-                source_node_id: sourceId,
-                target_node_id: targetId,
-                relation_type: r.relation_type,
-                evidence: r.evidence,
-                weight: 1.0,
-              };
-            })
-            .filter(Boolean);
-
-          if (edgeInserts.length > 0) {
-            const { data: savedEdges } = await supabase
-              .from('knowledge_edges')
-              .insert(edgeInserts)
-              .select('id');
-            edgesCreated = savedEdges?.length || 0;
-          }
-        }
-
-        // Generate embeddings for nodes
-        if (savedNodes?.length && Date.now() - startTime < TIME_BUDGET_MS) {
-          const texts = (savedNodes as Array<{ id: string; label: string }>).map(
-            n => result.entities.find(e => e.label === n.label)
-              ? `${n.label}: ${result.entities.find(e => e.label === n.label)?.description || ''}`
-              : n.label
-          );
-
-          const embeddings = await batchGenerateEmbeddings(texts);
-
-          for (let i = 0; i < savedNodes.length && i < embeddings.length; i++) {
-            if (embeddings[i].length > 0) {
-              await supabase.from('knowledge_nodes').update({
-                embedding: embeddings[i],
-              }).eq('id', (savedNodes[i] as { id: string }).id);
-            }
-          }
-        }
-
-        // Mark as completed
+        // ── Mark queue complete ──
         await supabase.from('microsoft_ingestion_queue').update({
           status: 'completed',
           source_id: sourceId,
-          nodes_created: savedNodes?.length || 0,
-          edges_created: edgesCreated,
+          nodes_created: coreResult.nodesCreated,
+          edges_created: coreResult.edgesCreated,
           completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         }).eq('id', item.id);
 
-        // ── Link meeting sources to domain agent(s) ─────────────────────────────
-        if (sourceType === 'Meeting' && sourceId) {
+        // ── Link meeting sources to Microsoft-associated domain agents ──
+        // Microsoft-specific: uses user_integrations.integration_slug='microsoft'
+        // to find agents belonging to this integration path. Kept here because
+        // no other pipeline uses microsoft_integrations as the routing key.
+        if (sourceType === 'Meeting') {
           try {
             const agentIds = new Set<string>();
 
-            // Check junction table for agents linked to Microsoft integrations
             const { data: msIntegrations } = await supabase
               .from('user_integrations')
-              .select('id')
+              .select('id, domain_agent_id')
               .eq('user_id', item.user_id)
               .eq('integration_slug', 'microsoft');
 
-            for (const msInt of (msIntegrations ?? []) as Array<{ id: string }>) {
+            for (const msInt of (msIntegrations ?? []) as Array<{ id: string; domain_agent_id: string | null }>) {
               const { data: links } = await supabase
                 .from('agent_integration_links')
                 .select('agent_id')
@@ -421,22 +258,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               for (const link of (links ?? []) as Array<{ agent_id: string }>) {
                 agentIds.add(link.agent_id);
               }
-            }
-
-            // Fallback: direct domain_agent_id on user_integrations
-            if (agentIds.size === 0) {
-              for (const msInt of (msIntegrations ?? []) as Array<{ id: string }>) {
-                const { data: int } = await supabase
-                  .from('user_integrations')
-                  .select('domain_agent_id')
-                  .eq('id', msInt.id)
-                  .maybeSingle();
-                const directId = (int as { domain_agent_id: string | null } | null)?.domain_agent_id;
-                if (directId) agentIds.add(directId);
+              if (agentIds.size === 0 && msInt.domain_agent_id) {
+                agentIds.add(msInt.domain_agent_id);
               }
             }
 
-            // Fallback: any integration-linked agent
             if (agentIds.size === 0) {
               const { data: agents } = await supabase
                 .from('domain_agents')
@@ -473,12 +299,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         processed++;
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         console.error(`[microsoft/extract-knowledge] Error processing ${item.id}:`, err);
-        await supabase.from('microsoft_ingestion_queue').update({
-          status: 'failed',
-          error_message: err instanceof Error ? err.message : 'Extraction failed',
-          updated_at: new Date().toISOString(),
-        }).eq('id', item.id);
+
+        // Distinguish transient (requeue) from terminal (give up) errors.
+        const isRateLimited = msg.startsWith('RATE_LIMITED');
+        if (isRateLimited) {
+          // Reset back to content_ready so the next cron tick picks it up.
+          await supabase.from('microsoft_ingestion_queue').update({
+            status: 'content_ready',
+            started_at: null,
+            error_message: msg,
+            updated_at: new Date().toISOString(),
+          }).eq('id', item.id);
+        } else {
+          await supabase.from('microsoft_ingestion_queue').update({
+            status: 'failed',
+            error_message: msg,
+            updated_at: new Date().toISOString(),
+          }).eq('id', item.id);
+        }
       }
     }
 
