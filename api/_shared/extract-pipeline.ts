@@ -106,6 +106,20 @@ export interface ExtractionResult {
   relationships: ExtractedRelationship[];
 }
 
+/**
+ * Runtime type guard for Gemini extraction output. Returns true only when
+ * the parsed value has both `entities` and `relationships` as arrays.
+ * No external libraries — keeps this function zero-cost and serverless-safe.
+ */
+export function isValidExtractionResult(result: unknown): result is ExtractionResult {
+  return (
+    result !== null &&
+    typeof result === 'object' &&
+    Array.isArray((result as Record<string, unknown>).entities) &&
+    Array.isArray((result as Record<string, unknown>).relationships)
+  );
+}
+
 export interface PromptConfig {
   mode: string;
   anchorEmphasis: string;
@@ -317,11 +331,17 @@ export async function extractEntities(
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('No extraction response from Gemini');
 
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as ExtractionResult;
+    parsed = JSON.parse(text);
   } catch {
     throw new Error(`Invalid JSON from Gemini: ${text.slice(0, 200)}`);
   }
+  if (!isValidExtractionResult(parsed)) {
+    console.error('[extract-pipeline] Unexpected Gemini extraction shape:', JSON.stringify(parsed).slice(0, 500));
+    throw new Error('Gemini returned unexpected shape: missing entities or relationships arrays');
+  }
+  return parsed;
 }
 
 /**
@@ -852,8 +872,9 @@ Return an empty array if no genuine cross-source connections exist.`;
     let crossResult: { relationships?: ExtractedRelationship[] };
     try {
       crossResult = JSON.parse(crossText);
-    } catch {
-      return 0;
+    } catch (parseErr) {
+      console.error('[extract-pipeline] Malformed cross-connection JSON from Gemini:', crossText.slice(0, 500));
+      throw parseErr;
     }
 
     const existingNodeMap = new Map(existingNodes.map(n => [n.label.toLowerCase(), n.id]));
