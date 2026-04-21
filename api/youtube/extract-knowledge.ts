@@ -328,28 +328,32 @@ async function extractKnowledgeForItem(
   const transcript = item.transcript;
 
   try {
-    // ── Mark as extracting ──────────────────────────────────────────────────────
-    await supabase
-      .from('youtube_ingestion_queue')
-      .update({ status: 'extracting', started_at: new Date().toISOString() })
-      .eq('id', item.id);
+    // Note: status is already 'extracting' with started_at set — the atomic
+    // claim RPC (claim_youtube_extraction_batch) does that in the same query
+    // that returned this item, so no separate UPDATE is needed here.
 
     // ── STEP 1: SAVE SOURCE ─────────────────────────────────────────────────────
+    // Upsert on (user_id, source_type, source_url). The unique index enforces
+    // that this combination can appear at most once per user — if a prior run
+    // already saved this video, we reuse that row instead of creating a new one.
     const { data: sourceData, error: sourceError } = await supabase
       .from('knowledge_sources')
-      .insert({
-        user_id: item.user_id,
-        title: item.video_title ?? `YouTube: ${item.video_id}`,
-        source_type: 'YouTube',
-        source_url: item.video_url,
-        content: transcript.slice(0, MAX_TRANSCRIPT_CHARS),
-        metadata: {
-          video_id: item.video_id,
-          duration_seconds: item.duration_seconds,
-          published_at: item.published_at,
-          transcript_source: 'decoupled_pipeline',
+      .upsert(
+        {
+          user_id: item.user_id,
+          title: item.video_title ?? `YouTube: ${item.video_id}`,
+          source_type: 'YouTube',
+          source_url: item.video_url,
+          content: transcript.slice(0, MAX_TRANSCRIPT_CHARS),
+          metadata: {
+            video_id: item.video_id,
+            duration_seconds: item.duration_seconds,
+            published_at: item.published_at,
+            transcript_source: 'decoupled_pipeline',
+          },
         },
-      })
+        { onConflict: 'user_id,source_type,source_url' }
+      )
       .select('id')
       .single();
 
@@ -357,6 +361,19 @@ async function extractKnowledgeForItem(
       throw new Error(`Failed to save source: ${sourceError?.message}`);
     }
     const sourceId = sourceData.id as string;
+
+    // If an upsert reused a prior row, clear its old nodes/edges so this
+    // run's extraction replaces them cleanly (no mix of old + new entities).
+    const { data: priorNodes } = await supabase
+      .from('knowledge_nodes')
+      .select('id')
+      .eq('source_id', sourceId);
+    const priorNodeIds = (priorNodes ?? []).map((n: { id: string }) => n.id);
+    if (priorNodeIds.length > 0) {
+      await supabase.from('knowledge_edges').delete()
+        .or(`source_node_id.in.(${priorNodeIds.join(',')}),target_node_id.in.(${priorNodeIds.join(',')})`);
+      await supabase.from('knowledge_nodes').delete().eq('source_id', sourceId);
+    }
 
     await supabase
       .from('youtube_ingestion_queue')
@@ -1337,31 +1354,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabase();
 
   try {
-    // ── Stuck item cleanup ─────────────────────────────────────────────────────
-    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    await supabase
-      .from('youtube_ingestion_queue')
-      .update({ status: 'transcript_ready', error_message: 'Reset: stuck in extracting', started_at: null })
-      .eq('status', 'extracting')
-      .lt('started_at', fiveMinAgo);
-
-    // ── Pick items with transcripts ready for extraction ───────────────────────
-    let query = supabase
-      .from('youtube_ingestion_queue')
-      .select('id, user_id, channel_id, video_id, video_title, video_url, thumbnail_url, published_at, duration_seconds, transcript, status, retry_count, max_retries, error_message, playlist_id')
-      .eq('status', 'transcript_ready')
-      .order('priority', { ascending: true })
-      .order('created_at', { ascending: true })
-      .limit(MAX_ITEMS_PER_BATCH);
-
-    if (!isCron && userId) {
-      query = query.eq('user_id', userId);
-    }
-
-    const { data: pendingItems, error: fetchError } = await query;
+    // ── Atomically claim a batch ───────────────────────────────────────────────
+    // The RPC resets genuinely-stuck extractions (>30 min old) and then claims
+    // a batch in a single UPDATE ... RETURNING guarded by FOR UPDATE SKIP LOCKED.
+    // Two overlapping cron runs can never claim the same row.
+    const { data: pendingItems, error: fetchError } = await supabase.rpc(
+      'claim_youtube_extraction_batch',
+      {
+        p_user_id: isCron ? null : userId,
+        p_limit: MAX_ITEMS_PER_BATCH,
+      }
+    );
 
     if (fetchError) {
-      console.error('[extract-knowledge] Queue query failed:', fetchError.message);
+      console.error('[extract-knowledge] Queue claim failed:', fetchError.message);
       return res.status(500).json({ error: fetchError.message });
     }
 
