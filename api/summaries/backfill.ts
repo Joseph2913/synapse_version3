@@ -43,8 +43,23 @@ async function verifyUserAuth(
 
 // ─── INLINE SUMMARIZATION HELPERS (duplicated from src/utils/summarize.ts) ─────
 
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\n{2,}/g, ' ')
+    .trim();
+}
+
 function clampSummary(text: string, maxLength: number = 350): string {
-  const cleaned = text.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  const cleaned = stripMarkdown(text).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
   if (cleaned.length <= maxLength) return cleaned;
   const truncated = cleaned.slice(0, maxLength);
   const lastPeriod = truncated.lastIndexOf('.');
@@ -58,7 +73,7 @@ function clampSummary(text: string, maxLength: number = 350): string {
 }
 
 function truncateAsSummary(content: string, maxChars: number = 300): string {
-  const cleaned = content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  const cleaned = stripMarkdown(content).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
   if (cleaned.length <= maxChars) return cleaned;
   return clampSummary(cleaned, maxChars);
 }

@@ -6,7 +6,7 @@ import { getEntityColor } from '../../config/entityTypes'
 import { ProviderIcon } from '../shared/ProviderIcon'
 import { useSettings } from '../../hooks/useSettings'
 import { fetchNodeById, supabase } from '../../services/supabase'
-import { stripMarkdown } from '../../utils/stripMarkdown'
+import { formatSourceSummary } from '../../utils/sourceDisplay'
 import { resolveSummary } from '../../utils/summarize'
 import type { FeedItem } from '../../types/feed'
 import type { KnowledgeNode } from '../../types/database'
@@ -946,7 +946,7 @@ export function HomeFeedDetail({ item, onClose, onSourceSelect }: HomeFeedDetail
               className="font-body"
               style={{ fontSize: 13, color: 'var(--color-text-body)', lineHeight: 1.6, marginTop: 0, marginBottom: 0 }}
             >
-              {stripMarkdown(currentSummary)}
+              {formatSourceSummary(currentSummary)}
             </p>
           ) : contentPreview ? (
             <div>

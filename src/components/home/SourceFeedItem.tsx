@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronRight, Search, MessageSquare, GitFork } from 'lucide-react'
 import { ProviderIcon } from '../shared/ProviderIcon'
 import { SpotlightCard } from '../ui/SpotlightCard'
+import { formatSourceSummary } from '../../utils/sourceDisplay'
 import type { KnowledgeSource } from '../../types/database'
 
 interface SourceFeedItemProps {
@@ -42,7 +43,7 @@ function getSpotlightColor(sourceType: string): string {
 
 export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat, onGraph, stretch }: SourceFeedItemProps) {
   const provider = (source.metadata as Record<string, unknown> | null)?.provider as string | undefined
-  const summary = source.summary ?? null
+  const summary = formatSourceSummary(source.summary) || null
   const [hovered, setHovered] = useState(false)
 
   return (

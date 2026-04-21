@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { X, ChevronRight, ChevronDown, ArrowRight, Link2, Loader2, Sparkles, MessageCircle } from 'lucide-react'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { getEntityColor } from '../../config/entityTypes'
-import { stripMarkdown } from '../../utils/stripMarkdown'
+import { formatSourceSummary } from '../../utils/sourceDisplay'
 import { buildSourceChatContext, buildMultiSourceCompareContext } from '../../config/chatEntryContexts'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchSourceCardDetail } from '../../services/exploreQueries'
@@ -208,7 +208,7 @@ function CardContent({
         {detail.summary && (
           <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', lineHeight: 1.45, margin: 0 }}>
             {(() => {
-              const text = stripMarkdown(detail.summary)
+              const text = formatSourceSummary(detail.summary)
               return text.length > 180 ? text.slice(0, 177) + '…' : text
             })()}
           </p>

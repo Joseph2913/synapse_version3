@@ -1,5 +1,6 @@
 import type { SummaryResult } from '../types/summary'
 import { fetchWithRetry } from '../services/gemini'
+import { stripMarkdown } from './stripMarkdown'
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -151,7 +152,7 @@ export async function generateSummary(
 // --- Helpers ---
 
 export function clampSummary(text: string, maxLength: number = 350): string {
-  const cleaned = text.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim()
+  const cleaned = stripMarkdown(text).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim()
   if (cleaned.length <= maxLength) return cleaned
 
   const truncated = cleaned.slice(0, maxLength)
@@ -167,7 +168,7 @@ export function clampSummary(text: string, maxLength: number = 350): string {
 }
 
 export function truncateAsSummary(content: string, maxChars: number = 300): string {
-  const cleaned = content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim()
+  const cleaned = stripMarkdown(content).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim()
   if (cleaned.length <= maxChars) return cleaned
   return clampSummary(cleaned, maxChars)
 }

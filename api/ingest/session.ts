@@ -27,6 +27,21 @@ function verifyIngestSecret(req: VercelRequest): boolean {
 
 // ─── GEMINI HELPERS (inlined — serverless cannot import local files) ──────────
 
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\n{2,}/g, ' ')
+    .trim();
+}
+
 async function fetchWithRetry(url: string, options: RequestInit, retries = GEMINI_MAX_RETRIES): Promise<Response> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const response = await fetch(url, options);
@@ -247,7 +262,8 @@ async function runExtractionPipeline(params: {
     await updateStatus('processing', { processing_started_at: new Date().toISOString() });
 
     // ── STEP 2: GENERATE SUMMARY ────────────────────────────────────────────
-    const summary = await generateSummary(content);
+    const rawSummary = await generateSummary(content);
+    const summary = rawSummary ? stripMarkdown(rawSummary) : '';
     if (summary) {
       await supabase
         .from('knowledge_sources')

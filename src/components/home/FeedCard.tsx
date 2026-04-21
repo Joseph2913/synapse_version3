@@ -3,7 +3,7 @@ import { ArrowRight } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { ProviderIcon } from '../shared/ProviderIcon'
 import { fetchNodeById, fetchSourceById } from '../../services/supabase'
-import { stripMarkdown } from '../../utils/stripMarkdown'
+import { formatSourceSummary } from '../../utils/sourceDisplay'
 import { SpotlightCard } from '../ui/SpotlightCard'
 import type { FeedItem } from '../../types/feed'
 
@@ -98,7 +98,7 @@ export function FeedCard({ item, isSelected, onItemSelect }: FeedCardProps) {
   return (
     <SpotlightCard
       className="rounded-[12px]"
-      color="rgba(214, 58, 0, 0.4)"
+      color="rgba(214, 58, 0, 0.06)"
       style={{
         background: isSelected
           ? 'linear-gradient(135deg, rgba(214,58,0,0.04) 0%, rgba(214,58,0,0.015) 100%)'
@@ -156,7 +156,7 @@ export function FeedCard({ item, isSelected, onItemSelect }: FeedCardProps) {
             overflow: 'hidden',
           }}
         >
-          {stripMarkdown(item.summary)}
+          {formatSourceSummary(item.summary)}
         </p>
       )}
 
@@ -237,7 +237,7 @@ export function FeedCard({ item, isSelected, onItemSelect }: FeedCardProps) {
       )}
 
       {/* ── Stats + Explore More CTA ── */}
-      {item.entityCount > 0 && (
+      {item.entityCount > 0 ? (
         <div className="flex items-center justify-between" style={{ marginTop: 10 }}>
           <span
             className="font-body"
@@ -261,6 +261,35 @@ export function FeedCard({ item, isSelected, onItemSelect }: FeedCardProps) {
           >
             Explore More <ArrowRight size={11} />
           </button>
+        </div>
+      ) : (
+        <div className="flex items-center" style={{ marginTop: 10, gap: 6 }}>
+          <span
+            className="font-body font-semibold inline-flex items-center"
+            style={{
+              fontSize: 10,
+              padding: '2px 8px',
+              borderRadius: 20,
+              border: '1px solid rgba(180,83,9,0.25)',
+              background: 'rgba(180,83,9,0.07)',
+              color: '#b45309',
+              gap: 5,
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: '#b45309',
+                animation: 'pulse 1.4s ease-in-out infinite',
+              }}
+            />
+            Processing…
+          </span>
+          <span className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+            Entities will appear once extraction completes
+          </span>
         </div>
       )}
     </SpotlightCard>
