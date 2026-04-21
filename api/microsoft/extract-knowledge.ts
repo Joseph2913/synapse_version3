@@ -4,7 +4,7 @@ import {
   runExtractionCore,
   type Anchor,
   type UserProfile,
-} from '../_pipeline/extract-pipeline';
+} from '../pipeline/extract-pipeline';
 
 export const maxDuration = 120;
 
