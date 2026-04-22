@@ -45,7 +45,7 @@ async function verifyUserAuth(
 
 async function callGemini<T>(systemPrompt: string, userContent: string): Promise<T> {
   const response = await fetch(
-    `${GEMINI_BASE}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

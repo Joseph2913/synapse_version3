@@ -310,7 +310,7 @@ export async function checkSidecarHealth(): Promise<boolean> {
 // ─── PRD-Simulate-D: PERSONA GENERATION (client-side) ────────────────
 
 async function callGeminiForPersonas(prompt: string, temperature: number): Promise<string> {
-  const url = `${GEMINI_BASE_URL}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`
+  const url = `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

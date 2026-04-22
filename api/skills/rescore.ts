@@ -59,7 +59,7 @@ async function callGemini<T>(
   temperature = 0.3
 ): Promise<T> {
   const response = await fetchWithRetry(
-    `${GEMINI_BASE}/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

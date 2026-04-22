@@ -19,7 +19,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash'
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

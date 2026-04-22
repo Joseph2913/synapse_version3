@@ -103,7 +103,7 @@ interface RequestBody {
 // ─── Gemini helpers (inline) ─────────────────────────────────────────────────
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? ''
-const GEMINI_MODEL = 'gemini-2.0-flash'
+const GEMINI_MODEL = 'gemini-2.5-flash'
 
 async function callGemini(prompt: string, temperature: number): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`

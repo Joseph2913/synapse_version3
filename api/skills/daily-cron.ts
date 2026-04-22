@@ -83,7 +83,7 @@ async function callGemini<T>(
   systemPrompt: string,
   userContent: string,
   temperature = 0.1,
-  model = 'gemini-2.0-flash'
+  model = 'gemini-2.5-flash'
 ): Promise<T> {
   const response = await fetchWithRetry(
     `${GEMINI_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}`,
