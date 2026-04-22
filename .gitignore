@@ -57,3 +57,4 @@ docs/superpowers/
 remotion/
 remotion.config.ts
 scripts/generate-sounds.py
+scripts/reextract-test.ts

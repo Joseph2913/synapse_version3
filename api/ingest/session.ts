@@ -9,8 +9,8 @@ import {
   type UserProfile,
 } from '../pipeline/extract-pipeline.js';
 
-// Allow up to 120s on Vercel Pro (Gemini extraction + embeddings)
-export const maxDuration = 120;
+// 300s ceiling to cover map-reduce + dedup + chunk persistence on long sources.
+export const maxDuration = 300;
 
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 

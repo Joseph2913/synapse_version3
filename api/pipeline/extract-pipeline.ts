@@ -53,17 +53,37 @@ export const RELATIONSHIP_TYPES = [
 ];
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
-  comprehensive: 'Extract the maximum number of meaningful entities and all significant relationships. Capture every person, organization, concept, decision, and insight mentioned.',
-  strategic: 'Focus on high-level concepts, strategic decisions, goals, and their interdependencies. Prioritize organizational and directional information.',
-  actionable: 'Emphasize actions, goals, blockers, deadlines, and decisions. Capture what needs to be done, by whom, and any impediments.',
-  relational: 'Prioritize connections and relationships between entities. Emphasize how concepts, people, and organizations relate to each other.',
+  comprehensive: 'Extract every entity and relationship that will still be useful to the user six months from now. Target roughly 1 entity per 900 chars of instructional/analytical content and 1 per 600 chars of conversation. Prioritise depth over breadth — a smaller number of high-value entities beats a long list of generic ones. Drop generic single-word nouns (e.g. "Buttons", "Cards", "Text") unless they are the explicit subject of a named framework.',
+  strategic:     'Focus on high-level concepts, strategic decisions, goals, and their interdependencies. Prioritise organisational and directional information.',
+  actionable:    'Emphasise actions, goals, blockers, deadlines, and decisions. Capture what needs to be done, by whom, and any impediments.',
+  relational:    'Prioritise connections and relationships between entities. Emphasise how concepts, people, and organisations relate to each other.',
 };
 
 const EMPHASIS_INSTRUCTIONS: Record<string, string> = {
-  passive: 'Treat anchors as low-priority context. Extract them if naturally occurring but do not force anchor-related entities.',
-  standard: 'Give moderate weight to anchor-related content. When content relates to anchors, prioritize extracting those entities and relationships.',
+  passive:    'Treat anchors as low-priority context. Extract them if naturally occurring but do not force anchor-related entities.',
+  standard:   'Give moderate weight to anchor-related content. When content relates to an anchor, extract that connection.',
   aggressive: 'Heavily weight extraction toward anchor-related content. Actively connect extracted entities back to anchors where plausible.',
 };
+
+// Map-reduce thresholds for long transcripts.
+// Window shrunk 10k → 7k so each Gemini call fits comfortably inside the
+// per-call timeout even with the longer v2 prompt.
+const MAP_REDUCE_THRESHOLD = 15_000;
+const MAP_REDUCE_WINDOW    =  7_000;
+const MAP_REDUCE_OVERLAP   =  1_000;
+
+// Per-call timeout (applies to extraction + cross-conn). Bumped 60s → 120s
+// because v2 prompts are ~3× longer and 2.5-flash cold starts occasionally
+// push single calls past the old 60-second ceiling.
+const GEMINI_CALL_TIMEOUT_MS = 120_000;
+
+// Post-extraction health flags
+const HEALTH_MIN_CONTENT_FOR_CHECK = 20_000;
+const HEALTH_MIN_ENTITIES          = 15;
+
+// Post-extraction quality filters
+const MIN_SALIENCE         = 0.4;
+const DROP_ORPHAN_ENTITIES = true;
 
 // ─── TYPES ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +112,8 @@ export interface ExtractedEntity {
   description: string;
   confidence: number;
   tags: string[];
+  aliases?: string[];
+  salience?: number;
 }
 
 export interface ExtractedRelationship {
@@ -176,6 +198,310 @@ export interface CoreExtractionResult {
   nearMatchQueue: NearMatch[];
 }
 
+// ─── TYPE + QUALITY VALIDATION ─────────────────────────────────────────────
+
+const ENTITY_TYPE_SET = new Set(ENTITY_TYPES);
+const RELATIONSHIP_TYPE_SET = new Set(RELATIONSHIP_TYPES);
+
+/**
+ * Remap table for entity types the model occasionally invents. Anything not
+ * in this table and not in ENTITY_TYPE_SET will be dropped at insert time.
+ * `Anchor` is reserved in the graph, so if the model tags something as
+ * Anchor we downgrade it to Concept — the anchor-promotion flow is a
+ * separate, user-driven process.
+ */
+const ENTITY_TYPE_REMAP: Record<string, string> = {
+  Feature:       'Concept',
+  Limitation:    'Risk',
+  Website:       'Product',
+  Framework:     'Concept',
+  Methodology:   'Concept',
+  Method:        'Concept',
+  Theory:        'Concept',
+  Principle:     'Concept',
+  Rule:          'Concept',
+  Doctrine:      'Concept',
+  Model:         'Concept',
+  Tool:          'Product',
+  Service:       'Product',
+  Library:       'Technology',
+  Protocol:      'Technology',
+  Algorithm:     'Technology',
+  Company:       'Organization',
+  Institution:   'Organization',
+  Author:        'Person',
+  Speaker:       'Person',
+  Book:          'Document',
+  Paper:         'Document',
+  Report:        'Document',
+  Statute:       'Document',
+  Case:          'Document',
+  Regulation:    'Document',
+  Contract:      'Document',
+  KPI:           'Metric',
+  Benchmark:     'Metric',
+  Ratio:         'Metric',
+  Anchor:        'Concept', // reserved — demote
+};
+
+const RELATION_TYPE_REMAP: Record<string, string> = {
+  causes:       'leads_to',
+  caused:       'leads_to',
+  causing:      'leads_to',
+  results_in:   'leads_to',
+  implements:   'enables',
+  uses:         'enables',
+  depends_on:   'enables',
+  requires:     'enables',
+  authored:     'created',
+  wrote:        'created',
+  built:        'created',
+  author_of:    'created',
+  parent_of:    'part_of',
+  child_of:     'part_of',
+  contains:     'part_of',
+  has:          'part_of',
+  includes:     'part_of',
+  opposes:      'contradicts',
+  refutes:      'contradicts',
+  disagrees:    'contradicts',
+  negates:      'contradicts',
+  stops:        'prevents',
+  prevented:    'prevents',
+  hinders:      'inhibits',
+  slows:        'inhibits',
+  threatens:    'risks',
+  endangers:    'risks',
+  reinforces:   'supports',
+  strengthens:  'supports',
+  backs:        'supports',
+  relates:      'relates_to',
+  related_to:   'relates_to',
+  about:        'relates_to',
+  references:   'mentions',
+  cites:        'mentions',
+};
+
+/**
+ * Coerce entity_type to one of the allowed ENTITY_TYPES. Returns null if
+ * the type cannot be mapped — caller should drop the entity.
+ */
+export function coerceEntityType(raw: string | undefined): string | null {
+  if (!raw) return null;
+  if (ENTITY_TYPE_SET.has(raw)) return raw;
+  // Case-insensitive exact match against allowed set
+  for (const allowed of ENTITY_TYPE_SET) {
+    if (allowed.toLowerCase() === raw.toLowerCase()) return allowed;
+  }
+  // Remap table lookup (case-sensitive then case-insensitive)
+  if (ENTITY_TYPE_REMAP[raw]) return ENTITY_TYPE_REMAP[raw]!;
+  for (const [key, val] of Object.entries(ENTITY_TYPE_REMAP)) {
+    if (key.toLowerCase() === raw.toLowerCase()) return val;
+  }
+  return null;
+}
+
+/**
+ * Coerce relation_type to one of the allowed RELATIONSHIP_TYPES. Falls
+ * back to `relates_to` rather than dropping — a weak edge is more useful
+ * than no edge.
+ */
+export function coerceRelationType(raw: string | undefined): string {
+  if (!raw) return 'relates_to';
+  if (RELATIONSHIP_TYPE_SET.has(raw)) return raw;
+  for (const allowed of RELATIONSHIP_TYPE_SET) {
+    if (allowed.toLowerCase() === raw.toLowerCase()) return allowed;
+  }
+  if (RELATION_TYPE_REMAP[raw]) return RELATION_TYPE_REMAP[raw]!;
+  for (const [key, val] of Object.entries(RELATION_TYPE_REMAP)) {
+    if (key.toLowerCase() === raw.toLowerCase()) return val;
+  }
+  return 'relates_to';
+}
+
+/**
+ * Strip trailing parenthetical qualifiers from an entity label so that
+ * "New Tokenizer (Opus 4.7)" and "New Tokenizer (Claude Opus 4.7)" collapse
+ * to the same normalised form. Trailing whitespace is also trimmed.
+ */
+export function normaliseLabelForMerge(label: string): string {
+  if (!label) return '';
+  // Strip one or more trailing parenthetical groups, then trim.
+  return label.replace(/\s*\([^)]*\)\s*$/g, '').trim().toLowerCase();
+}
+
+/**
+ * Rank entity types by "strength" for same-label cross-type merging. When
+ * the AI extracts "Claude 4.7" as both Technology and Product, we pick the
+ * more informative / specific type. Higher score = preferred canonical.
+ */
+const ENTITY_TYPE_PRIORITY: Record<string, number> = {
+  Person: 10, Organization: 10, Team: 9,
+  Project: 8, Event: 8, Location: 8,
+  Product: 7, Document: 7, Metric: 7,
+  Technology: 6,
+  Concept: 5, Framework: 5, Takeaway: 5, Lesson: 5, Hypothesis: 5,
+  Insight: 4, Idea: 4, Question: 4,
+  Decision: 6, Goal: 6, Action: 6, Risk: 6, Blocker: 6,
+  Topic: 2, Anchor: 1,
+};
+
+/**
+ * Consolidate entities that refer to the same thing under different labels
+ * or types. Specifically:
+ *   1. Normalise labels by stripping trailing parentheticals and lowercasing
+ *   2. Group by normalised label
+ *   3. For each group with > 1 entity: pick the canonical (highest type
+ *      priority, then highest confidence). Merge descriptions (longest wins),
+ *      union tags + aliases, add non-canonical labels to aliases, take max
+ *      confidence + salience.
+ *   4. Rewrite relationships so they point at the canonical labels.
+ *
+ * This runs BEFORE applyQualityFilters so orphan / salience checks operate
+ * on the consolidated set.
+ */
+export function consolidateDuplicateLabels(
+  entities: ExtractedEntity[],
+  relationships: ExtractedRelationship[]
+): { entities: ExtractedEntity[]; relationships: ExtractedRelationship[]; mergedCount: number } {
+  const groups = new Map<string, ExtractedEntity[]>();
+  for (const e of entities) {
+    if (!e.label) continue;
+    const key = normaliseLabelForMerge(e.label);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(e);
+  }
+
+  const labelRemap = new Map<string, string>(); // original label.toLowerCase() → canonical label
+  const consolidated: ExtractedEntity[] = [];
+  let mergedCount = 0;
+
+  for (const [, group] of groups) {
+    if (group.length === 1) {
+      consolidated.push(group[0]!);
+      labelRemap.set(group[0]!.label.toLowerCase(), group[0]!.label);
+      continue;
+    }
+    // Pick canonical: highest type priority, then highest confidence, then shortest label (prefer base over qualified)
+    const sorted = [...group].sort((a, b) => {
+      const pa = ENTITY_TYPE_PRIORITY[a.entity_type] ?? 3;
+      const pb = ENTITY_TYPE_PRIORITY[b.entity_type] ?? 3;
+      if (pa !== pb) return pb - pa;
+      const ca = a.confidence ?? 0;
+      const cb = b.confidence ?? 0;
+      if (ca !== cb) return cb - ca;
+      return a.label.length - b.label.length;
+    });
+    const canonical = { ...sorted[0]! };
+    canonical.tags = [...(canonical.tags ?? [])];
+    canonical.aliases = [...(canonical.aliases ?? [])];
+
+    for (const e of sorted.slice(1)) {
+      mergedCount++;
+      labelRemap.set(e.label.toLowerCase(), canonical.label);
+      if ((e.description?.length ?? 0) > (canonical.description?.length ?? 0)) {
+        canonical.description = e.description;
+      }
+      canonical.confidence = Math.max(canonical.confidence ?? 0, e.confidence ?? 0);
+      const cSal = (canonical as ExtractedEntity & { salience?: number }).salience ?? 0;
+      const eSal = (e as ExtractedEntity & { salience?: number }).salience ?? 0;
+      if (eSal > cSal) (canonical as ExtractedEntity & { salience?: number }).salience = eSal;
+      const tagSet = new Set([...(canonical.tags ?? []), ...(e.tags ?? [])]);
+      canonical.tags = Array.from(tagSet).slice(0, 8);
+      const aliasSet: Set<string> = new Set<string>([
+        ...(canonical.aliases ?? []),
+        ...(e.aliases ?? []),
+        e.label,
+      ]);
+      aliasSet.delete(canonical.label);
+      canonical.aliases = Array.from(aliasSet).slice(0, 10);
+    }
+    labelRemap.set(canonical.label.toLowerCase(), canonical.label);
+    consolidated.push(canonical);
+  }
+
+  // Rewrite relationships to point at canonical labels
+  const rewrittenRels: ExtractedRelationship[] = [];
+  for (const r of relationships) {
+    if (!r.source || !r.target) continue;
+    const src = labelRemap.get(r.source.toLowerCase()) ?? r.source;
+    const tgt = labelRemap.get(r.target.toLowerCase()) ?? r.target;
+    rewrittenRels.push({ ...r, source: src, target: tgt });
+  }
+
+  return { entities: consolidated, relationships: rewrittenRels, mergedCount };
+}
+
+/**
+ * Apply all post-extraction quality filters in one pass:
+ *   1. Coerce entity_type / relation_type to the allowed enums
+ *   2. Drop entities with salience below MIN_SALIENCE (when provided)
+ *   3. Drop orphan entities (no relationships) — AI is instructed to ensure
+ *      every entity has ≥1 relationship; an orphan means the instruction
+ *      was violated, so we enforce it at the boundary
+ *   4. Drop relationships whose endpoints no longer exist after filtering
+ */
+export function applyQualityFilters(
+  entities: ExtractedEntity[],
+  relationships: ExtractedRelationship[]
+): { entities: ExtractedEntity[]; relationships: ExtractedRelationship[]; stats: Record<string, number> } {
+  const stats = { raw_entities: entities.length, raw_relationships: relationships.length,
+                  dropped_invalid_type: 0, dropped_low_salience: 0, dropped_orphan: 0,
+                  dropped_dangling_edges: 0, remapped_rel_type: 0 };
+
+  // Step 1: coerce entity types, drop un-mappable
+  const typedEntities: ExtractedEntity[] = [];
+  for (const e of entities) {
+    const coerced = coerceEntityType(e.entity_type);
+    if (!coerced) { stats.dropped_invalid_type++; continue; }
+    typedEntities.push({ ...e, entity_type: coerced });
+  }
+
+  // Step 2: salience filter (only when the AI actually returned a salience)
+  const salienceFiltered: ExtractedEntity[] = [];
+  for (const e of typedEntities) {
+    const s = (e as ExtractedEntity & { salience?: number }).salience;
+    if (typeof s === 'number' && s < MIN_SALIENCE) { stats.dropped_low_salience++; continue; }
+    salienceFiltered.push(e);
+  }
+
+  const keptLabels = new Set(salienceFiltered.map(e => e.label.toLowerCase()));
+
+  // Step 3: coerce relation types, drop dangling
+  const coercedRels: ExtractedRelationship[] = [];
+  for (const r of relationships) {
+    if (!r.source || !r.target) continue;
+    if (!keptLabels.has(r.source.toLowerCase()) || !keptLabels.has(r.target.toLowerCase())) {
+      stats.dropped_dangling_edges++; continue;
+    }
+    const coerced = coerceRelationType(r.relation_type);
+    if (coerced !== r.relation_type) stats.remapped_rel_type++;
+    coercedRels.push({ ...r, relation_type: coerced });
+  }
+
+  // Step 4: orphan drop — entities with zero relationships after the above
+  let finalEntities = salienceFiltered;
+  let finalRels = coercedRels;
+  if (DROP_ORPHAN_ENTITIES) {
+    const labelsInRels = new Set<string>();
+    for (const r of coercedRels) {
+      labelsInRels.add(r.source.toLowerCase());
+      labelsInRels.add(r.target.toLowerCase());
+    }
+    const beforeCount = salienceFiltered.length;
+    finalEntities = salienceFiltered.filter(e => labelsInRels.has(e.label.toLowerCase()));
+    stats.dropped_orphan = beforeCount - finalEntities.length;
+    // Recompute kept labels and prune any relationships that lost an endpoint
+    const keepSet = new Set(finalEntities.map(e => e.label.toLowerCase()));
+    finalRels = coercedRels.filter(r =>
+      keepSet.has(r.source.toLowerCase()) && keepSet.has(r.target.toLowerCase())
+    );
+  }
+
+  return { entities: finalEntities, relationships: finalRels, stats };
+}
+
 // ─── UTILITIES ─────────────────────────────────────────────────────────────
 
 /** Strip markdown formatting from summaries stored into knowledge_sources. */
@@ -227,67 +553,313 @@ export async function fetchWithRetry(
 
 // ─── PROMPT BUILDERS ───────────────────────────────────────────────────────
 
+/**
+ * Build the v2 extraction prompt. XML-tagged, domain-agnostic, with
+ * cross-domain worked examples. See docs/EXTRACTION-PROMPT-V2.md for the
+ * design rationale.
+ */
 export function buildExtractionPrompt(config: PromptConfig): string {
   const modeInstruction = MODE_INSTRUCTIONS[config.mode] ?? MODE_INSTRUCTIONS['comprehensive']!;
   const emphasisInstruction = EMPHASIS_INSTRUCTIONS[config.anchorEmphasis] ?? EMPHASIS_INSTRUCTIONS['standard']!;
 
-  let prompt = `You are a knowledge extraction system. Extract structured knowledge from the provided content.
+  const sections: string[] = [];
 
-## Extraction Mode: ${config.mode}
+  sections.push(`<role>
+You are the extraction engine for a personal knowledge graph called Synapse.
+You serve users across every domain — technology, finance, marketing, sales,
+law, medicine, psychology, education, consulting, science, the arts,
+operations, policy. Treat every source as domain-agnostic: you do not know in
+advance whether you are reading a legal deposition, an earnings call, a
+therapy transcript, a marketing strategy meeting, a physics lecture, or a
+software tutorial. Your extraction quality must hold equally across all.
+
+Return every entity and relationship that will still be useful to the user
+six months from now, regardless of their field.
+
+This is a PERSONAL knowledge graph, not an encyclopedia:
+  - Well-known entities MUST be extracted when mentioned (Fortune 500
+    companies, famous academics, landmark legal cases, standard
+    methodologies, canonical products). Never skip on grounds of "common
+    knowledge."
+  - Frameworks, methods, doctrines, models, playbooks, and principles
+    INSIDE instructional or analytical content are usually the highest-
+    value extraction — more than the people or brands cited as examples.
+    A source teaching a named method is incomplete without that method
+    AND its sub-components as first-class Concept nodes.
+  - Normalise transcript mishearings, OCR artefacts, and auto-caption
+    errors to canonical forms. If you cannot confidently infer the
+    canonical form, preserve the best phonetic guess AND tag it
+    \`needs_review\`.
+  - Domain jargon is high-value, not noise: medical codes, legal
+    citations, drug names, chemical compounds, financial instruments,
+    academic works — all in-scope.
+</role>`);
+
+  sections.push(`<extraction_mode>
+Mode: ${config.mode}
 ${modeInstruction}
+</extraction_mode>`);
 
-## Entity Types (use exactly these):
-${ENTITY_TYPES.join(', ')}
+  sections.push(`<content_types>
+Detect the content shape first, then adapt priorities. Shapes are
+domain-agnostic.
+  - Conversation / meeting transcript — prioritise: Person, Organization,
+    Decision, Action, Blocker, Risk, Goal, Question. Secondary: Topic,
+    Project, Insight, Metric.
+  - Instructional / tutorial / lecture — prioritise: Concept (the
+    framework or method being taught), Takeaway, Lesson, Person
+    (authors/authorities), Organization, Technology, Product, Metric.
+    Secondary: Document, Event.
+  - Essay / article / analysis / opinion piece — prioritise: Concept,
+    Insight, Hypothesis, Takeaway, Person, Organization. Secondary:
+    Metric, Document, Technology, Product.
+  - Reference / technical / procedural document — prioritise: Concept,
+    Technology, Product, Decision, Project, Document. Secondary: Person,
+    Metric, Organization.
+  - Research / report / data analysis — prioritise: Hypothesis, Insight,
+    Metric, Concept, Organization, Document. Secondary: Person, Event,
+    Location.
+  - Narrative / interview / case study — prioritise: Person, Event,
+    Location, Organization, Insight, Lesson, Decision. Secondary:
+    Concept, Takeaway.
 
-## Relationship Types (use exactly these):
-${RELATIONSHIP_TYPES.join(', ')}
+On any content type, ALWAYS also extract Location (when specific places
+are named), Event (when specific events are named), Document (when named
+reports/papers/books/specs/statutes/case-law/standards/contracts/URLs are
+cited), and Metric (when named numbers/benchmarks/KPIs/ratios are cited).
+</content_types>`);
 
-## Output Format (JSON only):
+  sections.push(`<entity_guide>
+Use exactly these 24 entity types. When two types could apply, use the
+disambiguation rule.
+  - Person — a named individual human. Never a company or product.
+  - Organization — a company, non-profit, government body, or brand.
+  - Team — a named subgroup inside an organisation. If unsure, use Organization.
+  - Topic — a broad domain or subject area. Use sparingly; prefer Concept
+    for anything more specific than a subject heading.
+  - Project — a named, time-bounded piece of work with a goal. Works
+    across domains: product launch, legal case, clinical trial, campaign,
+    investigation, dissertation, audit.
+  - Goal — a stated outcome someone is trying to achieve. Distinct from
+    Project: a goal is the outcome, a project is the effort.
+  - Action — a specific to-do, next step, or commitment, usually with an
+    owner. Most common in meeting content.
+  - Risk — a named downside possibility.
+  - Blocker — a named impediment blocking progress.
+  - Decision — an explicit choice between alternatives (ruling, diagnosis,
+    hire, strategy pick, go/no-go).
+  - Insight — a non-obvious observation drawn from evidence; usually the
+    speaker's own realisation.
+  - Question — an explicit open question raised in the content.
+  - Idea — a proposed, not-yet-decided direction.
+  - Concept — a named framework, mental model, theory, principle, rule,
+    doctrine, methodology, technique, or playbook. If the source teaches
+    or analyses a named thing, it belongs here.
+  - Takeaway — a prescriptive lesson the content argues for. Phrase as
+    imperative.
+  - Lesson — retrospective learning from a specific past experience.
+  - Document — a named report, paper, book, statute, case citation,
+    regulation, contract, spec, URL, or artefact. Never for websites-as-
+    products (those are Product) or the content itself.
+  - Event — a named, time-bounded happening.
+  - Location — a specific named place.
+  - Technology — a technical approach, method, language, protocol,
+    library, algorithm, instrument, or apparatus referenced by name but
+    not sold as a branded product.
+  - Product — a branded piece of software/hardware/good/service offered
+    by an identifiable vendor. Websites-as-services are Product.
+  - Metric — a named measurement, benchmark, KPI, ratio, index, rating.
+  - Hypothesis — a testable claim stated as a belief, not yet validated.
+  - Anchor — RESERVED. Only use when explicitly listed in the anchor
+    section below.
+</entity_guide>`);
+
+  sections.push(`<relationship_guide>
+Use exactly these 18 types. PREFER DIRECTIONAL, SPECIFIC types.
+Downrank \`relates_to\`, \`mentions\`, \`connected_to\` — only use when
+nothing more precise fits.
+Directional: leads_to, supports, enables, created, achieved, produced,
+blocks, contradicts, risks, prevents, challenges, inhibits.
+Structural: part_of, owns, associated_with.
+Weak fallback: relates_to, mentions, connected_to.
+</relationship_guide>`);
+
+  sections.push(`<defensive_rules>
+  1. NORMALISE NAMES. Fix mishearings, auto-caption errors, OCR
+     artefacts, and common mis-spellings to canonical form (for people,
+     organisations, products, technologies, legal citations, drug names,
+     chemical compounds, academic institutions, domain terms-of-art). If
+     you cannot confidently infer the canonical form, preserve the best
+     phonetic guess and add tag \`needs_review\`.
+  2. EXTRACT WELL-KNOWN ENTITIES. Never skip on grounds of being famous,
+     obvious, or common knowledge. This applies across every domain.
+  3. EXTRACT FRAMEWORKS AS CONCEPTS. In instructional or analytical
+     content, the named framework / method / doctrine IS the highest-
+     value extraction. Name it precisely, describe it self-containedly,
+     extract each sub-component as its own Concept with \`part_of\`.
+  4. EXTRACT TAKEAWAYS AS IMPERATIVES. Most instructional/advisory
+     content has 3-10 prescriptive lessons. Phrase each as an imperative
+     the user could follow.
+  5. COLLAPSE DUPLICATES WITHIN A SINGLE EXTRACTION. Surface variants
+     must collapse to a canonical entity; list alternates in \`aliases\`.
+  6. DENSITY FLOOR. ~1 entity per 600 chars (instructional/analytical) or
+     1 per 400 chars (meetings). Under-extraction is worse than over-
+     extraction.
+  7. RELATIONSHIP FLOOR. Every entity should have ≥1 relationship. If
+     not, drop the entity or find a relationship.
+  8. DESCRIPTIONS ARE 1-3 SENTENCES, SELF-CONTAINED, 40-400 chars. A
+     future reader should understand the entity without the source.
+</defensive_rules>`);
+
+  sections.push(`<examples>
+These examples span domains deliberately. Study the shape, not the domain.
+
+EXAMPLE 1 — instructional (finance/investing):
+INPUT: "Most retail investors misuse the Sharpe ratio. Sharpe assumes
+returns are normally distributed, which fails after 2008. A better
+starting point is the Sortino ratio, which only penalises downside
+volatility. Ray Dalio's All Weather portfolio uses risk parity, not
+Sharpe optimisation, which is why it held up through the GFC when a
+60/40 did not."
+OUTPUT:
+{"entities":[
+  {"label":"Sharpe Ratio","entity_type":"Metric","description":"Risk-adjusted return metric dividing excess return by total standard deviation. Criticised here for assuming normally-distributed returns.","confidence":0.98,"tags":["finance","risk-metric"]},
+  {"label":"Sortino Ratio","entity_type":"Metric","description":"Risk-adjusted return metric penalising only downside volatility; proposed as a better starting point than Sharpe.","confidence":0.95,"tags":["finance","risk-metric"]},
+  {"label":"Risk Parity","entity_type":"Concept","description":"Portfolio construction method allocating by equal risk contribution rather than dollar weight or Sharpe optimisation.","confidence":0.95,"tags":["finance","portfolio-construction"]},
+  {"label":"All Weather Portfolio","entity_type":"Concept","description":"Ray Dalio's risk-parity-based portfolio designed to perform across economic regimes; held up through the 2008 GFC.","confidence":0.95,"tags":["finance","portfolio"]},
+  {"label":"60/40 Portfolio","entity_type":"Concept","description":"Standard 60% equities / 40% bonds allocation, cited as underperforming through the GFC relative to risk-parity.","confidence":0.95,"tags":["finance","portfolio"]},
+  {"label":"Ray Dalio","entity_type":"Person","description":"Founder of Bridgewater Associates; cited as originator of the All Weather portfolio.","confidence":0.95,"tags":["investor"]},
+  {"label":"2008 Global Financial Crisis","entity_type":"Event","description":"The 2008 financial crisis; stress test that exposed Sharpe-based and 60/40 strategies.","confidence":0.9,"tags":["macro","crisis"],"aliases":["GFC"]},
+  {"label":"Prefer downside-volatility measures over total-volatility measures","entity_type":"Takeaway","description":"Retail investors should move from Sharpe toward downside-aware metrics like Sortino.","confidence":0.9,"tags":["finance","advisory"]}
+],"relationships":[
+  {"source":"Sortino Ratio","target":"Sharpe Ratio","relation_type":"challenges","evidence":"Proposed as better because it penalises only downside volatility."},
+  {"source":"All Weather Portfolio","target":"Risk Parity","relation_type":"part_of","evidence":"Uses risk parity rather than Sharpe optimisation."},
+  {"source":"Ray Dalio","target":"All Weather Portfolio","relation_type":"created","evidence":"Cited as author."},
+  {"source":"All Weather Portfolio","target":"60/40 Portfolio","relation_type":"challenges","evidence":"Held up through GFC when 60/40 did not."},
+  {"source":"2008 Global Financial Crisis","target":"Sharpe Ratio","relation_type":"contradicts","evidence":"Exposed Sharpe's assumption of normally-distributed returns."}
+]}
+
+EXAMPLE 2 — conversation (legal/professional services):
+INPUT: "Priya: We need to decide on the Chen motion by Friday. If we file
+under Rule 12(b)(6), we get a cleaner record but lose the counterclaim.
+Marcus: The blocker is Discovery hasn't confirmed whether the 2019 email
+chain is privileged. Ana is chasing it. Priya: Risk is if we don't have
+privilege confirmed by Wednesday we miss the filing window."
+OUTPUT:
+{"entities":[
+  {"label":"Priya Shah","entity_type":"Person","description":"Speaker driving the filing decision on the Chen motion.","confidence":0.85,"tags":["speaker","needs_review"]},
+  {"label":"Marcus Lee","entity_type":"Person","description":"Speaker raising the privilege-review blocker.","confidence":0.85,"tags":["speaker","needs_review"]},
+  {"label":"Ana Ortiz","entity_type":"Person","description":"Associate chasing Discovery on privilege for the 2019 email chain.","confidence":0.8,"tags":["needs_review"]},
+  {"label":"Chen Motion","entity_type":"Project","description":"The motion under decision; trade-off between cleaner record and preserving the counterclaim.","confidence":0.95,"tags":["litigation"]},
+  {"label":"Decide filing strategy on Chen motion by Friday","entity_type":"Decision","description":"Go/no-go decision required by Friday on whether to file under Rule 12(b)(6).","confidence":0.95,"tags":["litigation"]},
+  {"label":"Rule 12(b)(6)","entity_type":"Concept","description":"Federal Rule of Civil Procedure 12(b)(6) — motion to dismiss for failure to state a claim.","confidence":0.95,"tags":["fed-civ-pro"]},
+  {"label":"Unconfirmed privilege on 2019 email chain","entity_type":"Blocker","description":"Discovery has not confirmed whether a 2019 email chain is privileged, holding up the filing decision.","confidence":0.95,"tags":["discovery","privilege"]},
+  {"label":"Miss filing window if privilege unresolved by Wednesday","entity_type":"Risk","description":"If privilege is not confirmed by Wednesday, the filing window is missed.","confidence":0.9,"tags":["deadline"]}
+],"relationships":[
+  {"source":"Unconfirmed privilege on 2019 email chain","target":"Chen Motion","relation_type":"blocks","evidence":"Filing decision held up by the privilege question."},
+  {"source":"Ana Ortiz","target":"Unconfirmed privilege on 2019 email chain","relation_type":"associated_with","evidence":"Chasing Discovery."},
+  {"source":"Miss filing window if privilege unresolved by Wednesday","target":"Unconfirmed privilege on 2019 email chain","relation_type":"risks","evidence":"Risk conditional on the blocker."},
+  {"source":"Chen Motion","target":"Rule 12(b)(6)","relation_type":"part_of","evidence":"The proposed filing is under Rule 12(b)(6)."},
+  {"source":"Priya Shah","target":"Decide filing strategy on Chen motion by Friday","relation_type":"owns","evidence":"Driving the decision."}
+]}
+
+EXAMPLE 3 — analytical (marketing/GTM):
+INPUT: "HubSpot's latest report shows B2B SaaS companies under $10M ARR
+get the worst ROI from paid search — roughly 0.4x payback at 12 months.
+The fix isn't to bid smarter; it's to abandon paid search until you have
+a repeatable organic motion. April Dunford makes the same point in
+Obviously Awesome: positioning comes first, channels come second."
+OUTPUT:
+{"entities":[
+  {"label":"HubSpot","entity_type":"Organization","description":"Marketing/CRM software company; source of the B2B SaaS paid-search ROI figure.","confidence":0.98,"tags":["saas","source"]},
+  {"label":"B2B SaaS Paid Search ROI (sub-$10M ARR)","entity_type":"Metric","description":"Per HubSpot, sub-$10M ARR B2B SaaS companies see ~0.4x payback on paid search at 12 months.","confidence":0.9,"tags":["benchmark","paid-search"]},
+  {"label":"April Dunford","entity_type":"Person","description":"Author of Obviously Awesome; argues positioning precedes channel selection.","confidence":0.95,"tags":["author","positioning"]},
+  {"label":"Obviously Awesome","entity_type":"Document","description":"April Dunford's book on product positioning; cited as authority for positioning-before-channels.","confidence":0.95,"tags":["book","positioning"]},
+  {"label":"Positioning Before Channels","entity_type":"Concept","description":"Principle that positioning must be solved before investing in channel acquisition.","confidence":0.9,"tags":["gtm","positioning"]},
+  {"label":"Abandon paid search until organic motion is repeatable","entity_type":"Takeaway","description":"Prescriptive advice for sub-$10M ARR B2B SaaS: stop paid search until a repeatable organic acquisition motion exists.","confidence":0.9,"tags":["gtm","advisory"]}
+],"relationships":[
+  {"source":"B2B SaaS Paid Search ROI (sub-$10M ARR)","target":"Abandon paid search until organic motion is repeatable","relation_type":"supports","evidence":"0.4x payback is the empirical basis for the prescription."},
+  {"source":"April Dunford","target":"Obviously Awesome","relation_type":"created","evidence":"Dunford authored the book."},
+  {"source":"Obviously Awesome","target":"Positioning Before Channels","relation_type":"supports","evidence":"The book is cited as the source of the principle."},
+  {"source":"Positioning Before Channels","target":"Abandon paid search until organic motion is repeatable","relation_type":"supports","evidence":"Tactical takeaway follows from the broader principle."},
+  {"source":"HubSpot","target":"B2B SaaS Paid Search ROI (sub-$10M ARR)","relation_type":"produced","evidence":"HubSpot's report is the source of the metric."}
+]}
+</examples>`);
+
+  // User context (optional)
+  if (config.userProfile) {
+    const role      = config.userProfile.professional_context?.role;
+    const projects  = config.userProfile.professional_context?.current_projects;
+    const interests = config.userProfile.personal_interests?.topics;
+    if (role || projects || interests) {
+      let ctx = '<user_context>\nBias extraction toward entities and relationships this user is most likely to want to retrieve later. This is a hint, not a filter — do not skip entities that are not directly relevant.\n';
+      if (role)      ctx += `- Role: ${role}\n`;
+      if (projects)  ctx += `- Current projects: ${projects}\n`;
+      if (interests) ctx += `- Interests: ${interests}\n`;
+      ctx += '</user_context>';
+      sections.push(ctx);
+    }
+  }
+
+  // Anchor context (optional)
+  if (config.anchors.length > 0) {
+    let anchorCtx = `<anchor_context>\n${emphasisInstruction}\nWhen extracted entities plausibly relate to an anchor, add a relationship edge to the anchor by its exact label.\n`;
+    for (const a of config.anchors.slice(0, 10)) {
+      anchorCtx += `- ${a.label} (${a.entity_type}): ${a.description}\n`;
+    }
+    anchorCtx += '</anchor_context>';
+    sections.push(anchorCtx);
+  }
+
+  // Custom instructions (optional)
+  if (config.customInstructions) {
+    sections.push(`<custom_instructions>\n${config.customInstructions}\n</custom_instructions>`);
+  }
+
+  sections.push(`<output_schema>
+Return ONLY valid JSON. No preamble, no markdown fences, no commentary.
 {
+  "content_type_detected": "meeting" | "tutorial" | "essay" | "code" | "research" | "other",
+  "language": "ISO-639-1 code, e.g. 'en'",
+  "primary_topic": "one-line summary of what this content is about",
   "entities": [
     {
-      "label": "Entity name (concise, specific)",
-      "entity_type": "One of the entity types above",
-      "description": "1-3 sentence description",
+      "label": "string, canonical name, 1-80 chars",
+      "entity_type": "exactly one of the 24 entity types",
+      "description": "1-3 self-contained sentences, 40-400 chars",
       "confidence": 0.0-1.0,
-      "tags": ["relevant", "tags"]
+      "tags": ["lowercase", "hyphenated", "max-6"],
+      "aliases": ["optional alternate surface forms seen in content"],
+      "salience": 0.0-1.0
     }
   ],
   "relationships": [
     {
-      "source": "Entity label (must match an entity above)",
-      "target": "Entity label (must match an entity above)",
-      "relation_type": "One of the relationship types above",
-      "evidence": "Brief quote or paraphrase from content"
+      "source": "exact label of an entity above",
+      "target": "exact label of an entity above",
+      "relation_type": "exactly one of the 18 relationship types",
+      "evidence": "quoted or paraphrased sentence, 20-300 chars",
+      "confidence": 0.0-1.0
     }
   ]
-}`;
+}
+</output_schema>`);
 
-  if (config.userProfile) {
-    const role = config.userProfile.professional_context?.role;
-    const projects = config.userProfile.professional_context?.current_projects;
-    const interests = config.userProfile.personal_interests?.topics;
-    if (role || projects || interests) {
-      prompt += '\n\n## User Context (bias extraction toward relevance to this person):\n';
-      if (role) prompt += `- Role: ${role}\n`;
-      if (projects) prompt += `- Current projects: ${projects}\n`;
-      if (interests) prompt += `- Interests: ${interests}\n`;
-    }
-  }
+  sections.push(`<final_instructions>
+1. Read the full content before extracting.
+2. Identify content_type_detected first — it determines priorities.
+3. If instructional, extract the named framework/method FIRST and its
+   sub-components as Concepts linked via \`part_of\`.
+4. Then extract supporting people, organisations, products, metrics,
+   documents, events, locations.
+5. Then extract takeaways (as imperatives) and insights.
+6. Build relationships — directional first, structural second, weak
+   fallbacks last. Every entity needs ≥1 relationship.
+7. Normalise names. Collapse duplicates.
+8. Return ONLY the JSON. Any text outside the JSON is a failure.
+</final_instructions>`);
 
-  if (config.anchors.length > 0) {
-    prompt += `\n\n## Anchor Context (${emphasisInstruction}):\n`;
-    for (const anchor of config.anchors.slice(0, 10)) {
-      prompt += `- ${anchor.label} (${anchor.entity_type}): ${anchor.description}\n`;
-    }
-  }
-
-  if (config.customInstructions) {
-    prompt += `\n\n## Additional Instructions:\n${config.customInstructions}`;
-  }
-
-  prompt += '\n\nExtract knowledge from the following content. Return ONLY valid JSON matching the schema above.';
-  return prompt;
+  return sections.join('\n\n');
 }
 
 // ─── GEMINI CALLS ──────────────────────────────────────────────────────────
@@ -316,11 +888,11 @@ export async function extractEntities(
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: [{ parts: [{ text: content.slice(0, MAX_TRANSCRIPT_CHARS) }] }],
         generationConfig: {
-          temperature: 0.1,
+          temperature: 0.3,
           responseMimeType: 'application/json',
         },
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
     }
   );
 
@@ -350,6 +922,99 @@ export async function extractEntities(
     throw new Error('Gemini returned unexpected shape: missing entities or relationships arrays');
   }
   return parsed;
+}
+
+/**
+ * Map-reduce extraction for long content. Splits content into overlapping
+ * windows (~MAP_REDUCE_WINDOW chars with MAP_REDUCE_OVERLAP carry-over),
+ * runs extractEntities on all windows IN PARALLEL, then merges the results.
+ *
+ * Parallelisation is safe because (a) Gemini 2.5-flash Tier 1 is 1000 RPM
+ * and a single source maxes out at ~10 windows, and (b) batchEmbed is the
+ * real rate-limit risk, not extraction calls. All windows fire
+ * simultaneously, so total wall time ≈ slowest single window (~30-45s)
+ * instead of sum of all windows (~5-6 min sequentially).
+ *
+ * Merge rules:
+ *   - Entities dedupe by (label.toLowerCase() + entity_type). The richer
+ *     description wins; tags and aliases are unioned; confidence is max.
+ *   - Relationships dedupe by (source.toLowerCase(), target.toLowerCase(),
+ *     relation_type).
+ */
+export async function extractEntitiesMapReduce(
+  content: string,
+  systemPrompt: string
+): Promise<ExtractionResult> {
+  const windows: string[] = [];
+  const step = MAP_REDUCE_WINDOW - MAP_REDUCE_OVERLAP;
+  for (let start = 0; start < content.length; start += step) {
+    const slice = content.slice(start, start + MAP_REDUCE_WINDOW);
+    if (slice.length < 500 && windows.length > 0) break;
+    windows.push(slice);
+    if (start + MAP_REDUCE_WINDOW >= content.length) break;
+  }
+
+  console.log(`[extract-pipeline] Map-reduce extraction over ${windows.length} windows in parallel (content_len=${content.length})`);
+  const t0 = Date.now();
+
+  const windowResults = await Promise.allSettled(
+    windows.map(async (w, i) => {
+      const out = await extractEntities(w, systemPrompt);
+      console.log(`[extract-pipeline] map-reduce window ${i + 1}/${windows.length}: ${out.entities.length} entities, ${out.relationships.length} relationships`);
+      return out;
+    })
+  );
+
+  // Surface any rate-limit failure so the caller can retry the whole source.
+  for (const r of windowResults) {
+    if (r.status === 'rejected') {
+      const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      if (msg.startsWith('RATE_LIMITED')) throw r.reason;
+    }
+  }
+
+  const entityMap = new Map<string, ExtractedEntity>();
+  const relKey = (r: ExtractedRelationship) =>
+    `${r.source?.toLowerCase()}|${r.target?.toLowerCase()}|${r.relation_type}`;
+  const relMap = new Map<string, ExtractedRelationship>();
+  let failedWindows = 0;
+
+  windowResults.forEach((res, i) => {
+    if (res.status === 'rejected') {
+      failedWindows++;
+      const msg = res.reason instanceof Error ? res.reason.message : String(res.reason);
+      console.warn(`[extract-pipeline] map-reduce window ${i + 1} failed (non-fatal):`, msg);
+      return;
+    }
+    const { entities = [], relationships = [] } = res.value;
+    for (const e of entities) {
+      if (!e.label || !e.entity_type) continue;
+      const key = `${e.label.toLowerCase()}|${e.entity_type}`;
+      const existing = entityMap.get(key);
+      if (!existing) {
+        entityMap.set(key, { ...e, tags: [...(e.tags ?? [])] });
+        continue;
+      }
+      if ((e.description?.length ?? 0) > (existing.description?.length ?? 0)) {
+        existing.description = e.description;
+      }
+      existing.confidence = Math.max(existing.confidence ?? 0, e.confidence ?? 0);
+      const tagSet = new Set([...(existing.tags ?? []), ...(e.tags ?? [])]);
+      existing.tags = Array.from(tagSet).slice(0, 8);
+    }
+    for (const r of relationships) {
+      if (!r.source || !r.target || !r.relation_type) continue;
+      const key = relKey(r);
+      if (!relMap.has(key)) relMap.set(key, r);
+    }
+  });
+
+  console.log(`[extract-pipeline] Map-reduce complete in ${((Date.now() - t0) / 1000).toFixed(1)}s, ${failedWindows}/${windows.length} windows failed`);
+
+  return {
+    entities: Array.from(entityMap.values()),
+    relationships: Array.from(relMap.values()),
+  };
 }
 
 /**
@@ -526,16 +1191,22 @@ export async function deduplicateEntities(
             p_label: entity.label,
             p_entity_type: entity.entity_type,
             p_embedding: embedding,
-            p_exact_threshold: 0.92,
-            p_semantic_threshold: 0.88,
+            // Lowered from 0.92/0.88 → 0.85/0.80 so transcript typos like
+            // "Versel" vs "Vercel" or "Superbase" vs "Supabase" are caught
+            // as dedup candidates instead of being skipped by the RPC filter.
+            p_exact_threshold: 0.85,
+            p_semantic_threshold: 0.80,
           });
           const best = (matches as Array<{
             match_id: string; match_label: string; match_type: string; similarity: number;
           }> | null)?.[0];
           if (!best) return;
 
+          // Auto-merge threshold lowered from 0.95 → 0.88 so high-confidence
+          // fuzzy matches (typos, case variants, hyphenation differences)
+          // merge automatically instead of waiting for human review.
           if (best.match_type === 'exact' ||
-              (best.match_type === 'fuzzy' && best.similarity >= 0.95)) {
+              (best.match_type === 'fuzzy' && best.similarity >= 0.88)) {
             fuzzyMergeMap.set(entity.label.toLowerCase(), best.match_id);
             mergedEntitiesLog.push({
               original_label: entity.label,
@@ -945,10 +1616,30 @@ export async function runExtractionCore(params: {
     itemStartTime = Date.now(),
   } = opts;
 
-  // 1. Gemini entity extraction
+  // 1. Gemini entity extraction — single call under threshold, map-reduce above
   const systemPrompt = buildExtractionPrompt(promptConfig);
-  const { entities = [], relationships = [] } = await extractEntities(content, systemPrompt);
-  console.log(`[extract-pipeline] Extracted ${entities.length} entities, ${relationships.length} relationships for ${source.sourceId}`);
+  const rawResult =
+    content.length > MAP_REDUCE_THRESHOLD
+      ? await extractEntitiesMapReduce(content, systemPrompt)
+      : await extractEntities(content, systemPrompt);
+  console.log(`[extract-pipeline] Raw: ${rawResult.entities.length} entities, ${rawResult.relationships.length} relationships for ${source.sourceId} (content_len=${content.length})`);
+
+  // 1a. Consolidate same-label-different-type duplicates and strip trailing
+  // parenthetical qualifiers. Runs BEFORE quality filters so orphan checks
+  // see the post-merge set.
+  const consolidated = consolidateDuplicateLabels(rawResult.entities, rawResult.relationships);
+  console.log(`[extract-pipeline] Consolidated: ${consolidated.entities.length} entities (merged ${consolidated.mergedCount} duplicates), ${consolidated.relationships.length} relationships`);
+
+  // 1b. Quality filters: coerce invalid types, drop low-salience, drop orphans
+  const filtered = applyQualityFilters(consolidated.entities, consolidated.relationships);
+  const entities = filtered.entities;
+  const relationships = filtered.relationships;
+  console.log(`[extract-pipeline] Filtered: ${entities.length} entities, ${relationships.length} relationships (stats=${JSON.stringify(filtered.stats)})`);
+
+  // Post-extraction health check — flag low-yield extractions on long content
+  if (content.length >= HEALTH_MIN_CONTENT_FOR_CHECK && entities.length < HEALTH_MIN_ENTITIES) {
+    console.warn(`[PIPELINE_HEALTH_LOW_YIELD] source=${source.sourceId} type=${source.sourceType} content_len=${content.length} entities=${entities.length} relationships=${relationships.length} — below ${HEALTH_MIN_ENTITIES}-entity floor for ${HEALTH_MIN_CONTENT_FOR_CHECK}+ char content`);
+  }
 
   // 2. Dedup
   const dedup = await deduplicateEntities(entities, userId, supabase, enableFuzzyDedup);

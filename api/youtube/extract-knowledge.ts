@@ -7,8 +7,10 @@ import {
   type UserProfile,
 } from '../pipeline/extract-pipeline.js';
 
-// Allow up to 120s on Vercel Pro (heavy Gemini extraction + embeddings)
-export const maxDuration = 120;
+// 300s — map-reduce extraction runs windows in parallel but dedup + chunk
+// saves + cross-connection discovery still add time. 300s is the Vercel Pro
+// ceiling and matches rescore-backfill / nodes/merge-duplicates / compute-layout.
+export const maxDuration = 300;
 
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;

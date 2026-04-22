@@ -6,7 +6,7 @@ import {
   type UserProfile,
 } from '../pipeline/extract-pipeline.js';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;
