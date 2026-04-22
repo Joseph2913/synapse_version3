@@ -41,3 +41,19 @@ vite.config.ts.timestamp-*
 out/
 remotion/output/
 .mcp.json
+
+# Agent/AI tooling state (local-only)
+.agents/
+.claude/
+.superpowers/
+skills-lock.json
+
+# Reference assets and AI-authored planning docs
+Logo/
+docs/sessions/
+docs/superpowers/
+
+# Remotion video tooling (personal)
+remotion/
+remotion.config.ts
+scripts/generate-sounds.py
