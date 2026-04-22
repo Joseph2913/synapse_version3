@@ -327,7 +327,8 @@ export async function extractEntities(
   if (!response.ok) {
     const errText = await response.text();
     if (response.status === 429) {
-      throw new Error(`RATE_LIMITED: Gemini rate limit hit`);
+      console.error(`[extract-pipeline] Gemini 429 on extractEntities — raw body: ${errText.slice(0, 800)}`);
+      throw new Error(`RATE_LIMITED: Gemini rate limit hit — ${errText.slice(0, 300)}`);
     }
     throw new Error(`Gemini extraction failed: ${response.status} ${errText.slice(0, 200)}`);
   }
@@ -382,10 +383,12 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
     );
 
     if (!response.ok) {
+      const errText = await response.text();
       if (response.status === 429) {
-        throw new Error(`RATE_LIMITED: Gemini embedding rate limit hit`);
+        console.error(`[extract-pipeline] Gemini 429 on batchEmbed — raw body: ${errText.slice(0, 800)}`);
+        throw new Error(`RATE_LIMITED: Gemini embedding rate limit hit — ${errText.slice(0, 300)}`);
       }
-      console.warn(`[extract-pipeline] batchEmbed HTTP ${response.status}, leaving slice empty`);
+      console.warn(`[extract-pipeline] batchEmbed HTTP ${response.status}: ${errText.slice(0, 200)}`);
       continue;
     }
 
