@@ -187,7 +187,11 @@ async function generateSummaryViaGemini(
 
     if (!text || text.trim().length === 0) return null;
     const clamped = clampSummary(text.trim());
-    if (clamped.length < 20) return null;
+    // Reject obviously-truncated Gemini outputs. Real summaries are 2-3
+    // sentences (~150-300 chars). Anything under ~80 chars is almost always
+    // a cut-off response and should be rejected so the backfill cron can
+    // retry on the next tick.
+    if (clamped.length < 80) return null;
     return clamped;
   } catch {
     return null;

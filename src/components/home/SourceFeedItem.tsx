@@ -88,7 +88,7 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
             <span className="font-body text-text-placeholder shrink-0" style={{ fontSize: 11 }}>
               {formatRelativeTime(source.created_at)}
             </span>
-            {entityCount > 0 && (
+            {entityCount > 0 ? (
               <span
                 className="font-body shrink-0"
                 style={{
@@ -101,6 +101,30 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
                 }}
               >
                 {entityCount} entities
+              </span>
+            ) : (
+              <span
+                className="font-body font-semibold inline-flex items-center shrink-0"
+                style={{
+                  fontSize: 10,
+                  padding: '2px 8px',
+                  borderRadius: 20,
+                  border: '1px solid rgba(180,83,9,0.25)',
+                  background: 'rgba(180,83,9,0.07)',
+                  color: '#b45309',
+                  gap: 5,
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: '#b45309',
+                    animation: 'pulse 1.4s ease-in-out infinite',
+                  }}
+                />
+                Processing…
               </span>
             )}
             <ChevronRight size={13} style={{ color: 'var(--color-text-placeholder)', flexShrink: 0 }} />
