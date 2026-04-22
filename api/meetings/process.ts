@@ -4,7 +4,7 @@ import {
   runExtractionCore,
   type Anchor,
   type UserProfile,
-} from '../pipeline/extract-pipeline';
+} from '../pipeline/extract-pipeline.js';
 
 // Allow up to 120s on Vercel Pro (heavy Gemini extraction + embeddings)
 export const maxDuration = 120;
