@@ -264,6 +264,7 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
     const onScroll = () => {
       const el = sectionRef.current
       if (!el) return
+      if (window.matchMedia('(max-width: 768px)').matches) return
       const rect = el.getBoundingClientRect()
       const vh = window.innerHeight
       const scrolled = Math.max(0, -rect.top)
@@ -294,14 +295,14 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
   const activeScenario = AGENT_SCENARIOS[activeIdx] ?? AGENT_SCENARIOS[0]!
 
   return (
-    <section ref={sectionRef} data-screen-label="05 For Agents" style={{
+    <section ref={sectionRef} data-screen-label="05 For Agents" className="lp-agents" style={{
       position: 'relative', zIndex: 2,
       background: BG, color: INK,
       marginTop: 60,
       minHeight: sectionMinHeight,
     }}>
       {/* Sticky viewport */}
-      <div style={{
+      <div className="lp-agents-sticky" style={{
         position: 'sticky', top: 0,
         height: '100vh',
         overflow: 'hidden',
@@ -336,7 +337,7 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
               color: accent, letterSpacing: '0.16em', textTransform: 'uppercase',
             }}>&mdash; For agents &middot; &sect;04</span>
             <span style={{ flex: 1, height: 1, background: BORDER }}/>
-            <span style={{
+            <span className="lp-hide-mobile" style={{
               fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
               color: INK3, letterSpacing: '0.14em',
             }}>FIG. 04 / MCP &middot; {activeScenario.badge}</span>
@@ -356,7 +357,7 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
           </h2>
 
           {/* Two-column: left = description + scene pills, right = active card */}
-          <div style={{
+          <div className="lp-agents-grid" style={{
             marginTop: 28, flex: 1, minHeight: 0,
             display: 'grid', gridTemplateColumns: '0.85fr 1.15fr', gap: 48,
             alignItems: 'stretch',
@@ -377,7 +378,7 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
               </p>
 
               {/* Scene buttons */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div className="lp-agents-scene-list" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {AGENT_SCENARIOS.map((s, i) => {
                   const isActive = i === activeIdx
                   const isPast = i < activeIdx
@@ -427,7 +428,7 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
               </div>
 
               {/* Scroll hint */}
-              <div style={{
+              <div className="lp-hide-mobile" style={{
                 marginTop: 14, paddingLeft: 20,
                 display: 'flex', alignItems: 'center', gap: 8,
                 fontFamily: 'JetBrains Mono, monospace', fontSize: 10,

@@ -21,7 +21,7 @@ export function LandingNav({ ink, ink2, border, accent, dark, onSignIn }: Landin
   const [hoveredLink, setHoveredLink] = useState<string | null>(null)
 
   return (
-    <nav style={{
+    <nav className="lp-nav" style={{
       position: 'sticky', top: 0, zIndex: 50,
       display: 'flex', alignItems: 'center',
       padding: '0 clamp(24px, 5vw, 64px)',
@@ -49,7 +49,7 @@ export function LandingNav({ ink, ink2, border, accent, dark, onSignIn }: Landin
       </div>
 
       {/* Center: nav links with pill hover */}
-      <div style={{
+      <div className="lp-nav-links" style={{
         flex: 1,
         display: 'flex', justifyContent: 'center', gap: 4,
       }}>
@@ -84,7 +84,7 @@ export function LandingNav({ ink, ink2, border, accent, dark, onSignIn }: Landin
 
       {/* Right: sign in + CTA */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button onClick={onSignIn} style={{
+        <button className="lp-nav-signin" onClick={onSignIn} style={{
           padding: '6px 14px', borderRadius: 20,
           fontSize: 13, fontWeight: 500, color: ink2,
           background: 'transparent', border: 'none',

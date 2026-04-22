@@ -391,7 +391,7 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border, borderStrong, c
       </div>
 
       {/* Four facets */}
-      <div style={{
+      <div className="lp-anatomy-facets" style={{
         display: 'grid',
         gridTemplateColumns: compact ? '1fr 1fr' : '1.2fr 1fr',
         gridTemplateRows: 'auto auto',
@@ -442,6 +442,7 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
     const onScroll = () => {
       const el = sectionRef.current
       if (!el) return
+      if (window.matchMedia('(max-width: 768px)').matches) return
       const rect = el.getBoundingClientRect()
       const vh = window.innerHeight
       const scrolled = Math.max(0, -rect.top)
@@ -475,13 +476,13 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
   const sectionMinHeight = `${ANATOMY_SCENES.length * 85 + 30}vh` // ~285vh
 
   return (
-    <section ref={sectionRef} data-screen-label="04 Anatomy" style={{
+    <section ref={sectionRef} data-screen-label="04 Anatomy" className="lp-anatomy" style={{
       position: 'relative', zIndex: 1,
       borderTop: `1px solid ${border}`,
       background: surface,
       minHeight: sectionMinHeight,
     }}>
-      <div style={{
+      <div className="lp-anatomy-sticky" style={{
         position: 'sticky', top: 0,
         height: '100vh',
         padding: 'clamp(48px, 6vw, 88px) clamp(24px, 6vw, 80px) clamp(40px, 5vw, 72px)',
@@ -498,11 +499,11 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
             <span style={{ width: 24, height: 1, background: borderStrong }}/>
             <span>&sect;03 &middot; ANATOMY OF AN INSIGHT</span>
             <span style={{ flex: 1, height: 1, background: border }}/>
-            <span>{String(activeIdx + 1).padStart(2, '0')} / {String(ANATOMY_SCENES.length).padStart(2, '0')}</span>
+            <span className="lp-hide-mobile">{String(activeIdx + 1).padStart(2, '0')} / {String(ANATOMY_SCENES.length).padStart(2, '0')}</span>
           </div>
 
           {/* Two columns */}
-          <div style={{
+          <div className="lp-anatomy-grid" style={{
             flex: 1, minHeight: 0,
             display: 'grid',
             gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)',
@@ -585,7 +586,7 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
               </div>
 
               {/* Scene progress dots */}
-              <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div className="lp-anatomy-scene-dots" style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 12 }}>
                 {ANATOMY_SCENES.map((id, i) => {
                   const isActive = i === activeIdx
                   const isPast = i < activeIdx

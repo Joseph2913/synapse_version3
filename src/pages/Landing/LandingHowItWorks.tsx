@@ -384,6 +384,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
     const onScroll = () => {
       const el = sectionRef.current
       if (!el) return
+      if (window.matchMedia('(max-width: 768px)').matches) return
       const rect = el.getBoundingClientRect()
       const vh = window.innerHeight
       const scrolled = Math.max(0, -rect.top)
@@ -402,6 +403,10 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
   }, [])
 
   const scrollToStep = (i: number) => {
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      setActiveIdx(i)
+      return
+    }
     const el = sectionRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
@@ -422,13 +427,13 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
   const border = 'rgba(240,237,230,0.1)'
 
   return (
-    <section ref={sectionRef} data-screen-label="03 How it works" style={{
+    <section ref={sectionRef} data-screen-label="03 How it works" className="lp-howitworks" style={{
       position: 'relative', zIndex: 2,
       background: bg, color: ink,
       marginTop: 0,
       minHeight: sectionMinHeight,
     }}>
-      <div style={{
+      <div className="lp-howitworks-sticky" style={{
         position: 'sticky', top: 0,
         height: '100vh',
         overflow: 'hidden',
@@ -460,7 +465,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
               color: accent, letterSpacing: '0.16em', textTransform: 'uppercase',
             }}>&mdash; Method &middot; &sect;02</span>
             <span style={{ flex: 1, height: 1, background: border }}/>
-            <span style={{
+            <span className="lp-hide-mobile" style={{
               fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
               color: ink3, letterSpacing: '0.14em',
             }}>FIG. 02 / PIPELINE &middot; {active.n} of {String(PIPELINE_STEPS.length).padStart(2, '0')}</span>
@@ -478,7 +483,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
             }}>and an answer that cites itself.</em>
           </h2>
 
-          <div style={{
+          <div className="lp-howitworks-grid" style={{
             marginTop: 28, flex: 1, minHeight: 0,
             display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 40,
             alignItems: 'stretch',
@@ -537,7 +542,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
                   </button>
                 )
               })}
-              <div style={{
+              <div className="lp-hide-mobile" style={{
                 marginTop: 14, paddingLeft: 20,
                 display: 'flex', alignItems: 'center', gap: 8,
                 fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -548,7 +553,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
               </div>
             </div>
 
-            <div style={{ minHeight: 0, display: 'flex' }}>
+            <div className="lp-howitworks-graph" style={{ minHeight: 0, display: 'flex' }}>
               <PipelineGraph active={activeKey} accent={accent}
                 ink={ink} ink2={ink2} ink3={ink3} border={border} activeStep={active}/>
             </div>

@@ -1,0 +1,142 @@
+/* Landing page mobile overrides.
+   Inline styles win on specificity, so !important is required.
+   Breakpoint: 768px. */
+
+@media (max-width: 768px) {
+
+  /* Guard the whole page from horizontal overflow */
+  .lp-root { overflow-x: hidden !important; }
+
+  /* Generic helper: any element tagged to disappear on mobile */
+  .lp-hide-mobile { display: none !important; }
+
+  /* ─────────────── NAV ─────────────── */
+  .lp-nav { padding: 0 18px !important; height: 56px !important; }
+  .lp-nav-links { display: none !important; }
+  .lp-nav-signin { display: none !important; }
+
+  /* ─────────────── HERO ─────────────── */
+  .lp-hero {
+    height: auto !important;
+    padding: 28px 20px 40px !important;
+    overflow: visible !important;
+  }
+  .lp-hero-grid {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto !important;
+    height: auto !important;
+    gap: 24px !important;
+  }
+  .lp-hero-product { display: none !important; }
+  .lp-hero h1 { font-size: 38px !important; line-height: 1.02 !important; }
+  .lp-hero p  { font-size: 15px !important; }
+  .lp-hero button {
+    padding: 12px 20px !important;
+    font-size: 14px !important;
+    min-height: 44px !important;
+  }
+
+  /* ─────────────── HOW IT WORKS (Method) ─────────────── */
+  .lp-howitworks { min-height: auto !important; }
+  .lp-howitworks-sticky {
+    position: static !important;
+    height: auto !important;
+    padding: 48px 16px 40px !important;
+    overflow: visible !important;
+  }
+  .lp-howitworks-grid {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+    margin-top: 16px !important;
+  }
+  .lp-howitworks-graph { display: none !important; }
+  .lp-howitworks h2 { font-size: 28px !important; line-height: 1.1 !important; }
+
+  /* Step cards: number + label inline, caption truncates.
+     Buttons are direct children of the left column wrapper. */
+  .lp-howitworks-grid > div:first-child > button {
+    padding: 12px 14px !important;
+    min-height: 56px !important;
+    max-width: 100% !important;
+  }
+  /* The number column inside each step button */
+  .lp-howitworks-grid > div:first-child > button > div > div:first-child {
+    font-size: 11px !important;
+    min-width: 22px !important;
+  }
+  /* The title/caption column */
+  .lp-howitworks-grid > div:first-child > button > div > div:nth-child(2) > div:first-child {
+    font-size: 17px !important;
+  }
+  .lp-howitworks-grid > div:first-child > button > div > div:nth-child(2) > div:nth-child(2) {
+    font-size: 10.5px !important;
+  }
+  /* Active-step blurb: trim */
+  .lp-howitworks-grid > div:first-child > button p {
+    font-size: 12.5px !important;
+  }
+
+  /* ─────────────── ANATOMY (one example, simplified) ─────────────── */
+  .lp-anatomy { min-height: auto !important; }
+  .lp-anatomy-sticky {
+    position: static !important;
+    height: auto !important;
+    padding: 48px 16px 40px !important;
+  }
+  .lp-anatomy-grid {
+    grid-template-columns: 1fr !important;
+    gap: 24px !important;
+  }
+  .lp-anatomy h2 { font-size: 26px !important; line-height: 1.15 !important; }
+
+  /* Hide the three-scene selector — only one example shown on mobile */
+  .lp-anatomy-scene-dots { display: none !important; }
+
+  /* Facets: stack to one column, then hide Mentions (2nd) and For-agents (4th).
+     Order in JSX: Relations, Mentions, Sources, Agents. */
+  .lp-anatomy-facets {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+  }
+  .lp-anatomy-facets > *:nth-child(2),
+  .lp-anatomy-facets > *:nth-child(4) {
+    display: none !important;
+  }
+
+  /* Slim the entity header inside the detail card */
+  .lp-anatomy-grid .lp-anatomy-grid + * { /* no-op guard */ }
+
+  /* ─────────────── AGENTS ─────────────── */
+  .lp-agents { min-height: auto !important; margin-top: 0 !important; }
+  .lp-agents-sticky {
+    position: static !important;
+    height: auto !important;
+    padding: 48px 16px 40px !important;
+    overflow: visible !important;
+  }
+  .lp-agents-grid {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+    margin-top: 16px !important;
+  }
+  .lp-agents h2 { font-size: 28px !important; line-height: 1.1 !important; }
+
+  /* Hide the scenario picker list — only the active card shows on mobile */
+  .lp-agents-scene-list { display: none !important; }
+}
+
+/* Extra-small phones (iPhone SE class) */
+@media (max-width: 400px) {
+  .lp-nav { padding: 0 14px !important; }
+  .lp-hero { padding: 24px 14px 32px !important; }
+  .lp-hero h1 { font-size: 32px !important; }
+  .lp-howitworks-sticky,
+  .lp-anatomy-sticky,
+  .lp-agents-sticky { padding: 40px 14px 32px !important; }
+  .lp-howitworks h2,
+  .lp-agents h2 { font-size: 24px !important; }
+  .lp-anatomy h2 { font-size: 22px !important; }
+  .lp-howitworks-grid > div:first-child > button {
+    padding: 10px 12px !important;
+  }
+}

@@ -27,14 +27,14 @@ export function LandingHero({
   })
 
   return (
-    <section style={{
+    <section className="lp-hero" style={{
       position: 'relative', zIndex: 2,
       height: 'calc(100vh - 61px)',
       overflow: 'hidden',
       padding: 'clamp(12px, 2vh, 24px) clamp(24px, 5vw, 64px) clamp(8px, 1.5vh, 16px)',
       boxSizing: 'border-box',
     }}>
-      <div style={{
+      <div className="lp-hero-grid" style={{
         maxWidth: 1400, width: '100%', height: '100%', margin: '0 auto',
         display: 'grid',
         gridTemplateColumns: '0.82fr 1.18fr',
@@ -103,7 +103,7 @@ export function LandingHero({
         </div>
 
         {/* Right: product window - height-capped to ~65% of viewport content area */}
-        <div style={{
+        <div className="lp-hero-product" style={{
           ...at(300),
           overflow: 'hidden',
           height: 'clamp(420px, 62vh, 660px)',

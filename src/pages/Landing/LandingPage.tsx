@@ -8,6 +8,7 @@ import { LandingAgents } from './LandingAgents'
 import { LandingClosing } from './LandingClosing'
 import { HEADLINES } from './landing-data'
 import './landing.css'
+import './landing-mobile.css'
 
 const ACCENT = '#D63A00'
 const SURFACE = '#FAFAF7'
@@ -41,7 +42,7 @@ export function LandingPage() {
   const headline = HEADLINES['second-brain'] ?? { main: 'Your second brain,', emph: 'compounding.' }
 
   return (
-    <div style={{
+    <div className="lp-root" style={{
       minHeight: '100vh',
       background: surface,
       color: ink,
