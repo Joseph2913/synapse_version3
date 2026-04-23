@@ -37,6 +37,11 @@
   to { transform: rotate(-360deg); }
 }
 
+@keyframes lp-bar-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
 /* Noise texture overlay */
 .lp-noise {
   position: absolute;

@@ -306,7 +306,7 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
         position: 'sticky', top: 0,
         height: '100vh',
         overflow: 'hidden',
-        padding: '64px clamp(24px, 5vw, 64px) 56px',
+        padding: '96px clamp(24px, 5vw, 64px) 56px',
         display: 'flex', flexDirection: 'column',
       }}>
         {/* Grid background */}
@@ -349,17 +349,17 @@ export function LandingAgents({ accent, displayFont }: LandingAgentsProps) {
             fontSize: 'clamp(32px, 3.6vw, 56px)', lineHeight: 1.04,
             letterSpacing: '-0.03em', margin: 0, maxWidth: 880, color: INK,
           }}>
-            Your agents read the{' '}
+            Your agents read the same graph you do.{' '}
             <em style={{
               fontFamily: 'Instrument Serif, Georgia, serif',
               fontStyle: 'italic', fontWeight: 400, color: accent,
-            }}>same graph</em> you do.
+            }}>Cite, trace, and write back through one endpoint.</em>
           </h2>
 
           {/* Two-column: left = description + scene pills, right = active card */}
           <div className="lp-agents-grid" style={{
             marginTop: 28, flex: 1, minHeight: 0,
-            display: 'grid', gridTemplateColumns: '0.85fr 1.15fr', gap: 48,
+            display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 48,
             alignItems: 'stretch',
           }}>
             {/* Left column */}

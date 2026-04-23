@@ -437,7 +437,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
         position: 'sticky', top: 0,
         height: '100vh',
         overflow: 'hidden',
-        padding: '64px clamp(24px, 5vw, 64px) 56px',
+        padding: '96px clamp(24px, 5vw, 64px) 56px',
         display: 'flex', flexDirection: 'column',
       }}>
         <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
@@ -476,7 +476,7 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
             fontSize: 'clamp(32px, 3.6vw, 56px)', lineHeight: 1.04,
             letterSpacing: '-0.03em', margin: 0, maxWidth: 880, color: ink,
           }}>
-            Five passes between a meeting{' '}
+            Five passes between a source{' '}
             <em style={{
               fontFamily: 'Instrument Serif, Georgia, serif',
               fontStyle: 'italic', fontWeight: 400, color: accent,
@@ -485,13 +485,19 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
 
           <div className="lp-howitworks-grid" style={{
             marginTop: 28, flex: 1, minHeight: 0,
-            display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 40,
+            display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 48,
             alignItems: 'stretch',
           }}>
             {/* Left: steps */}
             <div style={{
               display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0,
             }}>
+              <p style={{
+                fontSize: 15, lineHeight: 1.6, color: ink2, maxWidth: 480,
+                margin: '0 0 32px',
+              }}>
+                Every source runs through five passes. What enters as a raw meeting, doc, or video leaves as a queryable graph &mdash; typed, linked, and cited back to the moment it came from.
+              </p>
               {PIPELINE_STEPS.map((s, i) => {
                 const isActive = i === activeIdx
                 const isPast = i < activeIdx
@@ -553,9 +559,18 @@ export function LandingHowItWorks({ accent, displayFont }: LandingHowItWorksProp
               </div>
             </div>
 
-            <div className="lp-howitworks-graph" style={{ minHeight: 0, display: 'flex' }}>
-              <PipelineGraph active={activeKey} accent={accent}
-                ink={ink} ink2={ink2} ink3={ink3} border={border} activeStep={active}/>
+            <div className="lp-howitworks-graph" style={{
+              minHeight: 0, display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+            }}>
+              <div style={{
+                width: '100%', height: '100%',
+                maxHeight: 560,
+                display: 'flex', flexDirection: 'column',
+              }}>
+                <PipelineGraph active={activeKey} accent={accent}
+                  ink={ink} ink2={ink2} ink3={ink3} border={border} activeStep={active}/>
+              </div>
             </div>
           </div>
         </div>

@@ -15,98 +15,132 @@ interface SentenceSegment {
 }
 
 const ANATOMY_SENTENCE: SentenceSegment[] = [
-  { type: 'text', text: 'Ship ' },
-  { type: 'entity', id: 'ship_v3', label: 'v3 in May', kind: 'decision' },
-  { type: 'text', text: ' supports ' },
-  { type: 'entity', id: 'gtm', label: 'GTM', kind: 'anchor' },
-  { type: 'text', text: ', but ' },
-  { type: 'entity', id: 'latency', label: 'latency risk', kind: 'risk' },
-  { type: 'text', text: ' \u2014 raised by ' },
-  { type: 'entity', id: 'sarah', label: 'Sarah K.', kind: 'person' },
-  { type: 'text', text: ' in ' },
-  { type: 'entity', id: 'exec_sync', label: "Thursday\u2019s exec sync", kind: 'call' },
-  { type: 'text', text: ' \u2014 may push it to June.' },
+  { type: 'text', text: 'The ' },
+  { type: 'entity', id: 'mobile_redesign', label: 'mobile redesign', kind: 'project' },
+  { type: 'text', text: ' supports the ' },
+  { type: 'entity', id: 'q4_roadmap', label: 'Q4 roadmap', kind: 'anchor' },
+  { type: 'text', text: ', first raised in ' },
+  { type: 'entity', id: 'planning_call', label: 'Friday\u2019s planning call', kind: 'call' },
+  { type: 'text', text: '.' },
 ]
 
-interface AnatomyFacets {
-  relations: Array<{ verb: string; target: string; kind: string }>
-  sources: Array<{ label: string; kind: string; loc: string }>
-  mentions: { total: number; peak: number; trend: number[]; weeks: number; delta: string }
-  agents: { tools: string[]; citable: boolean; writable: boolean }
-}
+type ConnectedNode = { label: string; kind: string }
+type Signal = { label: string; value: number }
+type TopEntity = { label: string; kind: string; confidence: number }
 
-interface AnatomyDetailData {
+type EntityDetail = {
+  variant: 'entity'
   kind: string
+  typeLabel: string
   label: string
   confidence: number
-  summary: string
-  facets: AnatomyFacets
+  metaRow: string
+  description: string
+  relatedAnchors: string[]
+  tags: string[]
+  outcome: string
 }
+
+type AnchorDetail = {
+  variant: 'anchor'
+  kind: 'anchor'
+  label: string
+  badges: Array<{ label: string; tone: 'neutral' | 'confirmed' }>
+  signalBanner: string
+  signals: Signal[]
+  connected: ConnectedNode[]
+  crossAnchor: string
+  outcome: string
+}
+
+type SourceDetail = {
+  variant: 'source'
+  kind: string
+  label: string
+  platform: string
+  timeAgo: string
+  meta: string
+  summary: string
+  topEntities: TopEntity[]
+  relatedSources: string[]
+  outcome: string
+}
+
+type AnatomyDetailData = EntityDetail | AnchorDetail | SourceDetail
 
 const ANATOMY_DETAIL: Record<string, AnatomyDetailData> = {
-  ship_v3: {
-    kind: 'decision', label: 'Ship v3 in May', confidence: 0.91,
-    summary: 'A commitment logged on Apr 14. Owned by Ben R. Spans four adjacent anchors.',
-    facets: {
-      relations: [
-        { verb: 'supports', target: 'GTM', kind: 'anchor' },
-        { verb: 'owned_by', target: 'Ben R.', kind: 'person' },
-        { verb: 'blocked_by', target: 'latency risk', kind: 'risk' },
-        { verb: 'ties_to', target: 'Q2 Strategy', kind: 'anchor' },
-      ],
-      sources: [
-        { label: 'call \u00b7 exec-sync', kind: 'call', loc: '00:42:10' },
-        { label: 'doc \u00b7 may-launch-plan', kind: 'doc', loc: 'p.1' },
-        { label: 'slack \u00b7 #launches', kind: 'doc', loc: '2d ago' },
-      ],
-      mentions: { total: 34, peak: 12, trend: [2,3,4,5,7,12,9,8], weeks: 8, delta: '+18 vs prior' },
-      agents: { tools: ['graph.find', 'graph.trace', 'graph.cite'], citable: true, writable: false },
-    },
+  mobile_redesign: {
+    variant: 'entity',
+    kind: 'project',
+    typeLabel: 'Project',
+    label: 'Mobile redesign',
+    confidence: 0.94,
+    metaRow: 'Owned by Priya N. \u00b7 In progress \u00b7 Seen 2w ago',
+    description: 'A full overhaul of the mobile app. Focused on a faster checkout, simpler navigation, and a cleaner visual system across iOS and Android.',
+    relatedAnchors: ['Q4 roadmap', 'Mobile platform'],
+    tags: ['ux', 'mobile', 'q4', 'priority'],
+    outcome: 'Your agents can cite this, trace its dependencies, and surface related work across the graph.',
   },
-  gtm: {
-    kind: 'anchor', label: 'GTM', confidence: 0.97,
-    summary: 'The Q2 go-to-market anchor. Referenced in 23 sources. Central to the current cycle.',
-    facets: {
-      relations: [
-        { verb: 'supported_by', target: 'Ship v3 in May', kind: 'decision' },
-        { verb: 'blocked_by', target: 'churn signal', kind: 'risk' },
-        { verb: 'owned_by', target: 'Sarah K.', kind: 'person' },
-        { verb: 'parent', target: 'Q2 Strategy', kind: 'anchor' },
-      ],
-      sources: [
-        { label: 'doc \u00b7 q2-okrs', kind: 'doc', loc: 'p.3' },
-        { label: 'video \u00b7 all-hands', kind: 'call', loc: '22:15' },
-        { label: 'call \u00b7 sarah k.', kind: 'call', loc: '00:14:22' },
-      ],
-      mentions: { total: 142, peak: 18, trend: [6,9,11,14,12,16,18,15], weeks: 8, delta: '+42 vs prior' },
-      agents: { tools: ['graph.find', 'graph.subgraph', 'graph.skill(onboarding)'], citable: true, writable: false },
-    },
+  q4_roadmap: {
+    variant: 'anchor',
+    kind: 'anchor',
+    label: 'Q4 roadmap',
+    badges: [
+      { label: 'Initiative', tone: 'neutral' },
+      { label: 'Active', tone: 'confirmed' },
+    ],
+    signalBanner: 'A central node shaping what matters this quarter.',
+    signals: [
+      { label: 'Centrality', value: 0.72 },
+      { label: 'Diversity',  value: 0.91 },
+      { label: 'Velocity',   value: 0.68 },
+      { label: 'Richness',   value: 0.85 },
+    ],
+    connected: [
+      { label: 'Mobile redesign', kind: 'project' },
+      { label: 'Priya N.', kind: 'person' },
+      { label: 'Pricing update', kind: 'project' },
+      { label: 'Churn signal', kind: 'risk' },
+    ],
+    crossAnchor: 'Connected to 3 other anchors',
+    outcome: 'Anchors are how your agents know what this cycle is really about.',
   },
-  latency: {
-    kind: 'risk', label: 'latency risk', confidence: 0.84,
-    summary: 'First raised Apr 11. Trending up for 3 weeks. Blocks the May ship window.',
-    facets: {
-      relations: [
-        { verb: 'blocks', target: 'Ship v3 in May', kind: 'decision' },
-        { verb: 'owned_by', target: 'eng platform', kind: 'org' },
-        { verb: 'raised_by', target: 'Sarah K.', kind: 'person' },
-      ],
-      sources: [
-        { label: 'doc \u00b7 q2-risk-register', kind: 'doc', loc: 'row 4' },
-        { label: 'call \u00b7 eng-sync', kind: 'call', loc: '00:08:44' },
-        { label: 'slack \u00b7 #risks', kind: 'doc', loc: '3d ago' },
-      ],
-      mentions: { total: 19, peak: 6, trend: [0,0,1,3,5,6,4,5], weeks: 8, delta: '+11 vs prior' },
-      agents: { tools: ['graph.find', 'graph.filter(risk)', 'graph.alert'], citable: true, writable: true },
-    },
+  planning_call: {
+    variant: 'source',
+    kind: 'call',
+    platform: 'Meeting',
+    label: 'Friday\u2019s planning call',
+    timeAgo: '3d ago',
+    meta: '48 min \u00b7 5 participants \u00b7 transcript ready',
+    summary: 'The team walked through Q4 priorities, agreed that the mobile redesign should lead the quarter, and flagged the churn signal as a watch item.',
+    topEntities: [
+      { label: 'Mobile redesign', kind: 'project', confidence: 0.94 },
+      { label: 'Q4 roadmap', kind: 'anchor', confidence: 0.99 },
+      { label: 'Churn signal', kind: 'risk', confidence: 0.82 },
+    ],
+    relatedSources: ['Mon product sync', 'Q4 kickoff doc'],
+    outcome: 'Every source becomes permanent, citable context your agents can reference.',
   },
 }
 
-const ANATOMY_SCENES = ['ship_v3', 'gtm', 'latency'] as const
+const ANATOMY_SCENES = ['mobile_redesign', 'q4_roadmap', 'planning_call'] as const
 
 const TINT_MAP: Record<string, string> = {
-  anchor: '#D63A00', person: '#5A7A8F', decision: '#6B8E70',
-  risk: '#B84A2E', call: '#8F7050', doc: '#6B6B6B', org: '#5A5148',
+  anchor: '#D63A00',
+  person: '#B8673F',
+  decision: '#6B8E70',
+  risk: '#B84A2E',
+  call: '#8F7050',
+  doc: '#6B6B6B',
+  document: '#6B6B6B',
+  org: '#5A5148',
+  product: '#2E7D5B',
+  technology: '#5A7A8F',
+  concept: '#7A6B8A',
+  location: '#5A9080',
+  project: '#C97845',
+  topic: '#6B8BC9',
+  video: '#E6425C',
 }
 
 /* ------------------------------------------------------------------ */
@@ -150,277 +184,334 @@ function SentenceChip({ seg, active, dim, accent, onClick }: {
   )
 }
 
-function RelationRow({ verb, target, kind, ink, ink2, ink3, compact }: {
-  verb: string; target: string; kind: string
-  ink: string; ink2: string; ink3: string; compact: boolean
+function SectionLabel({ children, ink }: { children: React.ReactNode; ink: string }) {
+  return (
+    <div style={{
+      fontFamily: 'DM Sans, sans-serif', fontSize: 12, fontWeight: 600,
+      color: ink, marginBottom: 10,
+      textTransform: 'uppercase', letterSpacing: '0.08em',
+    }}>{children}</div>
+  )
+}
+
+function TypePill({ kindTint, icon, label }: {
+  kindTint: string; icon: string; label: string
 }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: compact ? 8 : 12,
-      padding: compact ? '6px 0' : '10px 0',
-      borderBottom: '1px dashed rgba(0,0,0,0.06)',
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: '4px 10px 4px 8px', borderRadius: 999,
+      background: `${kindTint}12`, border: `1px solid ${kindTint}30`,
+      color: kindTint, fontFamily: 'DM Sans, sans-serif',
+      fontSize: 11, fontWeight: 600,
+      textTransform: 'uppercase', letterSpacing: '0.08em',
     }}>
-      <span style={{
-        fontFamily: 'JetBrains Mono, monospace', fontSize: compact ? 10 : 11,
-        color: ink3, letterSpacing: '0.08em',
-        minWidth: compact ? 82 : 110, flexShrink: 0,
-      }}>{verb}</span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', color: ink3 }}>
-        <svg width="28" height="8" viewBox="0 0 28 8" aria-hidden="true">
-          <line x1="0" y1="4" x2="22" y2="4" stroke="currentColor" strokeWidth="1" strokeDasharray="2 2"/>
-          <path d="M20 1 L26 4 L20 7" fill="none" stroke="currentColor" strokeWidth="1"/>
-        </svg>
-      </span>
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        color: ink, fontWeight: 500, whiteSpace: 'nowrap',
-      }}>
-        <EntityIcon type={kind} size={13} color={ink2}/>
-        <span>{target}</span>
-      </span>
+      <EntityIcon type={icon} size={12} color={kindTint}/>
+      <span>{label}</span>
     </div>
   )
 }
 
-function SourceRow({ label, kind, loc, border, compact, ink, ink2, ink3 }: {
-  label: string; kind: string; loc: string
-  border: string; compact: boolean; ink: string; ink2: string; ink3: string
-}) {
+function LivePill({ ink3 }: { ink3: string }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: compact ? 8 : 12,
-      padding: compact ? '7px 10px' : '10px 14px',
-      background: 'rgba(0,0,0,0.02)', borderRadius: 6,
-      border: `1px solid ${border}`,
-    }}>
-      <span style={{ color: ink2, display: 'flex' }}>
-        <EntityIcon type={kind} size={compact ? 12 : 14}/>
-      </span>
+    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
       <span style={{
-        fontFamily: 'DM Sans, sans-serif', fontSize: compact ? 12 : 13, fontWeight: 500,
-        color: ink, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{label}</span>
-      {loc && (
-        <span style={{
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-          color: ink3, letterSpacing: '0.08em',
-        }}>{loc}</span>
-      )}
-    </div>
-  )
-}
-
-function MentionsViz({ mentions, ink, ink3, kindTint, compact }: {
-  mentions: AnatomyFacets['mentions']
-  ink: string; ink3: string; kindTint: string; compact: boolean
-}) {
-  const max = Math.max(...mentions.trend, 1)
-  return (
-    <div>
-      <div style={{
-        display: 'flex', alignItems: 'flex-end', gap: compact ? 10 : 14, marginBottom: compact ? 12 : 18,
-      }}>
-        <span style={{
-          fontFamily: 'Instrument Serif, Georgia, serif',
-          fontWeight: 400, fontSize: compact ? 44 : 64, lineHeight: 0.9, color: ink,
-        }}>{mentions.total}</span>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 6 }}>
-          <span style={{
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-            color: ink3, letterSpacing: '0.14em', textTransform: 'uppercase',
-          }}>total mentions</span>
-          <span style={{
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-            color: kindTint, letterSpacing: '0.1em',
-            padding: '3px 7px', borderRadius: 3,
-            background: `${kindTint}14`, alignSelf: 'flex-start',
-          }}>{mentions.delta}</span>
-        </div>
-      </div>
-
-      <div style={{
-        display: 'flex', alignItems: 'flex-end', gap: compact ? 4 : 6,
-        height: compact ? 48 : 64, padding: '0 2px',
-      }}>
-        {mentions.trend.map((v, i) => {
-          const h = (v / max) * 100
-          const isPeak = v === max
-          return (
-            <div key={i} style={{
-              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
-              height: '100%',
-            }}>
-              <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%' }}>
-                <div style={{
-                  width: '100%', height: `${h}%`,
-                  background: isPeak ? kindTint : `${kindTint}60`,
-                  borderRadius: '2px 2px 0 0',
-                  minHeight: v > 0 ? 2 : 0,
-                  transition: 'height 400ms',
-                }}/>
-              </div>
-              <span style={{
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
-                color: ink3, letterSpacing: '0.08em',
-              }}>W{i + 1}</span>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function AgentFacet({ agents, accent, ink, ink3, compact }: {
-  agents: AnatomyFacets['agents']
-  accent: string; ink: string; ink3: string; compact: boolean
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 8 : 12 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 4 : 6 }}>
-        {agents.tools.map((tool, i) => (
-          <div key={i} style={{
-            display: 'flex', alignItems: 'center', gap: compact ? 8 : 10,
-            padding: compact ? '6px 10px' : '8px 12px', borderRadius: 6,
-            background: 'rgba(0,0,0,0.025)',
-            fontFamily: 'JetBrains Mono, monospace', fontSize: compact ? 11 : 12.5,
-            color: ink,
-          }}>
-            <span style={{ color: accent }}>&rsaquo;</span>
-            <span>{tool}</span>
-            <span style={{ marginLeft: 'auto', color: ink3, fontSize: 10, letterSpacing: '0.1em' }}>CALL</span>
-          </div>
-        ))}
-      </div>
-      <div style={{
-        display: 'flex', gap: 10, marginTop: 4,
+        width: 6, height: 6, borderRadius: '50%',
+        background: '#22c55e', boxShadow: '0 0 6px rgba(34,197,94,0.55)',
+        animation: 'lp-pulse-dot 2.2s ease-in-out infinite',
+      }}/>
+      <span style={{
         fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-        letterSpacing: '0.14em', textTransform: 'uppercase',
-      }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: agents.citable ? ink : ink3 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: agents.citable ? '#6B8E70' : ink3 }}/>
-          citable
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: agents.writable ? ink : ink3 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: agents.writable ? '#6B8E70' : ink3 }}/>
-          writable
-        </span>
-      </div>
+        color: ink3, letterSpacing: '0.14em',
+      }}>LIVE</span>
     </div>
   )
 }
 
-function Facet({ n, label, hint, compact, ink, ink2, ink3, border, children }: {
-  n: string; label: string; hint?: string | null; compact: boolean
-  ink: string; ink2: string; ink3: string; border: string; children: React.ReactNode
-}) {
-  return (
-    <div>
-      <div style={{
-        display: 'flex', alignItems: 'baseline', gap: compact ? 8 : 12,
-        paddingBottom: compact ? 10 : 14, marginBottom: compact ? 12 : 16,
-        borderBottom: `1px solid ${border}`,
-      }}>
-        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: ink3, letterSpacing: '0.16em' }}>{n}</span>
-        <span style={{ fontFamily: 'DM Sans, sans-serif', fontSize: compact ? 15 : 18, fontWeight: 700, color: ink, letterSpacing: '-0.01em' }}>{label}</span>
-        {hint && (
-          <span style={{ fontFamily: 'Instrument Serif, Georgia, serif', fontStyle: 'italic', fontSize: 14, color: ink2, marginLeft: 'auto' }}>{hint}</span>
-        )}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function AnatomyPanel({ detail, accent, ink, ink2, ink3, border, borderStrong, compact }: {
+function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
   detail: AnatomyDetailData; accent: string; ink: string; ink2: string; ink3: string
   border: string; borderStrong: string; compact: boolean
 }) {
   const kindTint = TINT_MAP[detail.kind] || accent
 
   return (
-    <div key={detail.label} style={{ animation: 'lp-fade-up 360ms ease-out' }}>
-      {/* Entity header */}
-      <div style={{
-        display: 'flex', alignItems: 'flex-start', gap: compact ? 14 : 20,
-        paddingBottom: compact ? 18 : 24,
-        borderBottom: `1px solid ${border}`,
-        marginBottom: compact ? 20 : 28,
-      }}>
-        <div style={{
-          width: compact ? 42 : 52, height: compact ? 42 : 52, borderRadius: compact ? 8 : 10,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `${kindTint}12`, border: `1px solid ${kindTint}30`,
-          color: kindTint, flexShrink: 0,
-        }}>
-          <EntityIcon type={detail.kind} size={compact ? 22 : 26} color={kindTint}/>
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4,
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-            color: ink3, letterSpacing: '0.2em', textTransform: 'uppercase', flexWrap: 'wrap',
-          }}>
-            <span>{detail.kind}</span>
-            <span style={{ opacity: 0.5 }}>&middot;</span>
-            <span>confidence {detail.confidence.toFixed(2)}</span>
+    <div key={detail.label} style={{
+      animation: 'lp-fade-up 360ms ease-out',
+      display: 'flex', flexDirection: 'column', height: '100%',
+    }}>
+      {/* ─── ENTITY VARIANT ───────────────────────── */}
+      {detail.variant === 'entity' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <TypePill kindTint={kindTint} icon={detail.kind} label={detail.typeLabel}/>
+            <LivePill ink3={ink3}/>
           </div>
+          <h3 style={{
+            margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
+            fontSize: 26, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
+          }}>{detail.label}</h3>
+
           <div style={{
+            marginTop: 6, fontSize: 12, color: ink3,
+            fontFamily: 'DM Sans, sans-serif', letterSpacing: '0.01em',
+          }}>{detail.metaRow}</div>
+
+          {/* Confidence bar */}
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+              color: ink3, letterSpacing: '0.12em', minWidth: 78,
+            }}>CONFIDENCE</span>
+            <div style={{
+              flex: 1, height: 4, borderRadius: 2,
+              background: 'rgba(26,22,18,0.08)', overflow: 'hidden',
+            }}>
+              <div style={{
+                width: `${detail.confidence * 100}%`, height: '100%',
+                background: kindTint, borderRadius: 2,
+                animation: 'lp-bar-fill 900ms cubic-bezier(.2,.8,.2,1) both',
+                transformOrigin: 'left',
+              }}/>
+            </div>
+            <span style={{
+              fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink, fontWeight: 600,
+            }}>{Math.round(detail.confidence * 100)}%</span>
+          </div>
+
+          <div style={{ height: 1, background: border, margin: '16px 0 12px' }}/>
+
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <SectionLabel ink={ink}>Description</SectionLabel>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: ink2 }}>
+                {detail.description}
+              </p>
+            </div>
+
+            <div>
+              <SectionLabel ink={ink}>Related anchors</SectionLabel>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {detail.relatedAnchors.map((a, i) => (
+                  <span key={i} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '4px 10px', borderRadius: 999,
+                    background: `${accent}10`, border: `1px solid ${accent}30`,
+                    color: accent, fontFamily: 'DM Sans, sans-serif',
+                    fontSize: 12, fontWeight: 600,
+                  }}>
+                    <EntityIcon type="anchor" size={11} color={accent}/>
+                    {a}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <SectionLabel ink={ink}>Tags</SectionLabel>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {detail.tags.map((tag, i) => (
+                  <span key={i} style={{
+                    padding: '4px 10px', borderRadius: 999,
+                    background: 'rgba(0,0,0,0.04)', border: `1px solid ${border}`,
+                    fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink2, fontWeight: 500,
+                  }}>{tag}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ─── ANCHOR VARIANT ───────────────────────── */}
+      {detail.variant === 'anchor' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <TypePill kindTint={kindTint} icon="anchor" label="Anchor"/>
+            <LivePill ink3={ink3}/>
+          </div>
+          <h3 style={{
+            margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
+            fontSize: 26, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
+          }}>{detail.label}</h3>
+
+          <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {detail.badges.map((b, i) => {
+              const tone = b.tone === 'confirmed' ? '#6B8E70' : TINT_MAP.technology!
+              return (
+                <span key={i} style={{
+                  padding: '2px 9px', borderRadius: 4,
+                  background: `${tone}12`, border: `1px solid ${tone}40`,
+                  color: tone, fontFamily: 'DM Sans, sans-serif',
+                  fontSize: 11, fontWeight: 600,
+                }}>{b.label}</span>
+              )
+            })}
+          </div>
+
+          <div style={{ height: 1, background: border, margin: '16px 0 12px' }}/>
+
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <SectionLabel ink={ink}>Signal scores</SectionLabel>
+              <p style={{
+                margin: '0 0 10px', fontSize: 12.5,
+                fontFamily: 'Instrument Serif, Georgia, serif', fontStyle: 'italic',
+                color: ink2,
+              }}>{detail.signalBanner}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {detail.signals.map((s, i) => {
+                  const color = s.value >= 0.66 ? '#6B8E70' : s.value >= 0.33 ? '#C97845' : '#B84A2E'
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
+                        color: ink3, letterSpacing: '0.1em', textTransform: 'uppercase',
+                        minWidth: 70,
+                      }}>{s.label}</span>
+                      <div style={{
+                        flex: 1, height: 3, borderRadius: 2,
+                        background: 'rgba(26,22,18,0.08)', overflow: 'hidden',
+                      }}>
+                        <div style={{
+                          width: `${s.value * 100}%`, height: '100%', background: color,
+                          animation: `lp-bar-fill ${700 + i * 120}ms cubic-bezier(.2,.8,.2,1) both`,
+                          transformOrigin: 'left',
+                        }}/>
+                      </div>
+                      <span style={{
+                        fontFamily: 'DM Sans, sans-serif', fontSize: 11,
+                        color: ink, fontWeight: 600, minWidth: 32, textAlign: 'right',
+                      }}>{s.value.toFixed(2)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div>
+              <SectionLabel ink={ink}>Top connected nodes</SectionLabel>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {detail.connected.map((n, i) => {
+                  const t = TINT_MAP[n.kind] || accent
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '4px 2px',
+                    }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: t }}/>
+                      <span style={{
+                        flex: 1, fontFamily: 'DM Sans, sans-serif', fontSize: 13,
+                        color: ink, fontWeight: 500,
+                      }}>{n.label}</span>
+                      <span style={{
+                        padding: '2px 8px', borderRadius: 4,
+                        background: `${t}14`, border: `1px solid ${t}30`,
+                        color: t, fontFamily: 'DM Sans, sans-serif',
+                        fontSize: 10.5, fontWeight: 600,
+                      }}>{n.kind}</span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div style={{
+                marginTop: 8,
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                color: ink3, letterSpacing: '0.1em', textTransform: 'uppercase',
+              }}>{detail.crossAnchor}</div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ─── SOURCE VARIANT ───────────────────────── */}
+      {detail.variant === 'source' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <TypePill kindTint={kindTint} icon={detail.kind} label={detail.platform}/>
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+              color: ink3, letterSpacing: '0.08em',
+            }}>{detail.timeAgo}</span>
+            <LivePill ink3={ink3}/>
+          </div>
+          <h3 style={{
+            margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
+            fontSize: 22, lineHeight: 1.2, letterSpacing: '-0.015em', color: ink,
+          }}>{detail.label}</h3>
+
+          <div style={{
+            marginTop: 6, fontSize: 12, color: ink3,
             fontFamily: 'DM Sans, sans-serif',
-            fontSize: compact ? 22 : 26, fontWeight: 700, color: ink,
-            letterSpacing: '-0.015em', lineHeight: 1.15,
-          }}>{detail.label}</div>
-          <p style={{
-            margin: compact ? '8px 0 0' : '12px 0 0',
-            fontSize: compact ? 13.5 : 15, lineHeight: 1.5, color: ink2, maxWidth: 680,
-          }}>{detail.summary}</p>
-        </div>
-        {!compact && (
-          <button style={{
-            padding: '8px 16px', borderRadius: 999,
-            background: 'transparent', border: `1px solid ${borderStrong}`,
-            color: ink, cursor: 'pointer',
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-            letterSpacing: '0.1em', textTransform: 'uppercase',
-            display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
-          }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent }}/>
-            Open in graph
-          </button>
-        )}
-      </div>
+          }}>{detail.meta}</div>
 
-      {/* Four facets */}
-      <div className="lp-anatomy-facets" style={{
-        display: 'grid',
-        gridTemplateColumns: compact ? '1fr 1fr' : '1.2fr 1fr',
-        gridTemplateRows: 'auto auto',
-        gap: compact ? '20px 24px' : '32px 40px',
-      }}>
-        <Facet n="01" label="Relations" hint={compact ? null : 'what this connects to'} compact={compact} ink={ink} ink2={ink2} ink3={ink3} border={border}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 2 : 6 }}>
-            {detail.facets.relations.map((r, i) => (
-              <RelationRow key={i} verb={r.verb} target={r.target} kind={r.kind} ink={ink} ink2={ink2} ink3={ink3} compact={compact}/>
-            ))}
+          <div style={{ height: 1, background: border, margin: '14px 0 12px' }}/>
+
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <SectionLabel ink={ink}>Summary</SectionLabel>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: ink2 }}>
+                {detail.summary}
+              </p>
+            </div>
+
+            <div>
+              <SectionLabel ink={ink}>Top entities</SectionLabel>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {detail.topEntities.map((e, i) => {
+                  const t = TINT_MAP[e.kind] || accent
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px',
+                    }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: t }}/>
+                      <span style={{
+                        flex: 1, fontFamily: 'DM Sans, sans-serif', fontSize: 13,
+                        color: ink, fontWeight: 500,
+                      }}>{e.label}</span>
+                      <span style={{
+                        padding: '2px 8px', borderRadius: 4,
+                        background: `${t}14`, border: `1px solid ${t}30`,
+                        color: t, fontFamily: 'DM Sans, sans-serif',
+                        fontSize: 10.5, fontWeight: 600,
+                      }}>{e.kind}</span>
+                      <span style={{
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5,
+                        color: ink3, minWidth: 32, textAlign: 'right',
+                      }}>{Math.round(e.confidence * 100)}%</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div>
+              <SectionLabel ink={ink}>Related sources</SectionLabel>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {detail.relatedSources.map((s, i) => (
+                  <span key={i} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '4px 10px', borderRadius: 6,
+                    background: 'rgba(0,0,0,0.03)', border: `1px solid ${border}`,
+                    fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink, fontWeight: 500,
+                  }}>
+                    <EntityIcon type="doc" size={11} color={ink3}/>
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
           </div>
-        </Facet>
+        </>
+      )}
 
-        <Facet n="03" label="Mentions" hint={compact ? null : 'how loud, across 8 weeks'} compact={compact} ink={ink} ink2={ink2} ink3={ink3} border={border}>
-          <MentionsViz mentions={detail.facets.mentions} ink={ink} ink3={ink3} kindTint={kindTint} compact={compact}/>
-        </Facet>
+      <div style={{ height: 1, background: border, margin: '16px 0 12px' }}/>
 
-        <Facet n="02" label="Sources" hint={compact ? null : 'where it came from'} compact={compact} ink={ink} ink2={ink2} ink3={ink3} border={border}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 5 : 8 }}>
-            {detail.facets.sources.map((s, i) => (
-              <SourceRow key={i} label={s.label} kind={s.kind} loc={s.loc} border={border} compact={compact} ink={ink} ink2={ink2} ink3={ink3}/>
-            ))}
-          </div>
-        </Facet>
-
-        <Facet n="04" label="For agents" hint={compact ? null : 'what can be called on this entity'} compact={compact} ink={ink} ink2={ink2} ink3={ink3} border={border}>
-          <AgentFacet agents={detail.facets.agents} accent={accent} ink={ink} ink3={ink3} compact={compact}/>
-        </Facet>
-      </div>
+      <p style={{
+        margin: 0,
+        fontFamily: 'Instrument Serif, Georgia, serif',
+        fontStyle: 'italic', fontSize: 14, lineHeight: 1.5,
+        color: ink2,
+      }}>{detail.outcome}</p>
     </div>
   )
 }
@@ -485,45 +576,45 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
       <div className="lp-anatomy-sticky" style={{
         position: 'sticky', top: 0,
         height: '100vh',
-        padding: 'clamp(48px, 6vw, 88px) clamp(24px, 6vw, 80px) clamp(40px, 5vw, 72px)',
+        padding: '96px clamp(24px, 5vw, 64px) 56px',
         display: 'flex', flexDirection: 'column',
         boxSizing: 'border-box',
       }}>
         <div style={{ maxWidth: 1400, width: '100%', margin: '0 auto', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {/* Eyebrow */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 14,
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-            color: ink3, letterSpacing: '0.28em', marginBottom: 18, flexShrink: 0,
-          }}>
-            <span style={{ width: 24, height: 1, background: borderStrong }}/>
-            <span>&sect;03 &middot; ANATOMY OF AN INSIGHT</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18, flexShrink: 0 }}>
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+              color: accent, letterSpacing: '0.16em', textTransform: 'uppercase',
+            }}>&mdash; Anatomy &middot; &sect;03</span>
             <span style={{ flex: 1, height: 1, background: border }}/>
-            <span className="lp-hide-mobile">{String(activeIdx + 1).padStart(2, '0')} / {String(ANATOMY_SCENES.length).padStart(2, '0')}</span>
+            <span className="lp-hide-mobile" style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+              color: ink3, letterSpacing: '0.14em',
+            }}>FIG. 03 / INSIGHT &middot; {String(activeIdx + 1).padStart(2, '0')} of {String(ANATOMY_SCENES.length).padStart(2, '0')}</span>
           </div>
+
+          {/* Heading */}
+          <h2 style={{
+            fontFamily: `${displayFont}, sans-serif`, fontWeight: 800,
+            fontSize: 'clamp(32px, 3.6vw, 56px)', lineHeight: 1.04,
+            letterSpacing: '-0.03em', margin: 0, maxWidth: 880, color: ink,
+          }}>
+            Every answer is an aggregate of sources, people, and decisions.{' '}
+            <em style={{
+              fontFamily: 'Instrument Serif, Georgia, serif',
+              fontStyle: 'italic', fontWeight: 400, color: accent,
+            }}>Traced back to the moment it entered the graph.</em>
+          </h2>
 
           {/* Two columns */}
           <div className="lp-anatomy-grid" style={{
-            flex: 1, minHeight: 0,
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)',
-            gap: 'clamp(32px, 4vw, 64px)',
+            marginTop: 28, flex: 1, minHeight: 0,
+            display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 48,
             alignItems: 'stretch',
           }}>
             {/* LEFT */}
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: 0 }}>
-              <h2 style={{
-                fontFamily: `${displayFont}, sans-serif`, fontWeight: 800,
-                fontSize: 'clamp(30px, 3.2vw, 48px)', lineHeight: 1.15,
-                letterSpacing: '-0.03em', margin: '0 0 36px', color: ink,
-              }}>
-                Every answer is an{' '}
-                <em style={{
-                  fontFamily: 'Instrument Serif, Georgia, serif',
-                  fontStyle: 'italic', fontWeight: 400, color: accent,
-                }}>aggregate.</em>
-              </h2>
-
               <p style={{
                 margin: '0 0 28px', fontSize: 14.5, lineHeight: 1.6,
                 color: ink2, maxWidth: 520,
@@ -620,20 +711,30 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
             </div>
 
             {/* RIGHT: the panel */}
-            <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <div style={{
+              minHeight: 0, display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+            }}>
               <div style={{
-                border: `1px solid ${border}`, borderRadius: 12,
-                background: card,
-                padding: 'clamp(20px, 1.8vw, 28px) clamp(22px, 2vw, 32px)',
-                boxShadow: dark ? 'none' : '0 24px 60px -28px rgba(26,22,18,0.14)',
+                width: '100%', height: '100%',
+                maxHeight: 560,
+                display: 'flex', flexDirection: 'column',
               }}>
-                <AnatomyPanel
-                  key={detail.label}
-                  detail={detail}
-                  accent={accent} ink={ink} ink2={ink2} ink3={ink3}
-                  border={border} borderStrong={borderStrong}
-                  compact
-                />
+                <div style={{
+                  flex: 1, minHeight: 0, overflow: 'hidden',
+                  border: `1px solid ${border}`, borderRadius: 12,
+                  background: card,
+                  padding: 'clamp(20px, 1.8vw, 28px) clamp(22px, 2vw, 32px)',
+                  boxShadow: dark ? 'none' : '0 24px 60px -28px rgba(26,22,18,0.14)',
+                }}>
+                  <AnatomyPanel
+                    key={detail.label}
+                    detail={detail}
+                    accent={accent} ink={ink} ink2={ink2} ink3={ink3}
+                    border={border} borderStrong={borderStrong}
+                    compact
+                  />
+                </div>
               </div>
             </div>
           </div>
