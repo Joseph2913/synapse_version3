@@ -254,11 +254,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = getSupabase();
 
-  // Fetch sources needing summaries
+  // Cap retries so we don't re-burn Gemini quota on genuinely unsummarizable
+  // content. Tracked in metadata.summary_retry_count to avoid a schema change.
+  const MAX_SUMMARY_RETRIES = 3;
+
+  // Fetch sources needing summaries: either never summarized (summary IS NULL)
+  // or stuck on a truncated stub from a prior failed Gemini call.
   let query = supabase
     .from('knowledge_sources')
-    .select('id, user_id, title, content, source_type, metadata')
-    .is('summary', null)
+    .select('id, user_id, title, content, source_type, summary_source, metadata')
+    .or('summary.is.null,summary_source.eq.truncated')
     .order('created_at', { ascending: false })
     .limit(batchSize);
 
@@ -270,7 +275,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     query = query.eq('source_type', sourceTypeFilter);
   }
 
-  const { data: sources, error: fetchError } = await query;
+  const { data: rawSources, error: fetchError } = await query;
 
   if (fetchError) {
     return res.status(500).json({
@@ -279,16 +284,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  if (!sources || sources.length === 0) {
-    // Count remaining
-    let countQuery = supabase
-      .from('knowledge_sources')
-      .select('id', { count: 'exact', head: true })
-      .is('summary', null);
-    if (userId) countQuery = countQuery.eq('user_id', userId);
-    const { count } = await countQuery;
+  // Filter out truncated rows that have already exhausted their retry budget.
+  const sources = (rawSources ?? []).filter((s: Record<string, unknown>) => {
+    if (s.summary_source !== 'truncated') return true;
+    const meta = (s.metadata as Record<string, unknown> | null) ?? {};
+    const retries = Number(meta['summary_retry_count'] ?? 0);
+    return retries < MAX_SUMMARY_RETRIES;
+  });
 
-    return res.status(200).json({ processed: 0, remaining: count || 0, errors: [] });
+  if (!sources || sources.length === 0) {
+    return res.status(200).json({ processed: 0, remaining: 0, errors: [] });
   }
 
   // Process batch
@@ -297,18 +302,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   for (const source of sources) {
     try {
+      const priorMetadata = (source.metadata as Record<string, unknown> | null) ?? {};
+      const priorRetries = Number(priorMetadata['summary_retry_count'] ?? 0);
+      const isRetry = source.summary_source === 'truncated';
+
       const result = await resolveSummaryForSource(
         source.source_type,
         source.content,
-        source.metadata as Record<string, unknown> | null
+        priorMetadata
       );
 
       if (result) {
+        // If this is a retry AND we fell back to truncated again, bump the
+        // retry counter so the source eventually ages out of the backfill
+        // queue instead of spinning every cron tick.
+        const nextMetadata =
+          isRetry && result.source === 'truncated'
+            ? { ...priorMetadata, summary_retry_count: priorRetries + 1 }
+            : priorMetadata;
+
         const { error: updateError } = await supabase
           .from('knowledge_sources')
           .update({
             summary: result.summary,
             summary_source: result.source,
+            metadata: nextMetadata,
           })
           .eq('id', source.id);
 
@@ -333,11 +351,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // Count remaining
+  // Count remaining (null or truncated-under-cap). Use a server-side count for
+  // nulls and keep it simple — truncated-under-cap count is only advisory.
   let remainingQuery = supabase
     .from('knowledge_sources')
     .select('id', { count: 'exact', head: true })
-    .is('summary', null);
+    .or('summary.is.null,summary_source.eq.truncated');
   if (userId) remainingQuery = remainingQuery.eq('user_id', userId);
   const { count: remaining } = await remainingQuery;
 
