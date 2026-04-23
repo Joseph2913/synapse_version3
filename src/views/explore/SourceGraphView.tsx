@@ -549,7 +549,12 @@ export function SourceGraphView({
         >
           <g transform={`translate(${camera.panX},${camera.panY}) scale(${camera.zoom})`}>
 
-            {/* 1. Source-to-source edges — simple thin lines */}
+            {/* 1. Source-to-source edges — solid for direct entity connections,
+                 dashed for anchor-mediated connections (one endpoint is an
+                 anchor from a different source). Dashed edges match the
+                 right-panel "X shared" count so the visual never hides real
+                 connections, but they're visually distinct so the graph
+                 stays readable. */}
             {showEdges && filteredEdges.map(edge => {
               const fromPos = livePositions.get(edge.fromSourceId)
               const toPos = livePositions.get(edge.toSourceId)
@@ -561,13 +566,18 @@ export function SourceGraphView({
               const isActive = isHighlighted || isSelected
               const hasActiveSource = !!activeSourceId
 
+              const directCount = edge.connections.find(c => c.type === 'entity')?.count ?? 0
+              const anchorCount = edge.connections.find(c => c.type === 'anchor')?.count ?? 0
+              const isAnchorOnly = directCount === 0 && anchorCount > 0
+
               return (
                 <line
                   key={edgeKey}
                   x1={fromPos.x} y1={fromPos.y} x2={toPos.x} y2={toPos.y}
                   stroke={isSelected ? 'var(--color-accent-500)' : 'rgba(100,116,139,1)'}
                   strokeWidth={isActive ? 1.2 : 0.5}
-                  strokeOpacity={isActive ? 0.5 : hasActiveSource ? 0.03 : 0.08}
+                  strokeOpacity={isActive ? (isAnchorOnly ? 0.35 : 0.5) : hasActiveSource ? 0.03 : 0.08}
+                  strokeDasharray={isAnchorOnly ? '3 3' : undefined}
                   style={{ transition: 'stroke-opacity 0.15s ease' }}
                 />
               )
