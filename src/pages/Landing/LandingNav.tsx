@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { FlameMark } from './shared/FlameMark'
 
 interface LandingNavProps {
@@ -10,16 +9,7 @@ interface LandingNavProps {
   onSignIn: () => void
 }
 
-const NAV_LINKS = [
-  { label: 'Product', href: '#product' },
-  { label: 'Method', href: '#method' },
-  { label: 'For agents', href: '#agents' },
-  { label: 'Changelog', href: '#changelog' },
-]
-
 export function LandingNav({ ink, ink2, border, accent, dark, onSignIn }: LandingNavProps) {
-  const [hoveredLink, setHoveredLink] = useState<string | null>(null)
-
   return (
     <nav className="lp-nav" style={{
       position: 'sticky', top: 0, zIndex: 50,
@@ -48,39 +38,8 @@ export function LandingNav({ ink, ink2, border, accent, dark, onSignIn }: Landin
         }}>beta</div>
       </div>
 
-      {/* Center: nav links with pill hover */}
-      <div className="lp-nav-links" style={{
-        flex: 1,
-        display: 'flex', justifyContent: 'center', gap: 4,
-      }}>
-        {NAV_LINKS.map(link => {
-          const isHovered = hoveredLink === link.label
-          return (
-            <a
-              key={link.label}
-              href={link.href}
-              onMouseEnter={() => setHoveredLink(link.label)}
-              onMouseLeave={() => setHoveredLink(null)}
-              style={{
-                padding: '6px 14px',
-                borderRadius: 20,
-                fontSize: 13, fontWeight: 500,
-                color: isHovered ? ink : ink2,
-                background: isHovered
-                  ? (dark ? 'rgba(240,237,230,0.06)' : 'rgba(26,22,18,0.04)')
-                  : 'transparent',
-                textDecoration: 'none',
-                fontFamily: 'DM Sans, sans-serif',
-                transition: 'all 180ms',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {link.label}
-            </a>
-          )
-        })}
-      </div>
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
 
       {/* Right: sign in + CTA */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
