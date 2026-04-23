@@ -92,19 +92,20 @@
   /* Hide the three-scene selector — only one example shown on mobile */
   .lp-anatomy-scene-dots { display: none !important; }
 
-  /* Facets: stack to one column, then hide Mentions (2nd) and For-agents (4th).
-     Order in JSX: Relations, Mentions, Sources, Agents. */
-  .lp-anatomy-facets {
-    grid-template-columns: 1fr !important;
-    gap: 20px !important;
+  /* Let the card size to its content on mobile instead of capping at 560px */
+  .lp-anatomy-card-wrap {
+    max-height: none !important;
+    height: auto !important;
   }
-  .lp-anatomy-facets > *:nth-child(2),
-  .lp-anatomy-facets > *:nth-child(4) {
-    display: none !important;
+  .lp-anatomy-card {
+    overflow: visible !important;
   }
 
-  /* Slim the entity header inside the detail card */
-  .lp-anatomy-grid .lp-anatomy-grid + * { /* no-op guard */ }
+  /* Flip every 2-column grid inside the card to single column on mobile */
+  .lp-anatomy-inner-grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
 
   /* ─────────────── AGENTS ─────────────── */
   .lp-agents { min-height: auto !important; margin-top: 0 !important; }

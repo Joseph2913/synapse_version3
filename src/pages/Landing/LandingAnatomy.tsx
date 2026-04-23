@@ -25,7 +25,7 @@ const ANATOMY_SENTENCE: SentenceSegment[] = [
 ]
 
 type ConnectedNode = { label: string; kind: string }
-type Signal = { label: string; value: number }
+type Signal = { label: string; value: number; description: string }
 type TopEntity = { label: string; kind: string; confidence: number }
 
 type EntityDetail = {
@@ -38,6 +38,7 @@ type EntityDetail = {
   description: string
   relatedAnchors: string[]
   tags: string[]
+  crossConnections: ConnectedNode[]
   outcome: string
 }
 
@@ -46,7 +47,8 @@ type AnchorDetail = {
   kind: 'anchor'
   label: string
   badges: Array<{ label: string; tone: 'neutral' | 'confirmed' }>
-  signalBanner: string
+  description: string
+  confidence: number
   signals: Signal[]
   connected: ConnectedNode[]
   crossAnchor: string
@@ -75,10 +77,15 @@ const ANATOMY_DETAIL: Record<string, AnatomyDetailData> = {
     typeLabel: 'Project',
     label: 'Mobile redesign',
     confidence: 0.94,
-    metaRow: 'Owned by Priya N. \u00b7 In progress \u00b7 Seen 2w ago',
+    metaRow: 'Priya N. \u00b7 In progress \u00b7 2w ago',
     description: 'A full overhaul of the mobile app. Focused on a faster checkout, simpler navigation, and a cleaner visual system across iOS and Android.',
     relatedAnchors: ['Q4 roadmap', 'Mobile platform'],
     tags: ['ux', 'mobile', 'q4', 'priority'],
+    crossConnections: [
+      { label: 'Pricing update', kind: 'project' },
+      { label: 'Design system v2', kind: 'project' },
+      { label: 'Activation funnel', kind: 'topic' },
+    ],
     outcome: 'Your agents can cite this, trace its dependencies, and surface related work across the graph.',
   },
   q4_roadmap: {
@@ -89,12 +96,13 @@ const ANATOMY_DETAIL: Record<string, AnatomyDetailData> = {
       { label: 'Initiative', tone: 'neutral' },
       { label: 'Active', tone: 'confirmed' },
     ],
-    signalBanner: 'A central node shaping what matters this quarter.',
+    description: 'The Q4 product push bringing mobile, pricing, and activation improvements under one plan. A gravitational center that ties projects, people, and risks together.',
+    confidence: 0.99,
     signals: [
-      { label: 'Centrality', value: 0.72 },
-      { label: 'Diversity',  value: 0.91 },
-      { label: 'Velocity',   value: 0.68 },
-      { label: 'Richness',   value: 0.85 },
+      { label: 'Centrality', value: 0.72, description: 'How structurally important this anchor is in your graph.' },
+      { label: 'Diversity',  value: 0.91, description: 'How many different source types reference this anchor.' },
+      { label: 'Velocity',   value: 0.68, description: 'How recently active it is and whether momentum is building.' },
+      { label: 'Richness',   value: 0.85, description: 'How many different relationship types it participates in.' },
     ],
     connected: [
       { label: 'Mobile redesign', kind: 'project' },
@@ -117,8 +125,9 @@ const ANATOMY_DETAIL: Record<string, AnatomyDetailData> = {
       { label: 'Mobile redesign', kind: 'project', confidence: 0.94 },
       { label: 'Q4 roadmap', kind: 'anchor', confidence: 0.99 },
       { label: 'Churn signal', kind: 'risk', confidence: 0.82 },
+      { label: 'Priya N.', kind: 'person', confidence: 0.97 },
     ],
-    relatedSources: ['Mon product sync', 'Q4 kickoff doc'],
+    relatedSources: ['Mon product sync', 'Q4 kickoff doc', 'Q3 retro doc', 'Oct team sync'],
     outcome: 'Every source becomes permanent, citable context your agents can reference.',
   },
 }
@@ -187,8 +196,8 @@ function SentenceChip({ seg, active, dim, accent, onClick }: {
 function SectionLabel({ children, ink }: { children: React.ReactNode; ink: string }) {
   return (
     <div style={{
-      fontFamily: 'DM Sans, sans-serif', fontSize: 12, fontWeight: 600,
-      color: ink, marginBottom: 10,
+      fontFamily: 'DM Sans, sans-serif', fontSize: 11, fontWeight: 600,
+      color: ink, marginBottom: 6,
       textTransform: 'uppercase', letterSpacing: '0.08em',
     }}>{children}</div>
   )
@@ -242,25 +251,27 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
       {/* ─── ENTITY VARIANT ───────────────────────── */}
       {detail.variant === 'entity' && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          {/* Compact header row: pill + meta + LIVE (one row) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <TypePill kindTint={kindTint} icon={detail.kind} label={detail.typeLabel}/>
+            <span style={{
+              flex: 1, minWidth: 0,
+              fontSize: 11.5, color: ink3, fontFamily: 'DM Sans, sans-serif',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{detail.metaRow}</span>
             <LivePill ink3={ink3}/>
           </div>
+
           <h3 style={{
-            margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
-            fontSize: 26, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
+            margin: '8px 0 0', fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
+            fontSize: 24, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
           }}>{detail.label}</h3>
 
-          <div style={{
-            marginTop: 6, fontSize: 12, color: ink3,
-            fontFamily: 'DM Sans, sans-serif', letterSpacing: '0.01em',
-          }}>{detail.metaRow}</div>
-
           {/* Confidence bar */}
-          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{
-              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-              color: ink3, letterSpacing: '0.12em', minWidth: 78,
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
+              color: ink3, letterSpacing: '0.12em', minWidth: 74,
             }}>CONFIDENCE</span>
             <div style={{
               flex: 1, height: 4, borderRadius: 2,
@@ -274,48 +285,75 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
               }}/>
             </div>
             <span style={{
-              fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink, fontWeight: 600,
+              fontFamily: 'DM Sans, sans-serif', fontSize: 11.5, color: ink, fontWeight: 600,
             }}>{Math.round(detail.confidence * 100)}%</span>
           </div>
 
-          <div style={{ height: 1, background: border, margin: '16px 0 12px' }}/>
+          <div style={{ height: 1, background: border, margin: '12px 0 10px' }}/>
 
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div>
               <SectionLabel ink={ink}>Description</SectionLabel>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: ink2 }}>
+              <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: ink2 }}>
                 {detail.description}
               </p>
             </div>
 
-            <div>
-              <SectionLabel ink={ink}>Related anchors</SectionLabel>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {detail.relatedAnchors.map((a, i) => (
-                  <span key={i} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '4px 10px', borderRadius: 999,
-                    background: `${accent}10`, border: `1px solid ${accent}30`,
-                    color: accent, fontFamily: 'DM Sans, sans-serif',
-                    fontSize: 12, fontWeight: 600,
-                  }}>
-                    <EntityIcon type="anchor" size={11} color={accent}/>
-                    {a}
-                  </span>
-                ))}
+            <div className="lp-anatomy-inner-grid" style={{
+              display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+              gap: 16,
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <SectionLabel ink={ink}>Related anchors</SectionLabel>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {detail.relatedAnchors.map((a, i) => (
+                    <span key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '4px 10px', borderRadius: 999,
+                      background: `${accent}10`, border: `1px solid ${accent}30`,
+                      color: accent, fontFamily: 'DM Sans, sans-serif',
+                      fontSize: 12, fontWeight: 600,
+                    }}>
+                      <EntityIcon type="anchor" size={11} color={accent}/>
+                      {a}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <SectionLabel ink={ink}>Tags</SectionLabel>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {detail.tags.map((tag, i) => (
+                    <span key={i} style={{
+                      padding: '4px 10px', borderRadius: 999,
+                      background: 'rgba(0,0,0,0.04)', border: `1px solid ${border}`,
+                      fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink2, fontWeight: 500,
+                    }}>{tag}</span>
+                  ))}
+                </div>
               </div>
             </div>
 
+            {/* Cross connections */}
             <div>
-              <SectionLabel ink={ink}>Tags</SectionLabel>
+              <SectionLabel ink={ink}>Cross connections</SectionLabel>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {detail.tags.map((tag, i) => (
-                  <span key={i} style={{
-                    padding: '4px 10px', borderRadius: 999,
-                    background: 'rgba(0,0,0,0.04)', border: `1px solid ${border}`,
-                    fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink2, fontWeight: 500,
-                  }}>{tag}</span>
-                ))}
+                {detail.crossConnections.map((c, i) => {
+                  const t = TINT_MAP[c.kind] || accent
+                  return (
+                    <span key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '4px 10px', borderRadius: 999,
+                      background: `${t}10`, border: `1px solid ${t}30`,
+                      color: t, fontFamily: 'DM Sans, sans-serif',
+                      fontSize: 12, fontWeight: 600,
+                    }}>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: t }}/>
+                      {c.label}
+                    </span>
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -325,16 +363,18 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
       {/* ─── ANCHOR VARIANT ───────────────────────── */}
       {detail.variant === 'anchor' && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          {/* Compact header row: pill on left, LIVE on right */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <TypePill kindTint={kindTint} icon="anchor" label="Anchor"/>
             <LivePill ink3={ink3}/>
           </div>
-          <h3 style={{
-            margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
-            fontSize: 26, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
-          }}>{detail.label}</h3>
 
-          <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {/* Name + badges inline */}
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <h3 style={{
+              margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
+              fontSize: 24, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
+            }}>{detail.label}</h3>
             {detail.badges.map((b, i) => {
               const tone = b.tone === 'confirmed' ? '#6B8E70' : TINT_MAP.technology!
               return (
@@ -348,28 +388,62 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
             })}
           </div>
 
-          <div style={{ height: 1, background: border, margin: '16px 0 12px' }}/>
+          {/* Description */}
+          <p style={{ margin: '10px 0 0', fontSize: 12.5, lineHeight: 1.5, color: ink2 }}>
+            {detail.description}
+          </p>
 
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
+          {/* Confidence */}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
+              color: ink3, letterSpacing: '0.12em', minWidth: 74,
+            }}>CONFIDENCE</span>
+            <div style={{
+              flex: 1, height: 4, borderRadius: 2,
+              background: 'rgba(26,22,18,0.08)', overflow: 'hidden',
+            }}>
+              <div style={{
+                width: `${detail.confidence * 100}%`, height: '100%',
+                background: kindTint, borderRadius: 2,
+                animation: 'lp-bar-fill 900ms cubic-bezier(.2,.8,.2,1) both',
+                transformOrigin: 'left',
+              }}/>
+            </div>
+            <span style={{
+              fontFamily: 'DM Sans, sans-serif', fontSize: 11.5, color: ink, fontWeight: 600,
+            }}>{Math.round(detail.confidence * 100)}%</span>
+          </div>
+
+          <div style={{ height: 1, background: border, margin: '12px 0 10px' }}/>
+
+          <div className="lp-anatomy-inner-grid" style={{
+            flex: 1, minHeight: 0, overflow: 'hidden',
+            display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 20,
+          }}>
+            {/* LEFT: Signal scores */}
+            <div style={{ minWidth: 0 }}>
               <SectionLabel ink={ink}>Signal scores</SectionLabel>
-              <p style={{
-                margin: '0 0 10px', fontSize: 12.5,
-                fontFamily: 'Instrument Serif, Georgia, serif', fontStyle: 'italic',
-                color: ink2,
-              }}>{detail.signalBanner}</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {detail.signals.map((s, i) => {
                   const color = s.value >= 0.66 ? '#6B8E70' : s.value >= 0.33 ? '#C97845' : '#B84A2E'
                   return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{
-                        fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
-                        color: ink3, letterSpacing: '0.1em', textTransform: 'uppercase',
-                        minWidth: 70,
-                      }}>{s.label}</span>
+                    <div key={i} title={s.description} style={{ cursor: 'help' }}>
                       <div style={{
-                        flex: 1, height: 3, borderRadius: 2,
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        marginBottom: 2,
+                      }}>
+                        <span style={{
+                          fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
+                          color: ink2, letterSpacing: '0.1em', textTransform: 'uppercase',
+                        }}>{s.label}</span>
+                        <span style={{
+                          fontFamily: 'DM Sans, sans-serif', fontSize: 10.5,
+                          color: ink, fontWeight: 600,
+                        }}>{s.value.toFixed(2)}</span>
+                      </div>
+                      <div style={{
+                        height: 3, borderRadius: 2,
                         background: 'rgba(26,22,18,0.08)', overflow: 'hidden',
                       }}>
                         <div style={{
@@ -378,44 +452,43 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
                           transformOrigin: 'left',
                         }}/>
                       </div>
-                      <span style={{
-                        fontFamily: 'DM Sans, sans-serif', fontSize: 11,
-                        color: ink, fontWeight: 600, minWidth: 32, textAlign: 'right',
-                      }}>{s.value.toFixed(2)}</span>
                     </div>
                   )
                 })}
               </div>
             </div>
 
-            <div>
+            {/* RIGHT: Top connected nodes */}
+            <div style={{ minWidth: 0 }}>
               <SectionLabel ink={ink}>Top connected nodes</SectionLabel>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {detail.connected.map((n, i) => {
                   const t = TINT_MAP[n.kind] || accent
                   return (
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '4px 2px',
+                      height: 26, padding: '0 2px', minWidth: 0,
                     }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: t }}/>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: t, flexShrink: 0 }}/>
                       <span style={{
-                        flex: 1, fontFamily: 'DM Sans, sans-serif', fontSize: 13,
+                        flex: 1, minWidth: 0,
+                        fontFamily: 'DM Sans, sans-serif', fontSize: 12,
                         color: ink, fontWeight: 500,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>{n.label}</span>
                       <span style={{
-                        padding: '2px 8px', borderRadius: 4,
+                        padding: '1px 6px', borderRadius: 4,
                         background: `${t}14`, border: `1px solid ${t}30`,
                         color: t, fontFamily: 'DM Sans, sans-serif',
-                        fontSize: 10.5, fontWeight: 600,
+                        fontSize: 9.5, fontWeight: 600, flexShrink: 0,
                       }}>{n.kind}</span>
                     </div>
                   )
                 })}
               </div>
               <div style={{
-                marginTop: 8,
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                marginTop: 6,
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
                 color: ink3, letterSpacing: '0.1em', textTransform: 'uppercase',
               }}>{detail.crossAnchor}</div>
             </div>
@@ -426,91 +499,103 @@ function AnatomyPanel({ detail, accent, ink, ink2, ink3, border }: {
       {/* ─── SOURCE VARIANT ───────────────────────── */}
       {detail.variant === 'source' && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          {/* Compact header row: pill + meta + LIVE */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <TypePill kindTint={kindTint} icon={detail.kind} label={detail.platform}/>
             <span style={{
-              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-              color: ink3, letterSpacing: '0.08em',
-            }}>{detail.timeAgo}</span>
+              flex: 1, minWidth: 0,
+              fontFamily: 'DM Sans, sans-serif', fontSize: 11.5,
+              color: ink3,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{detail.timeAgo} · {detail.meta}</span>
             <LivePill ink3={ink3}/>
           </div>
+
           <h3 style={{
-            margin: 0, fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
-            fontSize: 22, lineHeight: 1.2, letterSpacing: '-0.015em', color: ink,
+            margin: '8px 0 0', fontFamily: 'DM Sans, sans-serif', fontWeight: 700,
+            fontSize: 22, lineHeight: 1.15, letterSpacing: '-0.015em', color: ink,
           }}>{detail.label}</h3>
 
-          <div style={{
-            marginTop: 6, fontSize: 12, color: ink3,
-            fontFamily: 'DM Sans, sans-serif',
-          }}>{detail.meta}</div>
+          <div style={{ height: 1, background: border, margin: '12px 0 10px' }}/>
 
-          <div style={{ height: 1, background: border, margin: '14px 0 12px' }}/>
-
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div>
               <SectionLabel ink={ink}>Summary</SectionLabel>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: ink2 }}>
+              <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: ink2 }}>
                 {detail.summary}
               </p>
             </div>
 
-            <div>
-              <SectionLabel ink={ink}>Top entities</SectionLabel>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {detail.topEntities.map((e, i) => {
-                  const t = TINT_MAP[e.kind] || accent
-                  return (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px',
-                    }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: t }}/>
-                      <span style={{
-                        flex: 1, fontFamily: 'DM Sans, sans-serif', fontSize: 13,
-                        color: ink, fontWeight: 500,
-                      }}>{e.label}</span>
-                      <span style={{
-                        padding: '2px 8px', borderRadius: 4,
-                        background: `${t}14`, border: `1px solid ${t}30`,
-                        color: t, fontFamily: 'DM Sans, sans-serif',
-                        fontSize: 10.5, fontWeight: 600,
-                      }}>{e.kind}</span>
-                      <span style={{
-                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5,
-                        color: ink3, minWidth: 32, textAlign: 'right',
-                      }}>{Math.round(e.confidence * 100)}%</span>
-                    </div>
-                  )
-                })}
+            {/* Two-column: Top entities LEFT, Related sources RIGHT.
+                Rows are fixed 26px so left and right align 1:1. */}
+            <div className="lp-anatomy-inner-grid" style={{
+              display: 'grid', gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 1fr)',
+              gap: 18,
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <SectionLabel ink={ink}>Top entities</SectionLabel>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {detail.topEntities.map((e, i) => {
+                    const t = TINT_MAP[e.kind] || accent
+                    return (
+                      <div key={i} style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        height: 26, padding: '0 2px', minWidth: 0,
+                      }}>
+                        <span style={{ width: 5, height: 5, borderRadius: '50%', background: t, flexShrink: 0 }}/>
+                        <span style={{
+                          flex: 1, minWidth: 0,
+                          fontFamily: 'DM Sans, sans-serif', fontSize: 12,
+                          color: ink, fontWeight: 500,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>{e.label}</span>
+                        <span style={{
+                          padding: '1px 6px', borderRadius: 4,
+                          background: `${t}14`, border: `1px solid ${t}30`,
+                          color: t, fontFamily: 'DM Sans, sans-serif',
+                          fontSize: 9.5, fontWeight: 600, flexShrink: 0,
+                        }}>{e.kind}</span>
+                        <span style={{
+                          fontFamily: 'JetBrains Mono, monospace', fontSize: 9.5,
+                          color: ink3, flexShrink: 0, minWidth: 26, textAlign: 'right',
+                        }}>{Math.round(e.confidence * 100)}%</span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
 
-            <div>
-              <SectionLabel ink={ink}>Related sources</SectionLabel>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {detail.relatedSources.map((s, i) => (
-                  <span key={i} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '4px 10px', borderRadius: 6,
-                    background: 'rgba(0,0,0,0.03)', border: `1px solid ${border}`,
-                    fontFamily: 'DM Sans, sans-serif', fontSize: 12, color: ink, fontWeight: 500,
-                  }}>
-                    <EntityIcon type="doc" size={11} color={ink3}/>
-                    {s}
-                  </span>
-                ))}
+              <div style={{ minWidth: 0 }}>
+                <SectionLabel ink={ink}>Related sources</SectionLabel>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {detail.relatedSources.map((s, i) => (
+                    <span key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      height: 26, padding: '0 9px', borderRadius: 6,
+                      background: 'rgba(0,0,0,0.03)', border: `1px solid ${border}`,
+                      fontFamily: 'DM Sans, sans-serif', fontSize: 11.5, color: ink, fontWeight: 500,
+                      minWidth: 0, boxSizing: 'border-box',
+                    }}>
+                      <EntityIcon type="doc" size={10} color={ink3}/>
+                      <span style={{
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                      }}>{s}</span>
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         </>
       )}
 
-      <div style={{ height: 1, background: border, margin: '16px 0 12px' }}/>
+      <div style={{ height: 1, background: border, margin: '12px 0 10px' }}/>
 
       <p style={{
         margin: 0,
-        fontFamily: 'Instrument Serif, Georgia, serif',
-        fontStyle: 'italic', fontSize: 14, lineHeight: 1.5,
-        color: ink2,
+        fontFamily: 'DM Sans, sans-serif',
+        fontSize: 12, lineHeight: 1.45, fontWeight: 500,
+        color: ink3,
       }}>{detail.outcome}</p>
     </div>
   )
@@ -676,36 +761,37 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
                 </div>
               </div>
 
-              {/* Scene progress dots */}
-              <div className="lp-anatomy-scene-dots" style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 12 }}>
+              {/* Scene progress pills — uniform size */}
+              <div className="lp-anatomy-scene-dots" style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 10 }}>
                 {ANATOMY_SCENES.map((id, i) => {
                   const isActive = i === activeIdx
-                  const isPast = i < activeIdx
                   const label = ANATOMY_DETAIL[id]?.label ?? ''
                   return (
                     <button key={id} onClick={() => scrollToScene(i)} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '6px 12px 6px 10px', borderRadius: 999,
+                      flex: 1, minWidth: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      gap: 6, height: 34, padding: '0 14px',
+                      borderRadius: 999,
                       border: `1px solid ${isActive ? accent : border}`,
                       background: isActive ? `${accent}10` : 'transparent',
-                      color: isActive ? ink : (isPast ? ink2 : ink3),
+                      color: isActive ? accent : ink2,
                       cursor: 'pointer', transition: 'all 220ms',
-                      fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                      letterSpacing: '0.14em', textTransform: 'uppercase',
+                      fontFamily: 'DM Sans, sans-serif', fontSize: 12, fontWeight: 600,
+                      letterSpacing: '0.02em',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
                       <span style={{
-                        width: 6, height: 6, borderRadius: '50%',
-                        background: isActive ? accent : (isPast ? `${accent}66` : ink3),
-                        transition: 'background 220ms',
-                      }}/>
-                      <span>0{i + 1} &middot; {label}</span>
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                        color: isActive ? accent : ink3, letterSpacing: '0.12em',
+                      }}>0{i + 1}</span>
+                      <span>{label}</span>
                     </button>
                   )
                 })}
                 <span style={{
-                  marginLeft: 8,
                   fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
                   color: ink3, letterSpacing: '0.14em', textTransform: 'uppercase',
+                  flexShrink: 0, paddingLeft: 4,
                 }}>&darr; scroll</span>
               </div>
             </div>
@@ -715,16 +801,16 @@ export function LandingAnatomy({ accent, surface, ink, ink2, ink3, border, borde
               minHeight: 0, display: 'flex',
               alignItems: 'center', justifyContent: 'center',
             }}>
-              <div style={{
+              <div className="lp-anatomy-card-wrap" style={{
                 width: '100%', height: '100%',
                 maxHeight: 560,
                 display: 'flex', flexDirection: 'column',
               }}>
-                <div style={{
+                <div className="lp-anatomy-card" style={{
                   flex: 1, minHeight: 0, overflow: 'hidden',
                   border: `1px solid ${border}`, borderRadius: 12,
                   background: card,
-                  padding: 'clamp(20px, 1.8vw, 28px) clamp(22px, 2vw, 32px)',
+                  padding: 'clamp(16px, 1.5vw, 22px) clamp(18px, 1.8vw, 26px)',
                   boxShadow: dark ? 'none' : '0 24px 60px -28px rgba(26,22,18,0.14)',
                 }}>
                   <AnatomyPanel
