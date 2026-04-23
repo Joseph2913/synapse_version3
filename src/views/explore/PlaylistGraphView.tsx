@@ -414,6 +414,45 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
     return ids
   }, [hoveredVideoId, videoEdges])
 
+  // Selected playlist expand mode: every video in the playlist and every video
+  // connected to one of those videos across the whole graph.
+  const selectedPlaylistVideoIds = useMemo(() => {
+    if (!selectedPlaylistId) return new Set<string>()
+    const pVideos = videosByPlaylist.get(selectedPlaylistId) ?? []
+    return new Set(pVideos.map(v => v.sourceId))
+  }, [selectedPlaylistId, videosByPlaylist])
+
+  const selectedPlaylistConnections = useMemo(() => {
+    if (!selectedPlaylistId || selectedPlaylistVideoIds.size === 0) return new Set<string>()
+    const ids = new Set<string>()
+    for (const e of videoEdges) {
+      const fromIn = selectedPlaylistVideoIds.has(e.fromSourceId)
+      const toIn = selectedPlaylistVideoIds.has(e.toSourceId)
+      if (fromIn && !toIn) ids.add(e.toSourceId)
+      if (toIn && !fromIn) ids.add(e.fromSourceId)
+    }
+    return ids
+  }, [selectedPlaylistId, selectedPlaylistVideoIds, videoEdges])
+
+  // Aggregate per-target-playlist weight for the arc overlay.
+  const selectedPlaylistArcs = useMemo(() => {
+    if (!selectedPlaylistId) return [] as Array<{ targetPlaylistId: string; weight: number }>
+    const tally = new Map<string, number>()
+    for (const e of videoEdges) {
+      const fromPid = sourceToPlaylist.get(e.fromSourceId)
+      const toPid = sourceToPlaylist.get(e.toSourceId)
+      if (!fromPid || !toPid) continue
+      const otherPid: string | null =
+        fromPid === selectedPlaylistId ? toPid :
+        toPid === selectedPlaylistId ? fromPid : null
+      if (!otherPid || otherPid === selectedPlaylistId) continue
+      tally.set(otherPid, (tally.get(otherPid) ?? 0) + e.sharedEntityCount)
+    }
+    return Array.from(tally.entries())
+      .map(([targetPlaylistId, weight]) => ({ targetPlaylistId, weight }))
+      .sort((a, b) => b.weight - a.weight)
+  }, [selectedPlaylistId, videoEdges, sourceToPlaylist])
+
   // ─── Live nodes: drag + drift animation ─────────────────────────────────────
 
   // Connectivity: which nodes should drift when a node is dragged
@@ -1003,12 +1042,35 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                 : 0.3 + weightNorm * 0.4
               const baseOpacity = edge.isCrossCluster ? 0.04 : 0.02
 
-              // When hovering, highlighted edges pop, others fade
+              // Playlist expand mode takes precedence over hover:
+              // highlight every edge touching a video in the selected playlist.
+              const playlistExpanded = selectedPlaylistVideoIds.size > 0
+              const edgeTouchesSelected = playlistExpanded && (
+                selectedPlaylistVideoIds.has(edge.fromSourceId) ||
+                selectedPlaylistVideoIds.has(edge.toSourceId)
+              )
+
               let stroke = 'rgba(120,130,145,1)'
               let strokeWidth = baseWidth
               let strokeOpacity = hasHover ? 0.01 : baseOpacity
 
-              if (isHighlighted) {
+              if (playlistExpanded) {
+                const fromInSelected = selectedPlaylistVideoIds.has(edge.fromSourceId)
+                const toInSelected = selectedPlaylistVideoIds.has(edge.toSourceId)
+                const isIntraSelected = fromInSelected && toInSelected
+
+                if (isIntraSelected) {
+                  // Hide same-playlist edges entirely — the inner blob is the noise.
+                  strokeOpacity = 0
+                } else if (edgeTouchesSelected) {
+                  // Cross-playlist edge: whisper-quiet muted amber.
+                  stroke = '#B8673F'
+                  strokeWidth = 0.5 + weightNorm * 0.5
+                  strokeOpacity = 0.12
+                } else {
+                  strokeOpacity = 0.015
+                }
+              } else if (isHighlighted) {
                 stroke = edge.isCrossCluster ? 'var(--color-accent-500)' : playlistColorMap.get(sourceToPlaylist.get(edge.fromSourceId)!) ?? 'var(--color-accent-500)'
                 strokeWidth = edge.isCrossCluster ? 2 : 1.5
                 strokeOpacity = edge.isCrossCluster ? 0.6 : 0.45
@@ -1041,8 +1103,16 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                 const isHovered = hoveredVideoId === video.sourceId
                 const isExploring = exploringVideoId === video.sourceId
                 const isConnectedToHovered = hoveredConnections.has(video.sourceId)
-                const isDimmed = hoveredVideoId !== null && !isHovered && !isConnectedToHovered
                 const isDragging = dragRef.current?.type === 'video' && dragRef.current?.id === video.sourceId
+
+                // Playlist expand mode
+                const playlistExpanded = selectedPlaylistVideoIds.size > 0
+                const isInSelectedPlaylist = playlistExpanded && selectedPlaylistVideoIds.has(video.sourceId)
+                const isConnectedToSelectedPlaylist = playlistExpanded && selectedPlaylistConnections.has(video.sourceId)
+
+                const isDimmed = playlistExpanded
+                  ? (!isInSelectedPlaylist && !isConnectedToSelectedPlaylist)
+                  : (hoveredVideoId !== null && !isHovered && !isConnectedToHovered)
                 const scale = isHovered ? 1.15 : 1
                 const label = video.videoTitle.length > 22 ? video.videoTitle.slice(0, 21) + '…' : video.videoTitle
 
@@ -1055,7 +1125,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                     onClick={() => handleVideoClick(video.sourceId)}
                     style={{
                       cursor: isDragging ? 'grabbing' : 'pointer',
-                      opacity: isDimmed ? 0.15 : 1,
+                      opacity: isDimmed ? (playlistExpanded ? 0.22 : 0.15) : 1,
                       transition: 'opacity 0.18s ease',
                     }}
                   >
@@ -1064,10 +1134,16 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                         {isExploring && (
                           <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.5} opacity={0.6} />
                         )}
-                        {isHovered && !isExploring && (
+                        {isInSelectedPlaylist && !isExploring && (
+                          <circle r={r + 4} fill="none" stroke="var(--color-accent-500)" strokeWidth={1.6} opacity={0.7} />
+                        )}
+                        {isConnectedToSelectedPlaylist && !isInSelectedPlaylist && !isExploring && (
+                          <circle r={r + 3} fill="none" stroke={color} strokeWidth={1.2} opacity={0.55} />
+                        )}
+                        {isHovered && !isExploring && !isInSelectedPlaylist && (
                           <circle r={r + 3} fill="none" stroke={`${color}40`} strokeWidth={1.5} />
                         )}
-                        {isConnectedToHovered && !isHovered && !isExploring && (
+                        {isConnectedToHovered && !isHovered && !isExploring && !isInSelectedPlaylist && !isConnectedToSelectedPlaylist && (
                           <circle r={r + 3} fill="none" stroke="var(--color-accent-500)" strokeWidth={1} opacity={0.3} />
                         )}
                         <circle r={r} fill={`${color}20`} stroke={color} strokeWidth={1.5} />
@@ -1096,6 +1172,42 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
                 )
               })
             })}
+
+            {/* 3.5 Aggregate arcs: one curve per connected playlist when a playlist is selected. */}
+            {selectedPlaylistId && selectedPlaylistArcs.length > 0 && (() => {
+              const sCenterLive = livePositions.get(`p:${selectedPlaylistId}`)
+              const sCenter = sCenterLive ?? playlistCenterPositions.get(selectedPlaylistId)
+              if (!sCenter) return null
+              const maxWeight = Math.max(...selectedPlaylistArcs.map(a => a.weight), 1)
+              return selectedPlaylistArcs.map(arc => {
+                const tCenterLive = livePositions.get(`p:${arc.targetPlaylistId}`)
+                const tCenter = tCenterLive ?? playlistCenterPositions.get(arc.targetPlaylistId)
+                if (!tCenter) return null
+                const norm = arc.weight / maxWeight
+                const width = 1.5 + norm * 4.5
+                const opacity = 0.22 + norm * 0.30
+                const mx = (sCenter.x + tCenter.x) / 2
+                const my = (sCenter.y + tCenter.y) / 2
+                const dx = tCenter.x - sCenter.x
+                const dy = tCenter.y - sCenter.y
+                const len = Math.hypot(dx, dy) || 1
+                const offset = Math.min(80, len * 0.15)
+                const cx = mx - (dy / len) * offset
+                const cy = my + (dx / len) * offset
+                return (
+                  <path
+                    key={`arc-${arc.targetPlaylistId}`}
+                    d={`M ${sCenter.x} ${sCenter.y} Q ${cx} ${cy} ${tCenter.x} ${tCenter.y}`}
+                    fill="none"
+                    stroke="var(--color-accent-500)"
+                    strokeWidth={width}
+                    strokeOpacity={opacity}
+                    strokeLinecap="round"
+                    style={{ transition: 'stroke-opacity 0.2s ease, stroke-width 0.2s ease' }}
+                  />
+                )
+              })
+            })()}
 
             {/* 4. Playlist center buttons — dynamic icon (draggable) */}
             {playlists.map(playlist => {
