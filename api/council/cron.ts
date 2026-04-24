@@ -5,7 +5,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 // Runs the Phase 0 pull-based answer check, rebuilds stale expertise
 // indexes, regenerates standing questions/gaps, refreshes awareness
 // registers, and updates health.
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 // ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL!;
@@ -1113,6 +1113,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     phase0RunIds = p0.runIds;
     phase0Duration = p0.result.duration_ms;
     console.log(`[council-cron] Phase 0 complete: ${p0.result.detail} (${p0.result.duration_ms}ms)`);
+
+    // Persist Phase 0 counters immediately so telemetry survives any
+    // subsequent-phase timeout. Final handler-end update below may overwrite
+    // this with richer status/error info if the rest of the cron finishes.
+    for (const [userId, runId] of phase0RunIds.entries()) {
+      const counters = phase0PerUserCounters.get(userId) ?? emptyPhase0Counters();
+      await supabase
+        .from('council_cron_runs')
+        .update({
+          phase_counts: {
+            phase0: {
+              agents_scanned: counters.agents_scanned,
+              questions_checked: counters.questions_checked,
+              questions_answered: counters.questions_answered,
+              questions_partially_addressed: counters.questions_partially_addressed,
+              novel_connections_written: counters.novel_connections_written,
+              gemini_calls: counters.gemini_calls,
+              duration_ms: phase0Duration,
+            },
+          },
+        })
+        .eq('id', runId);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[council-cron] Phase 0 failed:', msg);
