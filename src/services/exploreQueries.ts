@@ -362,6 +362,33 @@ export async function fetchSourceGraph(userId: string): Promise<SourceGraphResul
   return { sources, edges: result.edges ?? [] }
 }
 
+// ─── fetchSourceLink ─────────────────────────────────────────────────────────
+// Pulls the source_url + provider metadata for a single source so the detail
+// panel can render an "Open on YouTube / Circleback / etc." action and, for
+// YouTube sources, a thumbnail derived from the video id.
+
+export interface SourceLinkInfo {
+  sourceUrl: string | null
+  provider: string | null
+}
+
+export async function fetchSourceLink(
+  userId: string,
+  sourceId: string
+): Promise<SourceLinkInfo> {
+  const { data, error } = await supabase
+    .from('knowledge_sources')
+    .select('source_url, metadata')
+    .eq('id', sourceId)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (error || !data) return { sourceUrl: null, provider: null }
+  const row = data as { source_url: string | null; metadata: Record<string, unknown> | null }
+  const provider = typeof row.metadata?.provider === 'string' ? row.metadata.provider as string : null
+  return { sourceUrl: row.source_url, provider }
+}
+
 // ─── fetchSourceEntities ─────────────────────────────────────────────────────
 
 export interface SourceEntityBadge {
@@ -588,6 +615,8 @@ export interface SourceCardDetail {
   relatedSources: SourceCardRelatedSource[]
   anchorLabels: string[]
   createdAt: string
+  sourceUrl: string | null
+  provider: string | null
 }
 
 export async function fetchSourceCardDetail(
@@ -597,12 +626,16 @@ export async function fetchSourceCardDetail(
   // 1. Fetch the source itself (for summary + metadata)
   const { data: source, error: srcErr } = await supabase
     .from('knowledge_sources')
-    .select('id, title, source_type, summary, summary_source, content, metadata, created_at')
+    .select('id, title, source_type, summary, summary_source, content, metadata, created_at, source_url')
     .eq('id', sourceId)
     .eq('user_id', userId)
     .single()
 
   if (srcErr || !source) return null
+
+  const _srcRow = source as { source_url: string | null; metadata: Record<string, unknown> | null }
+  const sourceUrl = _srcRow.source_url ?? null
+  const provider = typeof _srcRow.metadata?.provider === 'string' ? _srcRow.metadata.provider as string : null
 
   // 2. Fetch all entities belonging to this source
   const { data: rawNodes } = await supabase
@@ -643,6 +676,8 @@ export async function fetchSourceCardDetail(
       relatedSources: [],
       anchorLabels: [],
       createdAt: s.created_at,
+      sourceUrl,
+      provider,
     }
   }
 
@@ -811,6 +846,8 @@ export async function fetchSourceCardDetail(
     relatedSources,
     anchorLabels,
     createdAt: s.created_at,
+    sourceUrl,
+    provider,
   }
 }
 

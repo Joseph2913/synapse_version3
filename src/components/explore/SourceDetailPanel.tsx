@@ -1,11 +1,51 @@
 import { useState, useEffect } from 'react'
-import { X, ChevronRight, ArrowRight } from 'lucide-react'
+import { X, ChevronRight, ArrowRight, ExternalLink, Play } from 'lucide-react'
 import { getSourceConfig } from '../../config/sourceTypes'
 import { getEntityColor } from '../../config/entityTypes'
 import { useAuth } from '../../hooks/useAuth'
-import { fetchSourceEntities } from '../../services/exploreQueries'
+import { fetchSourceEntities, fetchSourceLink } from '../../services/exploreQueries'
 import type { SourceNode, SourceEdge } from '../../types/explore'
 import type { SourceEntityBadge } from '../../services/exploreQueries'
+
+/** Pull a YouTube video id from any watch / shorts / youtu.be variant. */
+function extractYouTubeVideoId(url: string): string | null {
+  const patterns = [
+    /youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/,
+    /youtu\.be\/([a-zA-Z0-9_-]+)/,
+    /youtube\.com\/embed\/([a-zA-Z0-9_-]+)/,
+    /youtube\.com\/shorts\/([a-zA-Z0-9_-]+)/,
+  ]
+  for (const p of patterns) {
+    const m = url.match(p)
+    if (m) return m[1] ?? null
+  }
+  return null
+}
+
+/** Friendly label + hostname for the "open source" row. */
+function getLinkLabel(
+  sourceType: string,
+  url: string,
+  provider: string | null
+): { label: string; hostname: string } | null {
+  try {
+    const u = new URL(url)
+    const hostname = u.hostname.replace(/^www\./, '')
+    if (sourceType === 'YouTube') return { label: 'Open on YouTube', hostname }
+    if (sourceType === 'GitHub') return { label: 'Open on GitHub', hostname }
+    if (sourceType === 'Meeting') {
+      if (provider) {
+        const name = provider.charAt(0).toUpperCase() + provider.slice(1)
+        return { label: `Open in ${name}`, hostname }
+      }
+      return { label: 'Open meeting', hostname }
+    }
+    if (sourceType === 'Research') return { label: 'Open source', hostname }
+    return { label: 'Open source', hostname }
+  } catch {
+    return null
+  }
+}
 
 interface SourceDetailPanelProps {
   source: SourceNode
@@ -39,6 +79,28 @@ export function SourceDetailPanel({
       .catch(err => console.warn('fetchSourceEntities error:', err))
     return () => { cancelled = true }
   }, [user, source.entityIds])
+
+  // Fetch the original URL for this source (YouTube / meeting permalink / etc.)
+  const [link, setLink] = useState<{ sourceUrl: string | null; provider: string | null }>({
+    sourceUrl: null, provider: null,
+  })
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    setLink({ sourceUrl: null, provider: null })
+    fetchSourceLink(user.id, source.id)
+      .then(data => { if (!cancelled) setLink(data) })
+      .catch(err => console.warn('fetchSourceLink error:', err))
+    return () => { cancelled = true }
+  }, [user, source.id])
+
+  const linkLabel = link.sourceUrl ? getLinkLabel(source.sourceType, link.sourceUrl, link.provider) : null
+  const youtubeVideoId = source.sourceType === 'YouTube' && link.sourceUrl
+    ? extractYouTubeVideoId(link.sourceUrl)
+    : null
+  const thumbnailUrl = youtubeVideoId
+    ? `https://img.youtube.com/vi/${youtubeVideoId}/mqdefault.jpg`
+    : null
 
   // Connected sources
   const connectedSources = sourceEdges
@@ -81,6 +143,51 @@ export function SourceDetailPanel({
       >
         <X size={16} />
       </button>
+
+      {/* 0. YouTube thumbnail banner — clickable, opens the video */}
+      {thumbnailUrl && link.sourceUrl && (
+        <a
+          href={link.sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'block',
+            marginBottom: 14,
+            borderRadius: 10,
+            overflow: 'hidden',
+            position: 'relative',
+            aspectRatio: '16 / 9',
+            background: '#000',
+            textDecoration: 'none',
+            boxShadow: '0 2px 12px -4px rgba(0,0,0,0.15)',
+          }}
+        >
+          <img
+            src={thumbnailUrl}
+            alt=""
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+          <div
+            style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'linear-gradient(to bottom, rgba(0,0,0,0) 40%, rgba(0,0,0,0.35) 100%)',
+              transition: 'background 0.15s ease',
+            }}
+          >
+            <div
+              style={{
+                width: 48, height: 48, borderRadius: '50%',
+                background: 'rgba(214,58,0,0.92)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+              }}
+            >
+              <Play size={20} color="#fff" fill="#fff" style={{ marginLeft: 2 }} />
+            </div>
+          </div>
+        </a>
+      )}
 
       {/* 1. Header */}
       <div className="flex items-center gap-3" style={{ marginBottom: 8 }}>
@@ -252,25 +359,39 @@ export function SourceDetailPanel({
           <ArrowRight size={13} />
           View in entity graph
         </button>
-        <button
-          type="button"
-          className="flex items-center gap-2 w-full cursor-pointer font-body"
-          style={{
-            padding: '8px 12px',
-            fontSize: 12,
-            fontWeight: 500,
-            borderRadius: 8,
-            border: 'none',
-            background: 'var(--color-bg-inset)',
-            color: 'var(--color-text-body)',
-            textAlign: 'left',
-            opacity: 0.5,
-            cursor: 'default',
-          }}
-          disabled
-        >
-          View raw source
-        </button>
+        {link.sourceUrl && linkLabel && (
+          <a
+            href={link.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 w-full font-body"
+            style={{
+              padding: '8px 12px',
+              fontSize: 12,
+              fontWeight: 500,
+              borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--color-bg-card)',
+              color: 'var(--color-text-body)',
+              textAlign: 'left',
+              textDecoration: 'none',
+              transition: 'background 0.1s ease, border-color 0.1s ease',
+            }}
+          >
+            <ExternalLink size={13} />
+            <span style={{ flex: 1 }}>{linkLabel.label}</span>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono, "JetBrains Mono", monospace)',
+                fontSize: 10,
+                color: 'var(--color-text-placeholder)',
+                letterSpacing: '0.02em',
+              }}
+            >
+              {linkLabel.hostname}
+            </span>
+          </a>
+        )}
         <button
           type="button"
           className="flex items-center gap-2 w-full cursor-pointer font-body"
