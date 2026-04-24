@@ -22,7 +22,7 @@ export function CouncilTelemetryStrip() {
       {p0 && (
         <>
           <span className="h-4 w-px bg-[var(--border-subtle)]" />
-          <span>{p0.questions_answered} answered · {p0.questions_partially_addressed} partial · {p0.novel_connections_written} novel connections</span>
+          <span>{p0.questions_answered} answered · {p0.questions_partially_addressed} partial · {p0.novel_connections_written} novel connections · {p0.tensions_written ?? 0} tensions</span>
         </>
       )}
     </div>

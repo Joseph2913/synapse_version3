@@ -104,6 +104,7 @@ export interface CouncilCronPhase0Counts {
   questions_answered: number
   questions_partially_addressed: number
   novel_connections_written: number
+  tensions_written: number
   gemini_calls: number
   duration_ms: number
 }

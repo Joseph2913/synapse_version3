@@ -209,12 +209,35 @@ interface VerdictResponse {
   novel_connection?: VerdictNovelConnection;
 }
 
+interface ContradictionResponse {
+  insight_id: string;
+  contradicts: boolean;
+  contradicting_claim: string;
+  evidence_snippet: string;
+  confidence: number | null;
+}
+
+interface GeminiPhase0Response {
+  verdicts: VerdictResponse[];
+  contradictions?: ContradictionResponse[];
+}
+
+interface ActiveInsightLite {
+  id: string;
+  insight_type: 'tension' | 'convergence' | 'novel_connection';
+  claim: string;
+  confidence: number | null;
+  trigger_source_id: string | null;
+  related_source_ids: string[];
+}
+
 interface Phase0Counters {
   agents_scanned: number;
   questions_checked: number;
   questions_answered: number;
   questions_partially_addressed: number;
   novel_connections_written: number;
+  tensions_written: number;
   gemini_calls: number;
 }
 
@@ -239,6 +262,20 @@ interface NovelInsightRow {
   status: 'active';
 }
 
+interface TensionInsightRow {
+  user_id: string;
+  agent_id: string;
+  insight_type: 'tension';
+  claim: string;
+  evidence_summary: string;
+  trigger_source_id: string;
+  related_source_ids: string[];
+  related_entity_ids: string[];
+  confidence: number;
+  status: 'active';
+  contradicts_insight_id: string;
+}
+
 interface BulkUpdateRow {
   question_id: string;
   new_source_ids: string[];
@@ -253,9 +290,18 @@ function emptyPhase0Counters(): Phase0Counters {
     questions_answered: 0,
     questions_partially_addressed: 0,
     novel_connections_written: 0,
+    tensions_written: 0,
     gemini_calls: 0,
   };
 }
+
+// Phase 0 tension-detection tuning. See plan-of-record: low write rate beats
+// volume; a tension is the sharpest council output, so we err toward silence.
+const TENSION_CONFIDENCE_FLOOR = 0.7;
+const TENSION_MAX_PER_AGENT_PER_RUN = 3;
+const TENSION_INSIGHTS_PROMPT_CAP = 20;
+const TENSION_CLAIM_PROMPT_TRUNC = 200;
+const TENSION_COOLDOWN_DAYS = 7;
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -307,20 +353,29 @@ async function resolveSinceForUser(supabase: SupabaseClient, userId: string): Pr
 
 async function gemini_judgeQuestionAnswers(
   agent: Phase0AgentLite,
-  batch: PullCandidateRow[][]
-): Promise<VerdictResponse[]> {
+  batch: PullCandidateRow[][],
+  activeInsights: ActiveInsightLite[]
+): Promise<{ verdicts: VerdictResponse[]; contradictions: ContradictionResponse[] }> {
   const expertise = agent.expertise_index as ExpertiseIndex | null;
   const coreThemes = expertise && 'core_themes' in expertise && Array.isArray(expertise.core_themes)
     ? (expertise.core_themes as string[]).join(', ')
     : '(not yet indexed)';
 
-  const systemPrompt = `You are judging whether new source content answers a set of standing questions for a domain expert agent.
+  const hasInsights = activeInsights.length > 0;
+
+  const systemPrompt = `You are judging new source content against two things for a domain expert agent:
+  (1) standing questions the agent wants answered, and
+  (2) active insights the agent already holds, to detect direct contradictions.
 
 Agent: ${agent.name}
 Agent focus: ${agent.description ?? ''}
 Agent core themes: ${coreThemes}
 
 For each question, you are given top-matching chunks from sources newly added to this user's knowledge graph. Some of these sources are outside this agent's primary domain — treat them as potential cross-domain connections.
+
+${hasInsights
+  ? `For each active insight, determine whether the provided chunks (across ALL questions) contain content that directly contradicts the insight's claim. Contradiction means the chunks make a specific factual or conceptual claim that cannot simultaneously be true with the existing insight — not merely unrelated, not merely a different angle, not merely a softer version.`
+  : `(This agent has no active insights to check for contradictions. Return contradictions: [].)`}
 
 Return strict JSON matching this schema — no prose, no code fences:
 {
@@ -335,14 +390,28 @@ Return strict JSON matching this schema — no prose, no code fences:
         "bridge_claim": "<one sentence explaining how this source connects to the agent's domain, or empty string if not a bridge>"
       }
     }
+  ],
+  "contradictions": [
+    {
+      "insight_id": "<uuid from the insights list>",
+      "contradicts": true,
+      "contradicting_claim": "<one short sentence stating the new competing claim>",
+      "evidence_snippet": "<1-2 sentence quote from the chunks showing the contradiction, <=280 chars>",
+      "confidence": <0.0 to 1.0>
+    }
   ]
 }
 
-Rules:
+Rules for verdicts:
 - "answered" only if the source directly resolves the question. Be conservative.
 - "partially_addressed" if it gives meaningful evidence toward the question but leaves gaps.
 - "no_real_answer" if the chunks merely mention related topics without answering.
-- bridge_claim: fill only when the source comes from a domain that is not obviously this agent's — it's the cross-domain insight. Otherwise leave empty.`;
+- bridge_claim: fill only when the source comes from a domain that is not obviously this agent's — it's the cross-domain insight. Otherwise leave empty.
+
+Rules for contradictions:
+- Only include items where contradicts is true. Return an empty array if nothing genuinely contradicts.
+- Be conservative: a softer restatement, a different framing, or an unrelated claim is NOT a contradiction.
+- Ground each contradiction in a specific chunk. Use confidence 0.7+ only when the contradiction is explicit and unavoidable.`;
 
   const payload = batch.map(group => {
     const first = group[0]!;
@@ -357,10 +426,20 @@ Rules:
     };
   });
 
-  const userContent = JSON.stringify({ questions: payload });
+  const insightsPayload = activeInsights.map(i => ({
+    insight_id: i.id,
+    insight_type: i.insight_type,
+    claim: i.claim.slice(0, TENSION_CLAIM_PROMPT_TRUNC),
+    confidence: i.confidence,
+  }));
 
-  const result = await callGemini<{ verdicts: VerdictResponse[] }>(systemPrompt, userContent);
-  return Array.isArray(result?.verdicts) ? result.verdicts : [];
+  const userContent = JSON.stringify({ questions: payload, active_insights: insightsPayload });
+
+  const result = await callGemini<GeminiPhase0Response>(systemPrompt, userContent);
+  return {
+    verdicts: Array.isArray(result?.verdicts) ? result.verdicts : [],
+    contradictions: Array.isArray(result?.contradictions) ? result.contradictions : [],
+  };
 }
 
 async function phase0_answerCheckAndLink(
@@ -445,15 +524,65 @@ async function phase0_answerCheckAndLink(
       const byQuestion = groupPullCandidatesByQuestion(rows);
       counters.questions_checked += byQuestion.size;
 
+      // Load up to TENSION_INSIGHTS_PROMPT_CAP recent active insights for
+      // contradiction checking. Exclude tensions created in the last
+      // TENSION_COOLDOWN_DAYS to avoid ping-pong contradictions.
+      const cooldownIso = new Date(
+        Date.now() - TENSION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000
+      ).toISOString();
+      const { data: insightsRaw, error: insFetchErr } = await supabase
+        .from('agent_insights')
+        .select('id, insight_type, claim, confidence, trigger_source_id, related_source_ids, created_at')
+        .eq('agent_id', agent.id)
+        .eq('user_id', agent.user_id)
+        .eq('status', 'active')
+        .in('insight_type', ['tension', 'convergence', 'novel_connection'])
+        .order('created_at', { ascending: false })
+        .limit(TENSION_INSIGHTS_PROMPT_CAP * 2); // over-fetch, then filter cooldown
+      if (insFetchErr) {
+        console.warn(`[council-cron] phase0: active insight fetch failed for agent ${agent.id}:`, insFetchErr.message);
+      }
+      const activeInsights: ActiveInsightLite[] = ((insightsRaw ?? []) as Array<{
+        id: string;
+        insight_type: 'tension' | 'convergence' | 'novel_connection';
+        claim: string;
+        confidence: number | null;
+        trigger_source_id: string | null;
+        related_source_ids: string[] | null;
+        created_at: string;
+      }>)
+        .filter(r => !(r.insight_type === 'tension' && r.created_at >= cooldownIso))
+        .slice(0, TENSION_INSIGHTS_PROMPT_CAP)
+        .map(r => ({
+          id: r.id,
+          insight_type: r.insight_type,
+          claim: r.claim,
+          confidence: r.confidence,
+          trigger_source_id: r.trigger_source_id,
+          related_source_ids: r.related_source_ids ?? [],
+        }));
+      const insightById = new Map(activeInsights.map(i => [i.id, i]));
+
       const questionGroups = Array.from(byQuestion.values());
       const batches = chunkArray(questionGroups, 30);
 
       const allVerdicts: VerdictResponse[] = [];
-      for (const batch of batches) {
+      const allContradictions: ContradictionResponse[] = [];
+      for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+        const batch = batches[bIdx]!;
+        // Only send insights on the first batch — the contradiction check is
+        // global across all chunks for the agent, not per-question, and
+        // repeating the list would just waste tokens + risk duplicate tensions.
+        const insightsForBatch = bIdx === 0 ? activeInsights : [];
         try {
-          const verdicts = await gemini_judgeQuestionAnswers(agent, batch);
+          const { verdicts, contradictions } = await gemini_judgeQuestionAnswers(
+            agent,
+            batch,
+            insightsForBatch
+          );
           counters.gemini_calls += 1;
           allVerdicts.push(...verdicts);
+          if (bIdx === 0) allContradictions.push(...contradictions);
         } catch (gErr) {
           const msg = gErr instanceof Error ? gErr.message : String(gErr);
           console.warn(`[council-cron] phase0: Gemini batch failed for agent ${agent.id}:`, msg);
@@ -462,6 +591,7 @@ async function phase0_answerCheckAndLink(
 
       const updates: BulkUpdateRow[] = [];
       const novelInsights: NovelInsightRow[] = [];
+      const tensionInsights: TensionInsightRow[] = [];
       const nowIso = new Date().toISOString();
 
       for (const verdict of allVerdicts) {
@@ -510,6 +640,70 @@ async function phase0_answerCheckAndLink(
         }
       }
 
+      // ── Contradiction processing ────────────────────────────────────────
+      // Apply confidence floor, dedupe by insight id, cap per agent.
+      if (allContradictions.length > 0 && activeInsights.length > 0) {
+        const chunkBySource = new Map<string, PullCandidateRow>();
+        for (const row of rows) {
+          const existing = chunkBySource.get(row.source_id);
+          if (!existing || row.similarity > existing.similarity) {
+            chunkBySource.set(row.source_id, row);
+          }
+        }
+        // Fallback trigger source: the single highest-similarity chunk overall.
+        const fallbackRow = rows.reduce(
+          (best, r) => (best && best.similarity >= r.similarity ? best : r),
+          rows[0]!
+        );
+
+        const seen = new Set<string>();
+        const filtered = allContradictions
+          .filter(c => c && c.contradicts === true)
+          .filter(c => {
+            const conf = typeof c.confidence === 'number' ? c.confidence : 0;
+            return conf >= TENSION_CONFIDENCE_FLOOR;
+          })
+          .filter(c => insightById.has(c.insight_id))
+          .filter(c => {
+            if (seen.has(c.insight_id)) return false;
+            seen.add(c.insight_id);
+            return true;
+          })
+          .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+          .slice(0, TENSION_MAX_PER_AGENT_PER_RUN);
+
+        for (const c of filtered) {
+          const parent = insightById.get(c.insight_id)!;
+          const evidence = (c.evidence_snippet ?? '').slice(0, 280);
+          const claimText = `Contradicts earlier insight: ${c.contradicting_claim ?? ''}`.slice(0, 280);
+          const confidence = typeof c.confidence === 'number' ? c.confidence : TENSION_CONFIDENCE_FLOOR;
+
+          // Trigger source: prefer a chunk whose content matches the evidence,
+          // else the most-similar chunk overall for this agent's candidate set.
+          const triggerSource = fallbackRow.source_id;
+
+          const related = new Set<string>();
+          related.add(triggerSource);
+          if (parent.trigger_source_id) related.add(parent.trigger_source_id);
+          for (const sid of parent.related_source_ids) related.add(sid);
+
+          tensionInsights.push({
+            user_id: agent.user_id,
+            agent_id: agent.id,
+            insight_type: 'tension',
+            claim: claimText,
+            evidence_summary: evidence,
+            trigger_source_id: triggerSource,
+            related_source_ids: Array.from(related),
+            related_entity_ids: [],
+            confidence,
+            status: 'active',
+            contradicts_insight_id: parent.id,
+          });
+          counters.tensions_written += 1;
+        }
+      }
+
       if (updates.length > 0) {
         const { error: applyErr } = await supabase.rpc('bulk_apply_question_addressing', {
           p_user_id: agent.user_id,
@@ -521,10 +715,14 @@ async function phase0_answerCheckAndLink(
         }
       }
 
-      if (novelInsights.length > 0) {
-        const { error: insErr } = await supabase.from('agent_insights').insert(novelInsights);
+      if (novelInsights.length > 0 || tensionInsights.length > 0) {
+        const rowsToInsert: Array<NovelInsightRow | TensionInsightRow> = [
+          ...novelInsights,
+          ...tensionInsights,
+        ];
+        const { error: insErr } = await supabase.from('agent_insights').insert(rowsToInsert);
         if (insErr) {
-          console.warn(`[council-cron] phase0: novel_connection insert failed for agent ${agent.id}:`, insErr.message);
+          console.warn(`[council-cron] phase0: insight insert failed for agent ${agent.id}:`, insErr.message);
           perAgentFailures++;
         }
       }
@@ -539,12 +737,14 @@ async function phase0_answerCheckAndLink(
   let totalAnswered = 0;
   let totalPartial = 0;
   let totalNovel = 0;
+  let totalTensions = 0;
   let totalChecked = 0;
   let totalGemini = 0;
   for (const c of perUserCounters.values()) {
     totalAnswered += c.questions_answered;
     totalPartial += c.questions_partially_addressed;
     totalNovel += c.novel_connections_written;
+    totalTensions += c.tensions_written;
     totalChecked += c.questions_checked;
     totalGemini += c.gemini_calls;
   }
@@ -553,7 +753,7 @@ async function phase0_answerCheckAndLink(
     result: {
       phase: '0_answer_check',
       success: perAgentFailures === 0,
-      detail: `${agents.length} agents, ${totalChecked} questions checked, ${totalAnswered} answered, ${totalPartial} partial, ${totalNovel} novel connections, ${totalGemini} Gemini calls${perAgentFailures > 0 ? `, ${perAgentFailures} agent failures` : ''}`,
+      detail: `${agents.length} agents, ${totalChecked} questions checked, ${totalAnswered} answered, ${totalPartial} partial, ${totalNovel} novel connections, ${totalTensions} tensions, ${totalGemini} Gemini calls${perAgentFailures > 0 ? `, ${perAgentFailures} agent failures` : ''}`,
       duration_ms: Date.now() - phaseStart,
     },
     perUserCounters,
@@ -1129,6 +1329,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               questions_answered: counters.questions_answered,
               questions_partially_addressed: counters.questions_partially_addressed,
               novel_connections_written: counters.novel_connections_written,
+              tensions_written: counters.tensions_written,
               gemini_calls: counters.gemini_calls,
               duration_ms: phase0Duration,
             },
@@ -1231,6 +1432,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         questions_answered: counters.questions_answered,
         questions_partially_addressed: counters.questions_partially_addressed,
         novel_connections_written: counters.novel_connections_written,
+        tensions_written: counters.tensions_written,
         gemini_calls: counters.gemini_calls,
         duration_ms: phase0Duration,
       },
