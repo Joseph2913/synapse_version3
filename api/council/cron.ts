@@ -183,6 +183,401 @@ async function runInBatches<T, R>(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PHASE 0: PULL-BASED ANSWER CHECK + NOVEL-CONNECTION WRITER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Phase 0 local types. Kept inline to honour the "no shared local imports in
+// api/ files" rule.
+type QuestionVerdictValue = 'answered' | 'partially_addressed' | 'no_real_answer';
+
+interface AddressingEvidenceEntry {
+  source_id: string | null;
+  verdict: QuestionVerdictValue | 'legacy';
+  snippet: string;
+  confidence: number | null;
+  checked_at: string | null;
+  legacy?: boolean;
+}
+
+interface PullCandidateRow {
+  question_id: string;
+  question_text: string;
+  question_type: 'gap_driven' | 'frontier' | 'cross_domain' | 'user_defined';
+  question_status: 'open' | 'partially_addressed';
+  existing_addressing_source_ids: string[] | null;
+  source_id: string;
+  chunk_id: string;
+  chunk_content: string;
+  similarity: number;
+  source_primary_agent_ids: string[] | null;
+}
+
+interface VerdictNovelConnection {
+  bridge_claim?: string;
+}
+
+interface VerdictResponse {
+  question_id: string;
+  verdict: QuestionVerdictValue;
+  primary_source_id: string | null;
+  snippet: string;
+  confidence: number | null;
+  novel_connection?: VerdictNovelConnection;
+}
+
+interface Phase0Counters {
+  agents_scanned: number;
+  questions_checked: number;
+  questions_answered: number;
+  questions_partially_addressed: number;
+  novel_connections_written: number;
+  gemini_calls: number;
+}
+
+interface Phase0AgentLite {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  expertise_index: ExpertiseIndex | Record<string, never> | null;
+}
+
+interface NovelInsightRow {
+  user_id: string;
+  agent_id: string;
+  insight_type: 'novel_connection';
+  claim: string;
+  evidence_summary: string;
+  trigger_source_id: string;
+  related_source_ids: string[];
+  related_entity_ids: string[];
+  confidence: number;
+  status: 'active';
+}
+
+interface BulkUpdateRow {
+  question_id: string;
+  new_source_ids: string[];
+  evidence_entries: AddressingEvidenceEntry[];
+  new_status: QuestionVerdictValue | null;
+}
+
+function emptyPhase0Counters(): Phase0Counters {
+  return {
+    agents_scanned: 0,
+    questions_checked: 0,
+    questions_answered: 0,
+    questions_partially_addressed: 0,
+    novel_connections_written: 0,
+    gemini_calls: 0,
+  };
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+function groupPullCandidatesByQuestion(rows: PullCandidateRow[]): Map<string, PullCandidateRow[]> {
+  const map = new Map<string, PullCandidateRow[]>();
+  for (const r of rows) {
+    const arr = map.get(r.question_id) ?? [];
+    arr.push(r);
+    map.set(r.question_id, arr);
+  }
+  return map;
+}
+
+function pickPrimaryRow(
+  group: PullCandidateRow[],
+  primarySourceId: string | null
+): PullCandidateRow | null {
+  if (group.length === 0) return null;
+  if (primarySourceId) {
+    const matches = group.filter(r => r.source_id === primarySourceId);
+    if (matches.length > 0) {
+      return matches.reduce((best, r) => (r.similarity > best.similarity ? r : best), matches[0]!);
+    }
+  }
+  return group.reduce((best, r) => (r.similarity > best.similarity ? r : best), group[0]!);
+}
+
+async function resolveSinceForUser(supabase: SupabaseClient, userId: string): Promise<string> {
+  const { data } = await supabase
+    .from('council_cron_runs')
+    .select('started_at')
+    .eq('user_id', userId)
+    .in('status', ['ok', 'partial_failure'])
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (data && (data as { started_at: string }).started_at) {
+    return (data as { started_at: string }).started_at;
+  }
+  // Fallback: 2 days ago
+  return new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+async function gemini_judgeQuestionAnswers(
+  agent: Phase0AgentLite,
+  batch: PullCandidateRow[][]
+): Promise<VerdictResponse[]> {
+  const expertise = agent.expertise_index as ExpertiseIndex | null;
+  const coreThemes = expertise && 'core_themes' in expertise && Array.isArray(expertise.core_themes)
+    ? (expertise.core_themes as string[]).join(', ')
+    : '(not yet indexed)';
+
+  const systemPrompt = `You are judging whether new source content answers a set of standing questions for a domain expert agent.
+
+Agent: ${agent.name}
+Agent focus: ${agent.description ?? ''}
+Agent core themes: ${coreThemes}
+
+For each question, you are given top-matching chunks from sources newly added to this user's knowledge graph. Some of these sources are outside this agent's primary domain — treat them as potential cross-domain connections.
+
+Return strict JSON matching this schema — no prose, no code fences:
+{
+  "verdicts": [
+    {
+      "question_id": "<uuid>",
+      "verdict": "answered" | "partially_addressed" | "no_real_answer",
+      "primary_source_id": "<uuid of the most relevant chunk's source, or null>",
+      "snippet": "<=280 chars quote or paraphrase showing why, or empty>",
+      "confidence": <0.0 to 1.0>,
+      "novel_connection": {
+        "bridge_claim": "<one sentence explaining how this source connects to the agent's domain, or empty string if not a bridge>"
+      }
+    }
+  ]
+}
+
+Rules:
+- "answered" only if the source directly resolves the question. Be conservative.
+- "partially_addressed" if it gives meaningful evidence toward the question but leaves gaps.
+- "no_real_answer" if the chunks merely mention related topics without answering.
+- bridge_claim: fill only when the source comes from a domain that is not obviously this agent's — it's the cross-domain insight. Otherwise leave empty.`;
+
+  const payload = batch.map(group => {
+    const first = group[0]!;
+    return {
+      question_id: first.question_id,
+      question_text: first.question_text,
+      chunks: group.map(row => ({
+        source_id: row.source_id,
+        similarity: Number(row.similarity?.toFixed?.(3) ?? row.similarity),
+        content: (row.chunk_content ?? '').slice(0, 600),
+      })),
+    };
+  });
+
+  const userContent = JSON.stringify({ questions: payload });
+
+  const result = await callGemini<{ verdicts: VerdictResponse[] }>(systemPrompt, userContent);
+  return Array.isArray(result?.verdicts) ? result.verdicts : [];
+}
+
+async function phase0_answerCheckAndLink(
+  supabase: SupabaseClient
+): Promise<{
+  result: PhaseResult;
+  perUserCounters: Map<string, Phase0Counters>;
+  runIds: Map<string, string>;
+}> {
+  const phaseStart = Date.now();
+  const perUserCounters = new Map<string, Phase0Counters>();
+  const runIds = new Map<string, string>();
+
+  // 1. Fetch all agents (multi-tenant).
+  const { data: agentsRaw, error: agErr } = await supabase
+    .from('domain_agents')
+    .select('id, user_id, name, description, expertise_index');
+
+  if (agErr) {
+    return {
+      result: { phase: '0_answer_check', success: false, detail: agErr.message, duration_ms: Date.now() - phaseStart },
+      perUserCounters,
+      runIds,
+    };
+  }
+  const agents = (agentsRaw ?? []) as Phase0AgentLite[];
+  if (agents.length === 0) {
+    return {
+      result: { phase: '0_answer_check', success: true, detail: '0 agents', duration_ms: Date.now() - phaseStart },
+      perUserCounters,
+      runIds,
+    };
+  }
+
+  // 2. Identify distinct users and open a council_cron_runs row per user.
+  const userIds = Array.from(new Set(agents.map(a => a.user_id)));
+  const sinceByUser = new Map<string, string>();
+  for (const userId of userIds) {
+    perUserCounters.set(userId, emptyPhase0Counters());
+    sinceByUser.set(userId, await resolveSinceForUser(supabase, userId));
+    const { data: runRow, error: runErr } = await supabase
+      .from('council_cron_runs')
+      .insert({ user_id: userId, status: 'running', phase_counts: {} })
+      .select('id')
+      .maybeSingle();
+    if (runErr) {
+      console.warn(`[council-cron] phase0: failed to create run row for user ${userId}:`, runErr.message);
+      continue;
+    }
+    if (runRow && (runRow as { id: string }).id) {
+      runIds.set(userId, (runRow as { id: string }).id);
+    }
+  }
+
+  // 3. Iterate agents sequentially (Gemini rate limits).
+  let perAgentFailures = 0;
+
+  for (const agent of agents) {
+    const counters = perUserCounters.get(agent.user_id)!;
+    const sinceIso = sinceByUser.get(agent.user_id)!;
+
+    try {
+      counters.agents_scanned += 1;
+
+      const { data: candidates, error: rpcErr } = await supabase.rpc('get_council_pull_candidates', {
+        p_user_id: agent.user_id,
+        p_agent_id: agent.id,
+        p_since: sinceIso,
+        p_similarity_threshold: 0.55,
+        p_top_k: 3,
+      });
+
+      if (rpcErr) {
+        console.warn(`[council-cron] phase0: pull candidates failed for agent ${agent.id}:`, rpcErr.message);
+        perAgentFailures++;
+        continue;
+      }
+
+      const rows = (candidates ?? []) as PullCandidateRow[];
+      if (rows.length === 0) continue;
+
+      const byQuestion = groupPullCandidatesByQuestion(rows);
+      counters.questions_checked += byQuestion.size;
+
+      const questionGroups = Array.from(byQuestion.values());
+      const batches = chunkArray(questionGroups, 30);
+
+      const allVerdicts: VerdictResponse[] = [];
+      for (const batch of batches) {
+        try {
+          const verdicts = await gemini_judgeQuestionAnswers(agent, batch);
+          counters.gemini_calls += 1;
+          allVerdicts.push(...verdicts);
+        } catch (gErr) {
+          const msg = gErr instanceof Error ? gErr.message : String(gErr);
+          console.warn(`[council-cron] phase0: Gemini batch failed for agent ${agent.id}:`, msg);
+        }
+      }
+
+      const updates: BulkUpdateRow[] = [];
+      const novelInsights: NovelInsightRow[] = [];
+      const nowIso = new Date().toISOString();
+
+      for (const verdict of allVerdicts) {
+        if (!verdict || verdict.verdict === 'no_real_answer') continue;
+        const group = byQuestion.get(verdict.question_id);
+        if (!group || group.length === 0) continue;
+
+        const primaryRow = pickPrimaryRow(group, verdict.primary_source_id);
+        if (!primaryRow) continue;
+
+        const snippet = (verdict.snippet ?? '').slice(0, 280);
+        const confidence = typeof verdict.confidence === 'number' ? verdict.confidence : null;
+
+        updates.push({
+          question_id: verdict.question_id,
+          new_source_ids: [primaryRow.source_id],
+          evidence_entries: [{
+            source_id: primaryRow.source_id,
+            verdict: verdict.verdict,
+            snippet,
+            confidence,
+            checked_at: nowIso,
+          }],
+          new_status: verdict.verdict,
+        });
+
+        if (verdict.verdict === 'answered') counters.questions_answered += 1;
+        else counters.questions_partially_addressed += 1;
+
+        const primaryAgentIds = primaryRow.source_primary_agent_ids ?? [];
+        const bridgeClaim = verdict.novel_connection?.bridge_claim?.trim() ?? '';
+        if (!primaryAgentIds.includes(agent.id) && bridgeClaim) {
+          novelInsights.push({
+            user_id: agent.user_id,
+            agent_id: agent.id,
+            insight_type: 'novel_connection',
+            claim: bridgeClaim,
+            evidence_summary: snippet,
+            trigger_source_id: primaryRow.source_id,
+            related_source_ids: [primaryRow.source_id],
+            related_entity_ids: [],
+            confidence: confidence ?? 0.5,
+            status: 'active',
+          });
+          counters.novel_connections_written += 1;
+        }
+      }
+
+      if (updates.length > 0) {
+        const { error: applyErr } = await supabase.rpc('bulk_apply_question_addressing', {
+          p_user_id: agent.user_id,
+          p_updates: updates,
+        });
+        if (applyErr) {
+          console.warn(`[council-cron] phase0: bulk_apply_question_addressing failed for agent ${agent.id}:`, applyErr.message);
+          perAgentFailures++;
+        }
+      }
+
+      if (novelInsights.length > 0) {
+        const { error: insErr } = await supabase.from('agent_insights').insert(novelInsights);
+        if (insErr) {
+          console.warn(`[council-cron] phase0: novel_connection insert failed for agent ${agent.id}:`, insErr.message);
+          perAgentFailures++;
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[council-cron] phase0: agent ${agent.id} failed:`, msg);
+      perAgentFailures++;
+    }
+  }
+
+  // Aggregate totals for the phase detail line.
+  let totalAnswered = 0;
+  let totalPartial = 0;
+  let totalNovel = 0;
+  let totalChecked = 0;
+  let totalGemini = 0;
+  for (const c of perUserCounters.values()) {
+    totalAnswered += c.questions_answered;
+    totalPartial += c.questions_partially_addressed;
+    totalNovel += c.novel_connections_written;
+    totalChecked += c.questions_checked;
+    totalGemini += c.gemini_calls;
+  }
+
+  return {
+    result: {
+      phase: '0_answer_check',
+      success: perAgentFailures === 0,
+      detail: `${agents.length} agents, ${totalChecked} questions checked, ${totalAnswered} answered, ${totalPartial} partial, ${totalNovel} novel connections, ${totalGemini} Gemini calls${perAgentFailures > 0 ? `, ${perAgentFailures} agent failures` : ''}`,
+      duration_ms: Date.now() - phaseStart,
+    },
+    perUserCounters,
+    runIds,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PHASE 1: PROCESS PENDING SIGNALS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1044,6 +1439,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   console.log('[council-cron] Starting nightly advisory council cron');
 
+  // Phase 0: Pull-based answer check + novel-connection insights.
+  // Opens a council_cron_runs row per user; finalised at the end of the handler.
+  let phase0PerUserCounters = new Map<string, Phase0Counters>();
+  let phase0RunIds = new Map<string, string>();
+  let phase0Duration = 0;
+  try {
+    const p0 = await phase0_answerCheckAndLink(supabase);
+    phaseResults.push(p0.result);
+    phase0PerUserCounters = p0.perUserCounters;
+    phase0RunIds = p0.runIds;
+    phase0Duration = p0.result.duration_ms;
+    console.log(`[council-cron] Phase 0 complete: ${p0.result.detail} (${p0.result.duration_ms}ms)`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[council-cron] Phase 0 failed:', msg);
+    phaseResults.push({ phase: '0_answer_check', success: false, detail: msg, duration_ms: Date.now() - startTime });
+  }
+
   // Phase 1: Process pending signals
   try {
     const p1 = await phase1_processSignals(supabase);
@@ -1124,6 +1537,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const totalDuration = Date.now() - startTime;
   const allSuccess = phaseResults.every(p => p.success);
+
+  // Finalise per-user council_cron_runs rows created in Phase 0. One row per
+  // user; phase_counts.phase0 carries that user's Phase 0 counters.
+  const finishedAtIso = new Date().toISOString();
+  const runStatus: 'ok' | 'partial_failure' = allSuccess ? 'ok' : 'partial_failure';
+  const errorSummary = allSuccess
+    ? null
+    : phaseResults.filter(p => !p.success).map(p => `${p.phase}: ${p.detail}`).join('\n');
+
+  for (const [userId, runId] of phase0RunIds.entries()) {
+    const counters = phase0PerUserCounters.get(userId) ?? emptyPhase0Counters();
+    const phaseCounts = {
+      phase0: {
+        agents_scanned: counters.agents_scanned,
+        questions_checked: counters.questions_checked,
+        questions_answered: counters.questions_answered,
+        questions_partially_addressed: counters.questions_partially_addressed,
+        novel_connections_written: counters.novel_connections_written,
+        gemini_calls: counters.gemini_calls,
+        duration_ms: phase0Duration,
+      },
+    };
+    const { error: updErr } = await supabase
+      .from('council_cron_runs')
+      .update({
+        finished_at: finishedAtIso,
+        status: runStatus,
+        phase_counts: phaseCounts,
+        error: errorSummary,
+      })
+      .eq('id', runId);
+    if (updErr) {
+      console.warn(`[council-cron] Failed to finalise council_cron_runs row ${runId}:`, updErr.message);
+    }
+  }
 
   console.log(`[council-cron] Complete in ${totalDuration}ms — ${allSuccess ? 'ALL PASSED' : 'SOME FAILED'}`);
 
