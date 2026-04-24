@@ -6,6 +6,8 @@ import type { KnowledgeSource } from '../../types/database'
 interface RecentSourcesPanelProps {
   sources: KnowledgeSource[]
   entityCounts: Record<string, number>
+  crossConnectionCounts?: Record<string, number>
+  relatedSourceCounts?: Record<string, number>
   loading: boolean
   error?: string
   onSourceClick: (source: KnowledgeSource) => void
@@ -18,6 +20,8 @@ interface RecentSourcesPanelProps {
 export function RecentSourcesPanel({
   sources,
   entityCounts,
+  crossConnectionCounts,
+  relatedSourceCounts,
   loading,
   error,
   onSourceClick,
@@ -121,6 +125,8 @@ export function RecentSourcesPanel({
               key={source.id}
               source={source}
               entityCount={entityCounts[source.id] ?? 0}
+              crossConnectionCount={crossConnectionCounts?.[source.id] ?? 0}
+              relatedSourceCount={relatedSourceCounts?.[source.id] ?? 0}
               onClick={() => onSourceClick(source)}
               onExplore={onExploreSource}
               onChat={onChatWithSource}

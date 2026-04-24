@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { ChevronRight, Search, MessageSquare, GitFork } from 'lucide-react'
+import { ChevronRight, Search, MessageSquare, GitFork, Network, Link2, Layers } from 'lucide-react'
 import { ProviderIcon } from '../shared/ProviderIcon'
 import { SpotlightCard } from '../ui/SpotlightCard'
-import { formatSourceSummary } from '../../utils/sourceDisplay'
 import type { KnowledgeSource } from '../../types/database'
 
 interface SourceFeedItemProps {
   source: KnowledgeSource
   entityCount: number
+  crossConnectionCount?: number
+  relatedSourceCount?: number
   onClick: () => void
   onExplore?: (source: KnowledgeSource) => void
   onChat?: (source: KnowledgeSource) => void
@@ -41,9 +42,22 @@ function getSpotlightColor(sourceType: string): string {
   return SOURCE_TYPE_COLORS[sourceType] ?? 'rgba(214, 58, 0, 0.06)'
 }
 
-export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat, onGraph, stretch }: SourceFeedItemProps) {
+function Stat({ icon, value, label }: { icon: React.ReactNode; value: number; label: string }) {
+  return (
+    <span
+      className="flex items-center font-body text-text-secondary"
+      style={{ gap: 4, fontSize: 11, fontVariantNumeric: 'tabular-nums' }}
+      title={`${value} ${label}`}
+    >
+      <span style={{ color: 'var(--color-text-placeholder)', display: 'flex' }}>{icon}</span>
+      <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>{value}</span>
+      <span style={{ color: 'var(--color-text-placeholder)' }}>{label}</span>
+    </span>
+  )
+}
+
+export function SourceFeedItem({ source, entityCount, crossConnectionCount, relatedSourceCount, onClick, onExplore, onChat, onGraph, stretch }: SourceFeedItemProps) {
   const provider = (source.metadata as Record<string, unknown> | null)?.provider as string | undefined
-  const summary = formatSourceSummary(source.summary) || null
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -57,95 +71,45 @@ export function SourceFeedItem({ source, entityCount, onClick, onExplore, onChat
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Main row content */}
+      {/* Main row content — two lines: title, then stats */}
       <button
         type="button"
         onClick={onClick}
-        className="flex w-full text-left bg-transparent cursor-pointer border-none"
+        className="flex w-full text-left bg-transparent cursor-pointer border-none items-start"
         style={{
-          gap: 14,
-          padding: '14px 20px',
-          alignItems: 'flex-start',
+          gap: 12,
+          padding: '12px 20px',
           background: 'transparent',
         }}
       >
         <ProviderIcon
           sourceType={source.source_type}
           provider={provider}
-          size={36}
-          borderRadius={9}
+          size={32}
+          borderRadius={8}
         />
 
         <div className="flex-1 min-w-0">
-          {/* Title row */}
-          <div className="flex items-center" style={{ gap: 8, marginBottom: summary ? 4 : 0 }}>
+          {/* Line 1: title + chevron */}
+          <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
             <span
-              className="font-display text-text-primary truncate flex-1"
+              className="font-display text-text-primary truncate flex-1 min-w-0"
               style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.01em' }}
             >
               {source.title ?? 'Untitled'}
             </span>
-            <span className="font-body text-text-placeholder shrink-0" style={{ fontSize: 11 }}>
-              {formatRelativeTime(source.created_at)}
-            </span>
-            {entityCount > 0 ? (
-              <span
-                className="font-body shrink-0"
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  padding: '2px 7px',
-                  borderRadius: 4,
-                  background: 'rgba(0,0,0,0.04)',
-                  color: 'var(--color-text-secondary)',
-                }}
-              >
-                {entityCount} entities
-              </span>
-            ) : (
-              <span
-                className="font-body font-semibold inline-flex items-center shrink-0"
-                style={{
-                  fontSize: 10,
-                  padding: '2px 8px',
-                  borderRadius: 20,
-                  border: '1px solid rgba(180,83,9,0.25)',
-                  background: 'rgba(180,83,9,0.07)',
-                  color: '#b45309',
-                  gap: 5,
-                }}
-              >
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    background: '#b45309',
-                    animation: 'pulse 1.4s ease-in-out infinite',
-                  }}
-                />
-                Processing…
-              </span>
-            )}
             <ChevronRight size={13} style={{ color: 'var(--color-text-placeholder)', flexShrink: 0 }} />
           </div>
 
-          {/* Summary — always rendered to maintain consistent row height */}
-          <p
-            className="font-body text-text-secondary"
-            style={{
-              fontSize: 12,
-              lineHeight: 1.5,
-              minHeight: 36,
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-              margin: 0,
-            }}
-          >
-            {summary ?? ''}
-          </p>
+          {/* Line 2: stats + timestamp */}
+          <div className="flex items-center" style={{ gap: 14 }}>
+            <Stat icon={<Layers size={11} />} value={entityCount} label="entities" />
+            <Stat icon={<Network size={11} />} value={crossConnectionCount ?? 0} label="connections" />
+            <Stat icon={<Link2 size={11} />} value={relatedSourceCount ?? 0} label="related" />
+            <span className="font-body text-text-placeholder shrink-0" style={{ fontSize: 11, marginLeft: 'auto' }}>
+              {formatRelativeTime(source.created_at)}
+            </span>
+          </div>
         </div>
       </button>
 

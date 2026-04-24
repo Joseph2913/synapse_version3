@@ -1,6 +1,6 @@
 import { createContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 import { useAuth } from '../../hooks/useAuth'
-import { supabase } from '../../services/supabase'
+import { supabase, fetchCouncilDigest, fetchRecentSourceRelationCounts } from '../../services/supabase'
 import type { KnowledgeNode, KnowledgeSource, KnowledgeSkill } from '../../types/database'
 import type {
   HomeDashboardStats,
@@ -8,6 +8,7 @@ import type {
   PipelineStatus,
   KnowledgeSnapshot,
 } from '../../services/supabase'
+import type { CouncilDigest } from '../../types/council'
 
 // ─── Public types (match original useHomeDashboard interface) ────────────────
 
@@ -18,18 +19,22 @@ export interface HomeDashboardLoading {
   crossConnections: boolean
   pipeline: boolean
   snapshot: boolean
+  councilDigest: boolean
 }
 
 export interface HomeDashboardData {
   stats: HomeDashboardStats | null
   recentSources: KnowledgeSource[]
   sourceEntityCounts: Record<string, number>
+  sourceCrossConnectionCounts: Record<string, number>
+  sourceRelatedSourceCounts: Record<string, number>
   recentAnchors: KnowledgeNode[]
   anchorConnectionCounts: Record<string, number>
   recentSkills: KnowledgeSkill[]
   crossConnections: CrossConnectionEdge[]
   pipelineStatus: PipelineStatus | null
   snapshot: KnowledgeSnapshot | null
+  councilDigest: CouncilDigest | null
   loading: HomeDashboardLoading
   errors: Partial<Record<keyof HomeDashboardLoading, string>>
   refresh: () => void
@@ -90,14 +95,17 @@ export function HomeDashboardProvider({ children }: { children: ReactNode }) {
   const [stats, setStats] = useState<HomeDashboardStats | null>(null)
   const [recentSources, setRecentSources] = useState<KnowledgeSource[]>([])
   const [sourceEntityCounts, setSourceEntityCounts] = useState<Record<string, number>>({})
+  const [sourceCrossConnectionCounts, setSourceCrossConnectionCounts] = useState<Record<string, number>>({})
+  const [sourceRelatedSourceCounts, setSourceRelatedSourceCounts] = useState<Record<string, number>>({})
   const [recentAnchors, setRecentAnchors] = useState<KnowledgeNode[]>([])
   const [anchorConnectionCounts, setAnchorConnectionCounts] = useState<Record<string, number>>({})
   const [recentSkills, setRecentSkills] = useState<KnowledgeSkill[]>([])
   const [crossConnections, setCrossConnections] = useState<CrossConnectionEdge[]>([])
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null)
   const [snapshot, setSnapshot] = useState<KnowledgeSnapshot | null>(null)
-  const allLoading: HomeDashboardLoading = { stats: true, sources: true, signals: true, crossConnections: true, pipeline: true, snapshot: true }
-  const allDone: HomeDashboardLoading = { stats: false, sources: false, signals: false, crossConnections: false, pipeline: false, snapshot: false }
+  const [councilDigest, setCouncilDigest] = useState<CouncilDigest | null>(null)
+  const allLoading: HomeDashboardLoading = { stats: true, sources: true, signals: true, crossConnections: true, pipeline: true, snapshot: true, councilDigest: true }
+  const allDone: HomeDashboardLoading = { stats: false, sources: false, signals: false, crossConnections: false, pipeline: false, snapshot: false, councilDigest: false }
 
   const [loading, setLoading] = useState<HomeDashboardLoading>(allDone)
   const [errors, setErrors] = useState<Partial<Record<keyof HomeDashboardLoading, string>>>({})
@@ -113,9 +121,35 @@ export function HomeDashboardProvider({ children }: { children: ReactNode }) {
 
     const id = ++fetchCountRef.current
     try {
-      const { data, error: rpcError } = await supabase.rpc('get_home_dashboard', { p_user_id: user.id })
-      if (rpcError) throw new Error(rpcError.message)
+      const [dashboardRes, digestRes, relationCountsRes] = await Promise.allSettled([
+        supabase.rpc('get_home_dashboard', { p_user_id: user.id }),
+        fetchCouncilDigest(user.id, 7),
+        fetchRecentSourceRelationCounts(user.id, 5),
+      ])
       if (id !== fetchCountRef.current) return // stale
+
+      if (dashboardRes.status === 'rejected') throw new Error(String(dashboardRes.reason))
+      const { data, error: rpcError } = dashboardRes.value
+      if (rpcError) throw new Error(rpcError.message)
+
+      // Council digest is non-fatal — record error but keep loading the rest
+      if (digestRes.status === 'fulfilled') {
+        setCouncilDigest(digestRes.value)
+      } else {
+        const msg = digestRes.reason instanceof Error ? digestRes.reason.message : "Couldn't load Council digest."
+        setErrors(prev => ({ ...prev, councilDigest: msg }))
+      }
+
+      if (relationCountsRes.status === 'fulfilled') {
+        const cross: Record<string, number> = {}
+        const related: Record<string, number> = {}
+        for (const r of relationCountsRes.value) {
+          cross[r.source_id] = r.cross_connection_count
+          related[r.source_id] = r.related_source_count
+        }
+        setSourceCrossConnectionCounts(cross)
+        setSourceRelatedSourceCounts(related)
+      }
 
       const d = data as RpcDashboardResponse
 
@@ -147,7 +181,7 @@ export function HomeDashboardProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       if (id !== fetchCountRef.current) return
       const msg = err instanceof Error ? err.message : "Couldn't load dashboard."
-      setErrors({ stats: msg, sources: msg, signals: msg, crossConnections: msg, pipeline: msg, snapshot: msg })
+      setErrors({ stats: msg, sources: msg, signals: msg, crossConnections: msg, pipeline: msg, snapshot: msg, councilDigest: msg })
     } finally {
       if (id === fetchCountRef.current) setLoading(allDone)
     }
@@ -192,12 +226,15 @@ export function HomeDashboardProvider({ children }: { children: ReactNode }) {
       setStats(null)
       setRecentSources([])
       setSourceEntityCounts({})
+      setSourceCrossConnectionCounts({})
+      setSourceRelatedSourceCounts({})
       setRecentAnchors([])
       setAnchorConnectionCounts({})
       setRecentSkills([])
       setCrossConnections([])
       setPipelineStatus(null)
       setSnapshot(null)
+      setCouncilDigest(null)
       setLoading(allDone)
       setErrors({})
       hasFetchedRef.current = false
@@ -209,12 +246,15 @@ export function HomeDashboardProvider({ children }: { children: ReactNode }) {
     stats,
     recentSources,
     sourceEntityCounts,
+    sourceCrossConnectionCounts,
+    sourceRelatedSourceCounts,
     recentAnchors,
     anchorConnectionCounts,
     recentSkills,
     crossConnections,
     pipelineStatus,
     snapshot,
+    councilDigest,
     loading,
     errors,
     refresh,
