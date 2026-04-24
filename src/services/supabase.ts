@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { UserProfile, ExtractionSettings, KnowledgeNode, KnowledgeEdge, KnowledgeSource, KnowledgeSkill, DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow } from '../types/database'
+import type { UserProfile, ExtractionSettings, KnowledgeNode, KnowledgeEdge, KnowledgeSource, KnowledgeSkill, DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow } from '../types/database'
 import type { NodeFilters, PaginationOptions, NodeWithMeta, NodeNeighbor } from '../types/nodes'
 import type { CrossConnection } from '../types/feed'
 import type { ExtractionSession } from '../types/extraction'
@@ -2756,30 +2756,6 @@ export async function fetchAgentGaps(agentId: string): Promise<AgentGapRow[]> {
   return (data ?? []) as AgentGapRow[]
 }
 
-export async function fetchAgentSignalsOut(agentId: string): Promise<AgentSignalRow[]> {
-  const { data, error } = await supabase
-    .from('agent_signals')
-    .select('*')
-    .eq('source_agent_id', agentId)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  if (error) throw error
-  return (data ?? []) as AgentSignalRow[]
-}
-
-export async function fetchAgentSignalsIn(agentId: string): Promise<AgentSignalRow[]> {
-  const { data, error } = await supabase
-    .from('agent_signals')
-    .select('*')
-    .eq('target_agent_id', agentId)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  if (error) throw error
-  return (data ?? []) as AgentSignalRow[]
-}
-
 export async function fetchAgentSkillAssignments(agentId: string): Promise<AgentSkillAssignment[]> {
   const { data, error } = await supabase
     .from('domain_agent_skills')
@@ -2838,94 +2814,6 @@ export async function fetchTopSkillsWithAgents(limit = 5): Promise<Array<{
   }))
 }
 
-// ─── Signal Enrichment (resolve bridge entities, edges, trigger sources) ────
-
-export interface BridgeEntityInfo {
-  id: string
-  label: string
-  entity_type: string
-  description: string | null
-}
-
-export interface BridgeEdgeInfo {
-  id: string
-  relation_type: string
-  evidence: string | null
-  weight: number | null
-}
-
-export interface TriggerSourceInfo {
-  id: string
-  title: string | null
-  source_type: string | null
-}
-
-export interface EnrichedSignalContext {
-  bridgeEntities: BridgeEntityInfo[]
-  bridgeEdge: BridgeEdgeInfo | null
-  triggerSource: TriggerSourceInfo | null
-}
-
-export async function enrichSignalsContext(signals: AgentSignalRow[]): Promise<Map<string, EnrichedSignalContext>> {
-  const result = new Map<string, EnrichedSignalContext>()
-  if (signals.length === 0) return result
-
-  // Collect all IDs to resolve
-  const entityIds = new Set<string>()
-  const edgeIds = new Set<string>()
-  const sourceIds = new Set<string>()
-
-  for (const s of signals) {
-    for (const eid of (s.bridge_entity_ids || [])) entityIds.add(eid)
-    if (s.bridge_edge_id) edgeIds.add(s.bridge_edge_id)
-    if (s.trigger_source_id) sourceIds.add(s.trigger_source_id)
-  }
-
-  // Fetch all in parallel
-  const [entitiesRes, edgesRes, sourcesRes] = await Promise.all([
-    entityIds.size > 0
-      ? supabase.from('knowledge_nodes').select('id, label, entity_type, description').in('id', [...entityIds].slice(0, 200))
-      : Promise.resolve({ data: [], error: null }),
-    edgeIds.size > 0
-      ? supabase.from('knowledge_edges').select('id, relation_type, evidence, weight').in('id', [...edgeIds].slice(0, 100))
-      : Promise.resolve({ data: [], error: null }),
-    sourceIds.size > 0
-      ? supabase.from('knowledge_sources').select('id, title, source_type').in('id', [...sourceIds].slice(0, 100))
-      : Promise.resolve({ data: [], error: null }),
-  ])
-
-  const entityMap = new Map((entitiesRes.data ?? []).map((e: Record<string, unknown>) => [e.id as string, e as unknown as BridgeEntityInfo]))
-  const edgeMap = new Map((edgesRes.data ?? []).map((e: Record<string, unknown>) => [e.id as string, e as unknown as BridgeEdgeInfo]))
-  const sourceMap = new Map((sourcesRes.data ?? []).map((s: Record<string, unknown>) => [s.id as string, s as unknown as TriggerSourceInfo]))
-
-  for (const s of signals) {
-    const bridgeEntities = (s.bridge_entity_ids || []).map(id => entityMap.get(id)).filter((e): e is BridgeEntityInfo => !!e)
-    const bridgeEdge = s.bridge_edge_id ? edgeMap.get(s.bridge_edge_id) ?? null : null
-    const triggerSource = s.trigger_source_id ? sourceMap.get(s.trigger_source_id) ?? null : null
-
-    result.set(s.id, { bridgeEntities, bridgeEdge, triggerSource })
-  }
-
-  return result
-}
-
-export async function fetchGlobalSignals(limit = 10, actionedOnly = false): Promise<(AgentSignalRow & { source_agent_name?: string; target_agent_name?: string })[]> {
-  let query = supabase
-    .from('agent_signals')
-    .select('*')
-
-  if (actionedOnly) {
-    query = query.in('processing_result', ['targeted_extraction', 'full_ingestion'])
-  }
-
-  const { data, error } = await query
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (error) throw error
-  return (data ?? []) as AgentSignalRow[]
-}
-
 export async function fetchGlobalInsights(limit = 10): Promise<(AgentInsightRow & { agent_name?: string })[]> {
   // Fetch active insights from the last 30 days, pull more than needed so we can rank client-side
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
@@ -2954,20 +2842,17 @@ export async function fetchGlobalInsights(limit = 10): Promise<(AgentInsightRow 
 export async function fetchAgentCounts(agentId: string): Promise<{
   standingQuestions: number
   insights: number
-  signalsOut: number
   gaps: number
 }> {
-  const [qRes, iRes, sRes, gRes] = await Promise.all([
+  const [qRes, iRes, gRes] = await Promise.all([
     supabase.from('agent_standing_questions').select('id', { count: 'exact', head: true }).eq('agent_id', agentId).in('status', ['open', 'partially_addressed']),
     supabase.from('agent_insights').select('id', { count: 'exact', head: true }).eq('agent_id', agentId).eq('status', 'active'),
-    supabase.from('agent_signals').select('id', { count: 'exact', head: true }).eq('source_agent_id', agentId),
     supabase.from('agent_gaps').select('id', { count: 'exact', head: true }).eq('agent_id', agentId).in('status', ['active', 'filling']),
   ])
 
   return {
     standingQuestions: qRes.count ?? 0,
     insights: iRes.count ?? 0,
-    signalsOut: sRes.count ?? 0,
     gaps: gRes.count ?? 0,
   }
 }
@@ -3025,19 +2910,6 @@ export interface BriefingInsight {
   created_at: string
 }
 
-export interface BriefingSignal {
-  id: string
-  source_agent_id: string
-  target_agent_id: string
-  reason: string
-  status: string
-  processing_result: string | null
-  bridge_entity_ids: string[]
-  extracted_entity_ids: string[]
-  processed_at: string | null
-  created_at: string
-}
-
 export interface BriefingSkillAssignment {
   id: string
   agent_id: string
@@ -3060,17 +2932,6 @@ export async function fetchBriefingInsights(limit = 30): Promise<BriefingInsight
 
   if (error) throw error
   return (data ?? []) as BriefingInsight[]
-}
-
-export async function fetchBriefingSignals(limit = 30): Promise<BriefingSignal[]> {
-  const { data, error } = await supabase
-    .from('agent_signals')
-    .select('id, source_agent_id, target_agent_id, reason, status, processing_result, bridge_entity_ids, extracted_entity_ids, processed_at, created_at')
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (error) throw error
-  return (data ?? []) as BriefingSignal[]
 }
 
 export async function fetchBriefingSkillAssignments(limit = 30): Promise<BriefingSkillAssignment[]> {

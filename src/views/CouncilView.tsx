@@ -1,18 +1,16 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { SpotlightCard } from '../components/ui/SpotlightCard'
-import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, HelpCircle, Zap, Circle, Check, type LucideIcon } from 'lucide-react'
+import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, HelpCircle, Zap, type LucideIcon } from 'lucide-react'
 import {
   fetchDomainAgents,
   fetchAgentQuestions,
   fetchAgentInsights,
   fetchAgentGaps,
-  fetchAgentSignalsOut,
-  fetchGlobalSignals,
   fetchGlobalInsights,
   fetchAgentCounts,
 } from '../services/supabase'
-import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow } from '../types/database'
+import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow } from '../types/database'
 import type { AddressingEvidenceEntry } from '../types/council'
 import { QuestionStatusBadge } from '../components/council/QuestionStatusBadge'
 import { CouncilTelemetryStrip } from '../components/council/CouncilTelemetryStrip'
@@ -73,7 +71,6 @@ interface Advisor {
   themes: Array<{ label: string; color: string }>
   standingQuestions: number
   newInsights: number
-  signalsOut: number
   gaps: number
   expertiseIndex?: Array<{ area: string; confidence: number }>
   weakAreas?: string[]
@@ -84,7 +81,6 @@ interface Advisor {
   questions?: StandingQuestion[]
   insights?: AgentInsight[]
   agentGaps?: AgentGap[]
-  signals?: AgentSignal[]
 }
 
 interface StandingQuestion {
@@ -115,14 +111,6 @@ interface AgentGap {
   suggestion: string
 }
 
-interface AgentSignal {
-  id: string
-  target: string
-  reason: string
-  status: string
-  timestamp: string
-}
-
 // ── Helpers to map DB → UI ──────────────────────────────────────────────────
 
 function timeAgo(dateStr: string | null): string {
@@ -144,7 +132,7 @@ const THEME_COLORS = [
   ENTITY_COLORS.product, ENTITY_COLORS.action,
 ]
 
-function mapAgentToAdvisor(agent: DomainAgent, counts: { standingQuestions: number; insights: number; signalsOut: number; gaps: number }): Advisor {
+function mapAgentToAdvisor(agent: DomainAgent, counts: { standingQuestions: number; insights: number; gaps: number }): Advisor {
   const exp = agent.expertise_index as {
     summary?: string
     core_themes?: string[]
@@ -197,7 +185,6 @@ function mapAgentToAdvisor(agent: DomainAgent, counts: { standingQuestions: numb
     themes,
     standingQuestions: counts.standingQuestions,
     newInsights: counts.insights,
-    signalsOut: counts.signalsOut,
     gaps: counts.gaps,
     expertiseIndex: expertiseIndex.length > 0 ? expertiseIndex : undefined,
     weakAreas: weakAreas.length > 0 ? weakAreas : undefined,
@@ -239,16 +226,6 @@ function mapGap(g: AgentGapRow): AgentGap {
     topic: g.topic,
     description: g.description ?? '',
     suggestion: g.content_suggestion ?? '',
-  }
-}
-
-function mapSignal(s: AgentSignalRow, agentNameMap: Map<string, string>): AgentSignal {
-  return {
-    id: s.id,
-    target: agentNameMap.get(s.target_agent_id) ?? 'Unknown',
-    reason: s.reason,
-    status: s.status === 'pending' ? 'pending' : 'processed',
-    timestamp: timeAgo(s.created_at),
   }
 }
 
@@ -424,8 +401,6 @@ function AdvisorCard({ advisor, onClick }: { advisor: Advisor; onClick: () => vo
               <span>{advisor.videoCount} sources</span>
               <span style={{ opacity: 0.4 }}>·</span>
               <span>{advisor.newInsights} insights</span>
-              <span style={{ opacity: 0.4 }}>·</span>
-              <span>{advisor.signalsOut} signals</span>
             </div>
           </div>
         </div>
@@ -508,9 +483,8 @@ function CouncilListCenter({ filtered, onSelectAdvisor }: { filtered: Advisor[];
 
 // ── Council List View (Right Panel) ─────────────────────────────────────────
 
-function CouncilListRight({ advisors, globalSignals, globalInsights }: {
+function CouncilListRight({ advisors, globalInsights }: {
   advisors: Advisor[]
-  globalSignals: Array<{ source: string; target: string; reason: string; status: string }>
   globalInsights: Array<{ type: string; agent: string; claim: string }>
 }) {
   const healthCounts = {
@@ -553,44 +527,6 @@ function CouncilListRight({ advisors, globalSignals, globalInsights }: {
             </div>
           </div>
         ))}
-      </div>
-
-      {/* ACTIVE SIGNALS */}
-      <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16, marginBottom: 20 }}>
-        <SL>Active Signals</SL>
-        <div className="flex flex-col" style={{ gap: 8 }}>
-          {globalSignals.slice(0, 3).map((s, i) => (
-            <div
-              key={i}
-              style={{
-                background: 'var(--color-bg-inset)',
-                borderRadius: 8,
-                padding: '10px 12px',
-              }}
-            >
-              <div className="font-body" style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                {s.source} → {s.target}
-              </div>
-              <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                {s.reason}
-              </div>
-              <div
-                className="font-body flex items-center gap-1"
-                style={{
-                  fontSize: 10,
-                  marginTop: 4,
-                  color: s.status === 'pending' ? 'var(--color-accent-500)' : '#15803d',
-                  fontWeight: 500,
-                }}
-              >
-                {s.status === 'pending' ? <><Circle size={8} fill="currentColor" /> Pending</> : <><Check size={10} /> Processed</>}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="font-body" style={{ marginTop: 10, fontSize: 11, color: 'var(--color-accent-500)', cursor: 'pointer', fontWeight: 500 }}>
-          View all {globalSignals.length} signals ›
-        </div>
       </div>
 
       {/* RECENT INSIGHTS */}
@@ -637,7 +573,7 @@ function CouncilListRight({ advisors, globalSignals, globalInsights }: {
             </span>
           </div>
           <div className="font-body" style={{ fontSize: 10, color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
-            Ran at 03:00 UTC · 5 signals processed · 2 extractions completed
+            Ran at 03:00 UTC · answer-check and insight refresh completed
           </div>
         </div>
       </div>
@@ -1020,42 +956,6 @@ function AdvisorDetailRight({ advisor }: { advisor: Advisor }) {
         </div>
       )}
 
-      {/* SIGNALS SENT */}
-      {advisor.signals && advisor.signals.length > 0 && (
-        <div>
-          <SL>Signals Sent · {advisor.signals.length}</SL>
-          <div className="flex flex-col" style={{ gap: 8 }}>
-            {advisor.signals.map((s) => (
-              <div
-                key={s.id}
-                style={{
-                  background: 'var(--color-bg-inset)',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                }}
-              >
-                <div className="font-body" style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                  → {s.target}
-                </div>
-                <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                  {s.reason}
-                </div>
-                <div
-                  className="font-body flex items-center gap-1"
-                  style={{
-                    fontSize: 10,
-                    marginTop: 4,
-                    color: s.status === 'pending' ? 'var(--color-accent-500)' : '#15803d',
-                    fontWeight: 500,
-                  }}
-                >
-                  {s.status === 'pending' ? <><Circle size={8} fill="currentColor" /> Pending</> : <><Check size={10} /> Processed</>} · {s.timestamp}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -1070,8 +970,6 @@ export function CouncilView() {
   const [advisors, setAdvisors] = useState<Advisor[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null)
-  const [agentNameMap, setAgentNameMap] = useState<Map<string, string>>(new Map())
-  const [globalSignals, setGlobalSignals] = useState<Array<{ source: string; target: string; reason: string; status: string }>>([])
   const [globalInsights, setGlobalInsights] = useState<Array<{ type: string; agent: string; claim: string }>>([])
 
   // Deep-linking from Home Council Digest: ?agent=<id>&focus=<itemId>
@@ -1089,7 +987,6 @@ export function CouncilView() {
         const agents = await fetchDomainAgents()
         const nameMap = new Map(agents.map(a => [a.id, a.name]))
         if (cancelled) return
-        setAgentNameMap(nameMap)
 
         // Fetch counts for all agents in parallel
         const countsArr = await Promise.all(agents.map(a => fetchAgentCounts(a.id)))
@@ -1098,16 +995,10 @@ export function CouncilView() {
         const mapped = agents.map((a, i) => mapAgentToAdvisor(a, countsArr[i]!))
         setAdvisors(mapped)
 
-        // Fetch global signals + insights
-        const [sigData, insData] = await Promise.all([fetchGlobalSignals(10), fetchGlobalInsights(10)])
+        // Fetch global insights
+        const insData = await fetchGlobalInsights(10)
         if (cancelled) return
 
-        setGlobalSignals(sigData.map(s => ({
-          source: nameMap.get(s.source_agent_id) ?? 'Unknown',
-          target: nameMap.get(s.target_agent_id) ?? 'Unknown',
-          reason: s.reason,
-          status: s.status === 'pending' ? 'pending' : 'processed',
-        })))
         setGlobalInsights(insData.map(ins => ({
           type: ins.insight_type,
           agent: nameMap.get(ins.agent_id) ?? 'Unknown',
@@ -1166,11 +1057,10 @@ export function CouncilView() {
     let cancelled = false
     async function loadDetail() {
       try {
-        const [questions, insights, gaps, signals] = await Promise.all([
+        const [questions, insights, gaps] = await Promise.all([
           fetchAgentQuestions(agentId),
           fetchAgentInsights(agentId),
           fetchAgentGaps(agentId),
-          fetchAgentSignalsOut(agentId),
         ])
         if (cancelled) return
 
@@ -1181,7 +1071,6 @@ export function CouncilView() {
             questions: questions.map(mapQuestion),
             insights: insights.map(mapInsight),
             agentGaps: gaps.map(mapGap),
-            signals: signals.map(s => mapSignal(s, agentNameMap)),
           }
         }))
       } catch (err) {
@@ -1190,18 +1079,17 @@ export function CouncilView() {
     }
     loadDetail()
     return () => { cancelled = true }
-  }, [selectedAdvisorId, agentNameMap])
+  }, [selectedAdvisorId])
 
   // List filters
   const [searchTerm, setSearchTerm] = useState('')
   const [healthFilter, setHealthFilter] = useState<string>('all')
-  const [toggleFilter, setToggleFilter] = useState<'all' | 'strong' | 'signals'>('all')
+  const [toggleFilter, setToggleFilter] = useState<'all' | 'strong'>('all')
 
   const filtered = advisors.filter((a) => {
     if (searchTerm && !a.name.toLowerCase().includes(searchTerm.toLowerCase())) return false
     if (healthFilter !== 'all' && a.health !== healthFilter) return false
     if (toggleFilter === 'strong' && !['strong', 'growing'].includes(a.health)) return false
-    if (toggleFilter === 'signals' && a.signalsOut === 0) return false
     return true
   })
 
@@ -1313,7 +1201,7 @@ export function CouncilView() {
             </div>
 
             {/* Toggle group */}
-            {(['all', 'strong', 'signals'] as const).map((key) => (
+            {(['all', 'strong'] as const).map((key) => (
               <button
                 key={key}
                 type="button"
@@ -1331,7 +1219,7 @@ export function CouncilView() {
                   transition: 'all 0.15s ease',
                 }}
               >
-                {key === 'all' ? 'All' : key === 'strong' ? 'Strong' : 'Signals'}
+                {key === 'all' ? 'All' : 'Strong'}
               </button>
             ))}
 
@@ -1424,7 +1312,7 @@ export function CouncilView() {
           {selectedAdvisor ? (
             <AdvisorDetailRight advisor={selectedAdvisor} />
           ) : (
-            <CouncilListRight advisors={advisors} globalSignals={globalSignals} globalInsights={globalInsights} />
+            <CouncilListRight advisors={advisors} globalInsights={globalInsights} />
           )}
         </div>
       </div>

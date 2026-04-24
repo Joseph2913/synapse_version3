@@ -1,20 +1,16 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, ChevronDown, GripVertical, RefreshCw, ArrowRight, X } from 'lucide-react'
+import { Search, ChevronDown, GripVertical, RefreshCw, X } from 'lucide-react'
 import {
   fetchDomainAgents,
   fetchAgentSkills,
   fetchBriefingInsights,
-  fetchBriefingSignals,
   fetchBriefingSkillAssignments,
-  enrichSignalsContext,
   type AgentSkillAssignment,
   type BriefingInsight,
-  type BriefingSignal,
   type BriefingSkillAssignment,
-  type EnrichedSignalContext,
 } from '../services/supabase'
-import type { DomainAgent, AgentSignalRow, HealthStatus } from '../types/database'
+import type { DomainAgent, HealthStatus } from '../types/database'
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────────────
 
@@ -41,7 +37,6 @@ type SortKey = 'sources' | 'skills' | 'health' | 'alpha'
 type HealthFilter = 'all' | HealthStatus
 type Selection =
   | { type: 'insight'; data: BriefingInsight }
-  | { type: 'signal'; data: BriefingSignal }
   | { type: 'skill'; data: BriefingSkillAssignment }
   | null
 
@@ -156,42 +151,6 @@ function InsightCard({ insight, agentName, selected, onSelect }: {
   )
 }
 
-// ─── SIGNAL CARD (compact) ──────────────────────────────────────────────────
-
-function SignalCard({ signal, sourceAgentName, targetAgentName, selected, onSelect, context }: {
-  signal: BriefingSignal; sourceAgentName: string; targetAgentName: string; selected: boolean; onSelect: () => void; context?: EnrichedSignalContext
-}) {
-  const isPending = signal.status === 'pending'
-  const extractedCount = signal.extracted_entity_ids?.length || 0
-  const statusText = isPending ? 'Pending' : signal.processing_result === 'targeted_extraction' ? `Extracted ${extractedCount} entities` : 'Acknowledged'
-  const triggerTitle = context?.triggerSource?.title
-  const summary = triggerTitle
-    ? `While ingesting "${triggerTitle}", the ${sourceAgentName} agent found a cross-domain connection.`
-    : signal.reason
-
-  return (
-    <div onClick={onSelect} style={{
-      background: selected ? 'var(--color-accent-50)' : 'var(--color-bg-card)',
-      border: `1px solid ${selected ? 'rgba(214,58,0,0.15)' : 'var(--border-subtle)'}`,
-      borderRadius: 12, padding: '12px 16px', marginBottom: 6, cursor: 'pointer',
-      transition: 'all 0.15s ease',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>{sourceAgentName}</span>
-        <ArrowRight size={12} style={{ color: 'var(--color-text-secondary)', flexShrink: 0 }} />
-        <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>{targetAgentName}</span>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)', flexShrink: 0 }}>
-          <span style={{ width: 5, height: 5, borderRadius: '50%', background: isPending ? 'var(--color-text-placeholder)' : 'var(--color-accent-500)' }} />
-          {statusText} · {timeAgo(signal.processed_at || signal.created_at)}
-        </span>
-      </div>
-      <div style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-        {summary}
-      </div>
-    </div>
-  )
-}
-
 // ─── SKILL ASSIGNMENT CARD (compact) ────────────────────────────────────────
 
 function SkillAssignmentCard({ assignment, agentName, selected, onSelect }: {
@@ -235,8 +194,8 @@ function SkillAssignmentCard({ assignment, agentName, selected, onSelect }: {
 
 // ─── RIGHT PANEL: DETAIL VIEW ───────────────────────────────────────────────
 
-function DetailPanel({ selection, agentNameMap, onClose, signalContextMap }: {
-  selection: Selection; agentNameMap: Map<string, string>; onClose: () => void; signalContextMap: Map<string, EnrichedSignalContext>
+function DetailPanel({ selection, agentNameMap, onClose }: {
+  selection: Selection; agentNameMap: Map<string, string>; onClose: () => void
 }) {
   if (!selection) return null
 
@@ -293,93 +252,6 @@ function DetailPanel({ selection, agentNameMap, onClose, signalContextMap }: {
 
         <div style={labelStyle}>Surfaced</div>
         <div style={metaStyle}>{formatDate(d.created_at)}</div>
-      </>
-    )
-  }
-
-  if (selection.type === 'signal') {
-    const d = selection.data
-    const sourceName = agentNameMap.get(d.source_agent_id) || 'Unknown'
-    const targetName = agentNameMap.get(d.target_agent_id) || 'Unknown'
-    const extractedCount = d.extracted_entity_ids?.length || 0
-    const ctx = signalContextMap.get(d.id)
-    const entity1 = ctx?.bridgeEntities?.[0]
-    const entity2 = ctx?.bridgeEntities?.[1]
-    const edgeRelation = ctx?.bridgeEdge?.relation_type
-    const triggerTitle = ctx?.triggerSource?.title
-    const triggerType = ctx?.triggerSource?.source_type
-
-    return (
-      <>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'var(--font-display)', color: 'var(--color-text-primary)' }}>
-            Signal Detail
-          </span>
-          <button type="button" onClick={onClose} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', padding: 4 }}>
-            <X size={16} style={{ color: 'var(--color-text-secondary)' }} />
-          </button>
-        </div>
-
-        <div style={labelStyle}>From</div>
-        <div style={valueStyle}>{sourceName}</div>
-
-        <div style={labelStyle}>To</div>
-        <div style={valueStyle}>{targetName}</div>
-
-        {triggerTitle && (
-          <>
-            <div style={labelStyle}>Source</div>
-            <div style={valueStyle}>{triggerTitle}{triggerType && <span style={{ color: 'var(--color-text-secondary)' }}> ({triggerType})</span>}</div>
-          </>
-        )}
-
-        {(entity1 || entity2) && (
-          <>
-            <div style={labelStyle}>Connection Found</div>
-            {entity1 && (
-              <div style={{ padding: '8px 12px', background: 'var(--color-bg-inset)', borderRadius: 8, marginBottom: 4 }}>
-                <span style={{ ...valueStyle, fontWeight: 600 }}>{entity1.label}</span>
-                <span style={metaStyle}> ({entity1.entity_type})</span>
-                {entity1.description && <div style={{ ...metaStyle, marginTop: 2 }}>{entity1.description}</div>}
-              </div>
-            )}
-            {edgeRelation && (
-              <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--color-text-placeholder)', padding: '2px 0' }}>{edgeRelation.replace(/_/g, ' ')}</div>
-            )}
-            {entity2 && (
-              <div style={{ padding: '8px 12px', background: 'var(--color-bg-inset)', borderRadius: 8, marginBottom: 4 }}>
-                <span style={{ ...valueStyle, fontWeight: 600 }}>{entity2.label}</span>
-                <span style={metaStyle}> ({entity2.entity_type})</span>
-                {entity2.description && <div style={{ ...metaStyle, marginTop: 2 }}>{entity2.description}</div>}
-              </div>
-            )}
-          </>
-        )}
-
-        {d.reason && d.reason !== 'Cross-domain edge detected during ingestion' && !d.reason.startsWith('Cross-domain edge:') && (
-          <>
-            <div style={labelStyle}>Evidence</div>
-            <div style={{ ...valueStyle, fontStyle: 'italic' }}>&ldquo;{d.reason}&rdquo;</div>
-          </>
-        )}
-
-        <div style={labelStyle}>Status</div>
-        <div style={{ ...metaStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: d.status === 'pending' ? 'var(--color-text-placeholder)' : 'var(--color-accent-500)' }} />
-          {d.status === 'pending' ? 'Pending — awaiting next cycle' : d.processing_result === 'targeted_extraction'
-            ? `Targeted extraction — ${extractedCount} new entities` : d.processing_result === 'full_ingestion'
-              ? 'Full ingestion into target domain' : 'Acknowledged — no extraction needed'}
-        </div>
-
-        <div style={labelStyle}>Created</div>
-        <div style={metaStyle}>{formatDate(d.created_at)}</div>
-
-        {d.processed_at && (
-          <>
-            <div style={labelStyle}>Processed</div>
-            <div style={metaStyle}>{formatDate(d.processed_at)}</div>
-          </>
-        )}
       </>
     )
   }
@@ -466,13 +338,13 @@ function ControlBar({
   searchTerm, onSearchChange,
   healthFilter, onHealthFilterChange,
   sortKey, onSortKeyChange,
-  cycleDate, totalAgents, totalInsights, totalSignals, totalSkills,
+  cycleDate, totalAgents, totalInsights, totalSkills,
   isRecalibrating, onRecalibrate,
 }: {
   searchTerm: string; onSearchChange: (v: string) => void
   healthFilter: HealthFilter; onHealthFilterChange: (v: HealthFilter) => void
   sortKey: SortKey; onSortKeyChange: (v: SortKey) => void
-  cycleDate: string; totalAgents: number; totalInsights: number; totalSignals: number; totalSkills: number
+  cycleDate: string; totalAgents: number; totalInsights: number; totalSkills: number
   isRecalibrating: boolean; onRecalibrate: () => void
 }) {
   const [healthOpen, setHealthOpen] = useState(false)
@@ -531,7 +403,6 @@ function ControlBar({
       {divider}
       <span style={statStyle}>{totalAgents} agents</span>
       <span style={statStyle}>{totalInsights} insights</span>
-      <span style={statStyle}>{totalSignals} signals</span>
       <span style={statStyle}>{totalSkills} skills</span>
 
       {divider}
@@ -581,8 +452,6 @@ export function CouncilOverviewView() {
   const [agents, setAgents] = useState<DomainAgent[]>([])
   const [agentSkills, setAgentSkills] = useState<AgentSkillAssignment[]>([])
   const [insights, setInsights] = useState<BriefingInsight[]>([])
-  const [signals, setSignals] = useState<BriefingSignal[]>([])
-  const [signalContextMap, setSignalContextMap] = useState<Map<string, EnrichedSignalContext>>(new Map())
   const [skillAssignments, setSkillAssignments] = useState<BriefingSkillAssignment[]>([])
   const [loading, setLoading] = useState(true)
   const [isRecalibrating, setIsRecalibrating] = useState(false)
@@ -590,7 +459,6 @@ export function CouncilOverviewView() {
 
   // Visibility toggles
   const [insightsExpanded, setInsightsExpanded] = useState(false)
-  const [signalsExpanded, setSignalsExpanded] = useState(false)
   const [skillsExpanded, setSkillsExpanded] = useState(false)
 
   // Filters
@@ -631,16 +499,11 @@ export function CouncilOverviewView() {
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [a, sk, ins, sig, sa] = await Promise.all([
+      const [a, sk, ins, sa] = await Promise.all([
         fetchDomainAgents(), fetchAgentSkills(),
-        fetchBriefingInsights(50), fetchBriefingSignals(50), fetchBriefingSkillAssignments(50),
+        fetchBriefingInsights(50), fetchBriefingSkillAssignments(50),
       ])
-      setAgents(a); setAgentSkills(sk); setInsights(ins); setSignals(sig); setSkillAssignments(sa)
-      // Enrich signals with bridge entities and trigger sources
-      if (sig.length > 0) {
-        const ctx = await enrichSignalsContext(sig as unknown as AgentSignalRow[])
-        setSignalContextMap(ctx)
-      }
+      setAgents(a); setAgentSkills(sk); setInsights(ins); setSkillAssignments(sa)
     } catch (err) { console.error('[CouncilOverview] Load failed:', err) }
     finally { setLoading(false) }
   }, [])
@@ -655,16 +518,6 @@ export function CouncilOverviewView() {
     } catch (err) { console.error('[CouncilOverview] Recalibrate failed:', err) }
     finally { setIsRecalibrating(false) }
   }, [loadData])
-
-  // Deduplicate signals
-  const deduplicatedSignals = useMemo(() => {
-    const seen = new Set<string>()
-    return signals.filter(s => {
-      const key = `${s.source_agent_id}:${s.target_agent_id}`
-      if (seen.has(key)) return false
-      seen.add(key); return true
-    })
-  }, [signals])
 
   const filteredAgents = useMemo(() => {
     let result = agents
@@ -688,7 +541,6 @@ export function CouncilOverviewView() {
     : '—'
 
   const insightsToShow = insightsExpanded ? insights : insights.slice(0, DEFAULT_VISIBLE)
-  const signalsToShow = signalsExpanded ? deduplicatedSignals : deduplicatedSignals.slice(0, DEFAULT_VISIBLE)
   const skillsToShow = skillsExpanded ? skillAssignments : skillAssignments.slice(0, DEFAULT_VISIBLE)
 
   // ─── RENDER ─────────────────────────────────────────────────────────────────
@@ -714,7 +566,7 @@ export function CouncilOverviewView() {
         sortKey={sortKey} onSortKeyChange={setSortKey}
         cycleDate={cycleDate}
         totalAgents={agents.length} totalInsights={insights.length}
-        totalSignals={deduplicatedSignals.length} totalSkills={totalUniqueSkills}
+        totalSkills={totalUniqueSkills}
         isRecalibrating={isRecalibrating} onRecalibrate={handleRecalibrate}
       />
 
@@ -735,18 +587,6 @@ export function CouncilOverviewView() {
             <InsightCard key={ins.id} insight={ins} agentName={agentNameMap.get(ins.agent_id) || 'Unknown'}
               selected={selection?.type === 'insight' && selection.data.id === ins.id}
               onSelect={() => setSelection(selection?.type === 'insight' && selection.data.id === ins.id ? null : { type: 'insight', data: ins })} />
-          ))}
-
-          {/* Signals */}
-          <SectionHeader label="Cross-Agent Signals" total={deduplicatedSignals.length}
-            showingAll={signalsExpanded} onToggle={() => setSignalsExpanded(v => !v)} />
-          {signalsToShow.map(sig => (
-            <SignalCard key={sig.id} signal={sig}
-              sourceAgentName={agentNameMap.get(sig.source_agent_id) || 'Unknown'}
-              targetAgentName={agentNameMap.get(sig.target_agent_id) || 'Unknown'}
-              selected={selection?.type === 'signal' && selection.data.id === sig.id}
-              onSelect={() => setSelection(selection?.type === 'signal' && selection.data.id === sig.id ? null : { type: 'signal', data: sig })}
-              context={signalContextMap.get(sig.id)} />
           ))}
 
           {/* Skills */}
@@ -775,7 +615,7 @@ export function CouncilOverviewView() {
         }}>
           <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '16px 20px' }}>
             {selection ? (
-              <DetailPanel selection={selection} agentNameMap={agentNameMap} onClose={() => setSelection(null)} signalContextMap={signalContextMap} />
+              <DetailPanel selection={selection} agentNameMap={agentNameMap} onClose={() => setSelection(null)} />
             ) : (
               <>
                 <div style={{

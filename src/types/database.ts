@@ -243,18 +243,3 @@ export interface AgentGapRow {
   updated_at: string
 }
 
-export interface AgentSignalRow {
-  id: string
-  user_id: string
-  source_agent_id: string
-  target_agent_id: string
-  trigger_source_id: string | null
-  bridge_entity_ids: string[]
-  bridge_edge_id: string | null
-  reason: string
-  status: 'pending' | 'processing' | 'acknowledged' | 'extracted' | 'dismissed'
-  processing_result: string | null
-  extracted_entity_ids: string[]
-  processed_at: string | null
-  created_at: string
-}

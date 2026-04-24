@@ -1,5 +1,5 @@
 import type { ChatEntryContext } from '../types/chatRouting'
-import type { KnowledgeNode, AgentInsightRow, AgentSignalRow } from '../types/database'
+import type { KnowledgeNode, AgentInsightRow } from '../types/database'
 
 // ─── Home Feed: Entity Explore (§3.1) ───────────────────────────────────────
 
@@ -339,34 +339,6 @@ Focus on: (1) what specific source material and entities support or contradict t
     },
     entryPoint: 'council_insight_chat',
     displayLabel: `Insight: ${insight.claim.slice(0, 60)}${insight.claim.length > 60 ? '…' : ''}`,
-  }
-}
-
-// ─── Council: Signal Chat (§3.15) ──────────────────────────────────────────
-
-export function buildSignalChatContext(
-  signal: AgentSignalRow,
-  sourceAgentName: string,
-  targetAgentName: string
-): ChatEntryContext {
-  return {
-    autoQuery: `A cross-domain signal was detected between my "${sourceAgentName}" and "${targetAgentName}" advisors: "${signal.reason}". Explain this connection — what does it mean, why does it matter, and what should I explore further?`,
-    systemDirective: `The user is exploring a cross-domain signal from their Advisory Council. This signal represents a knowledge bridge between two domain advisors.
-
-Source advisor: ${sourceAgentName}
-Target advisor: ${targetAgentName}
-Signal reason: ${signal.reason}
-Signal status: ${signal.status}
-Processing result: ${signal.processing_result ?? 'Not yet processed'}
-
-Focus on: (1) what specific entities or concepts bridge these two domains and why the connection is meaningful, (2) what each advisor's domain perspective adds to understanding this connection — how do they see the same thing differently? (3) whether this cross-domain link reveals a broader pattern or theme the user should pay attention to, (4) actionable follow-ups — what content would strengthen this bridge, or what questions should the user ask each advisor?`,
-    queryConfig: { mindset: 'analytical', toolMode: 'deep' },
-    scope: {
-      entityIds: signal.bridge_entity_ids?.length ? signal.bridge_entity_ids : undefined,
-      mode: 'soft',
-    },
-    entryPoint: 'council_signal_chat',
-    displayLabel: `Signal: ${sourceAgentName} → ${targetAgentName}`,
   }
 }
 

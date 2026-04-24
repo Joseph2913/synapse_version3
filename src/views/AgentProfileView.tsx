@@ -1,20 +1,15 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, GripVertical, ChevronDown, ChevronRight, MessageSquare } from 'lucide-react'
 import {
   fetchAgentWithPlaylist,
   fetchAgentQuestions,
   fetchAgentInsights,
   fetchAgentGaps,
-  fetchAgentSignalsOut,
-  fetchAgentSignalsIn,
   fetchAgentSkillAssignments,
-  fetchDomainAgents,
-  enrichSignalsContext,
   type AgentSkillAssignment,
-  type EnrichedSignalContext,
 } from '../services/supabase'
-import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow, HealthStatus } from '../types/database'
+import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, HealthStatus } from '../types/database'
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────────────
 
@@ -196,189 +191,21 @@ function InsightActivityCard({ insight }: { insight: AgentInsightRow }) {
   )
 }
 
-// ─── RIGHT: SIGNAL CARD (with expandable metadata) ──────────────────────────
-
-function SignalActivityCard({ signal, agentNameMap, agentId, context }: {
-  signal: AgentSignalRow; agentNameMap: Map<string, string>; agentId: string; context?: EnrichedSignalContext
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const isOutgoing = signal.source_agent_id === agentId
-  const otherName = agentNameMap.get(isOutgoing ? signal.target_agent_id : signal.source_agent_id) || 'Unknown'
-  const senderName = agentNameMap.get(signal.source_agent_id) || 'Unknown'
-  const isPending = signal.status === 'pending'
-  const extractedCount = signal.extracted_entity_ids?.length || 0
-
-  const statusLabel = isPending ? 'Pending' : signal.processing_result === 'targeted_extraction'
-    ? `Extracted ${extractedCount} entities` : signal.processing_result === 'full_ingestion' ? 'Full ingestion' : 'Acknowledged'
-
-  const directionBorder = isOutgoing ? 'rgba(37,99,235,0.12)' : 'rgba(214,58,0,0.12)'
-  const directionLabel = isOutgoing ? 'SENT' : 'RECEIVED'
-  const directionColor = isOutgoing ? '#2563eb' : '#d63a00'
-  const directionBg = isOutgoing ? 'rgba(37,99,235,0.06)' : 'rgba(214,58,0,0.06)'
-
-  const triggerTitle = context?.triggerSource?.title || null
-  const triggerType = context?.triggerSource?.source_type || null
-  const entity1 = context?.bridgeEntities?.[0]
-  const entity2 = context?.bridgeEntities?.[1]
-  const edgeRelation = context?.bridgeEdge?.relation_type || null
-
-  // Collapsed summary: direction + other agent + trigger source
-  const collapsedSummary = triggerTitle
-    ? `While ingesting "${triggerTitle}"${triggerType ? ` (${triggerType})` : ''}, the ${senderName} agent found a cross-domain connection.`
-    : signal.reason
-
-  return (
-    <div style={{
-      background: 'var(--color-bg-card)',
-      border: `1px solid ${directionBorder}`,
-      borderLeft: `3px solid ${directionColor}`,
-      borderRadius: 10, padding: '10px 14px', marginBottom: 6,
-    }}>
-      {/* Header: direction badge + other agent + status */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <span style={{
-          fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-body)', textTransform: 'uppercase' as const,
-          padding: '1px 6px', borderRadius: 4, letterSpacing: '0.04em',
-          background: directionBg, color: directionColor,
-        }}>
-          {directionLabel}
-        </span>
-        <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>
-          {isOutgoing ? `→ ${otherName}` : `← ${otherName}`}
-        </span>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)', flexShrink: 0 }}>
-          <span style={{ width: 5, height: 5, borderRadius: '50%', background: isPending ? 'var(--color-text-placeholder)' : directionColor }} />
-          {statusLabel} · {timeAgo(signal.processed_at || signal.created_at)}
-        </span>
-      </div>
-
-      {/* Collapsed summary */}
-      <div style={{
-        fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5,
-        overflow: 'hidden', textOverflow: 'ellipsis',
-        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-      }}>
-        {collapsedSummary}
-      </div>
-
-      {/* Expand toggle */}
-      <button type="button" onClick={() => setExpanded(!expanded)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 4, marginTop: 6,
-          fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)',
-          color: 'var(--color-accent-500)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
-        }}>
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {expanded ? 'Hide details' : 'Show details'}
-      </button>
-
-      {/* Expanded: full bridge entity context */}
-      {expanded && (
-        <div style={{ marginTop: 8, padding: '12px 14px', background: 'var(--color-bg-inset)', borderRadius: 8, fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.6 }}>
-
-          {/* Trigger source */}
-          {triggerTitle && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
-                Source
-              </div>
-              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                {triggerTitle}
-                {triggerType && <span style={{ fontWeight: 400, color: 'var(--color-text-secondary)' }}> ({triggerType})</span>}
-              </div>
-            </div>
-          )}
-
-          {/* Bridge entities */}
-          {(entity1 || entity2) && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
-                Connection Found
-              </div>
-
-              {entity1 && (
-                <div style={{ marginBottom: 6, padding: '6px 10px', background: 'var(--color-bg-card)', borderRadius: 6, border: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{entity1.label}</span>
-                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}> ({entity1.entity_type})</span>
-                  {entity1.description && (
-                    <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>{entity1.description}</div>
-                  )}
-                </div>
-              )}
-
-              {edgeRelation && (
-                <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--color-text-placeholder)', padding: '2px 0' }}>
-                  {edgeRelation.replace(/_/g, ' ')}
-                </div>
-              )}
-
-              {entity2 && (
-                <div style={{ padding: '6px 10px', background: 'var(--color-bg-card)', borderRadius: 6, border: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{entity2.label}</span>
-                  <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}> ({entity2.entity_type})</span>
-                  {entity2.description && (
-                    <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>{entity2.description}</div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Evidence quote */}
-          {signal.reason && signal.reason !== 'Cross-domain edge detected during ingestion' && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
-                Evidence
-              </div>
-              <div style={{ fontStyle: 'italic', color: 'var(--color-text-body)' }}>
-                &ldquo;{signal.reason}&rdquo;
-              </div>
-            </div>
-          )}
-
-          {/* Outcome */}
-          {!isPending && (
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-display)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--color-text-secondary)', marginBottom: 4 }}>
-                Outcome
-              </div>
-              <div>
-                {signal.processing_result === 'targeted_extraction'
-                  ? `${isOutgoing ? otherName : 'This agent'} performed a targeted extraction and added ${extractedCount} new entities.`
-                  : signal.processing_result === 'full_ingestion'
-                    ? `${isOutgoing ? otherName : 'This agent'} ingested the full source into their domain.`
-                    : `${isOutgoing ? otherName : 'This agent'} acknowledged the connection without additional ingestion.`}
-              </div>
-            </div>
-          )}
-
-          {isPending && (
-            <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', fontStyle: 'italic' }}>
-              Awaiting next recalibration cycle.
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ─── MAIN VIEW ──────────────────────────────────────────────────────────────
 
 export function AgentProfileView() {
   const { agentId } = useParams<{ agentId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const focusId = searchParams.get('focus')
+  const scrolledFocusRef = useRef<string | null>(null)
 
   const [agent, setAgent] = useState<DomainAgent | null>(null)
   const [playlistName, setPlaylistName] = useState<string | null>(null)
   const [questions, setQuestions] = useState<AgentStandingQuestion[]>([])
   const [insights, setInsights] = useState<AgentInsightRow[]>([])
   const [gaps, setGaps] = useState<AgentGapRow[]>([])
-  const [signalsOut, setSignalsOut] = useState<AgentSignalRow[]>([])
-  const [signalsIn, setSignalsIn] = useState<AgentSignalRow[]>([])
-  const [signalContextMap, setSignalContextMap] = useState<Map<string, EnrichedSignalContext>>(new Map())
   const [skills, setSkills] = useState<AgentSkillAssignment[]>([])
-  const [allAgents, setAllAgents] = useState<DomainAgent[]>([])
   const [loading, setLoading] = useState(true)
 
   // Expand toggles
@@ -387,7 +214,6 @@ export function AgentProfileView() {
   const [questionsExpanded, setQuestionsExpanded] = useState(false)
   const [gapsExpanded, setGapsExpanded] = useState(false)
   const [insightsExpanded, setInsightsExpanded] = useState(false)
-  const [signalsExpanded, setSignalsExpanded] = useState(false)
 
   // Resizable
   const [leftWidthPct, setLeftWidthPct] = useState(DEFAULT_LEFT_PCT)
@@ -411,45 +237,68 @@ export function AgentProfileView() {
     document.addEventListener('mouseup', onUp)
   }, [leftWidthPct])
 
-  const agentNameMap = useMemo(() => new Map(allAgents.map(a => [a.id, a.name])), [allAgents])
-
   const loadData = useCallback(async () => {
     if (!agentId) return
     setLoading(true)
     try {
-      const [agentData, questionsData, insightsData, gapsData, signalsOutData, signalsInData, skillsData, agentsData] = await Promise.all([
+      const [agentData, questionsData, insightsData, gapsData, skillsData] = await Promise.all([
         fetchAgentWithPlaylist(agentId), fetchAgentQuestions(agentId), fetchAgentInsights(agentId),
-        fetchAgentGaps(agentId), fetchAgentSignalsOut(agentId), fetchAgentSignalsIn(agentId),
-        fetchAgentSkillAssignments(agentId), fetchDomainAgents(),
+        fetchAgentGaps(agentId),
+        fetchAgentSkillAssignments(agentId),
       ])
       setAgent(agentData.agent); setPlaylistName(agentData.playlistName)
       setQuestions(questionsData); setInsights(insightsData); setGaps(gapsData)
-      setSignalsOut(signalsOutData); setSignalsIn(signalsInData)
-      setSkills(skillsData); setAllAgents(agentsData)
-
-      // Enrich signals with bridge entities and trigger sources
-      const allSigs = [...signalsOutData, ...signalsInData]
-      if (allSigs.length > 0) {
-        const ctx = await enrichSignalsContext(allSigs)
-        setSignalContextMap(ctx)
-      }
+      setSkills(skillsData)
     } catch (err) { console.error('[AgentProfile] Load failed:', err) }
     finally { setLoading(false) }
   }, [agentId])
 
   useEffect(() => { loadData() }, [loadData])
 
+  // Deep-link from Home Council Digest: if ?focus=<itemId> matches a question, gap, or insight,
+  // expand its section (in case it's past the top-N) and scroll/highlight it once rendered.
+  useEffect(() => {
+    if (!focusId) return
+    if (scrolledFocusRef.current === focusId) return
+    if (loading) return
+
+    // Decide which section the focused item belongs to and expand if needed
+    const isQuestion = questions.some(q => q.id === focusId)
+    const isGap = gaps.some(g => g.id === focusId)
+    const isInsight = insights.some(i => i.id === focusId)
+
+    if (isQuestion) setQuestionsExpanded(true)
+    if (isGap) setGapsExpanded(true)
+    if (isInsight) setInsightsExpanded(true)
+
+    if (!isQuestion && !isGap && !isInsight) return
+
+    // Poll for the element: the section expansion triggers a re-render
+    let attempts = 0
+    const handle = window.setInterval(() => {
+      const el = document.getElementById(`council-item-${focusId}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        const originalTransition = el.style.transition
+        const originalShadow = el.style.boxShadow
+        el.style.transition = 'box-shadow 0.3s ease'
+        el.style.boxShadow = '0 0 0 2px var(--color-accent-500)'
+        window.setTimeout(() => {
+          el.style.boxShadow = originalShadow
+          el.style.transition = originalTransition
+        }, 1800)
+        scrolledFocusRef.current = focusId
+        window.clearInterval(handle)
+      } else if (++attempts > 40) {
+        window.clearInterval(handle)
+      }
+    }, 100)
+    return () => window.clearInterval(handle)
+  }, [focusId, loading, questions, gaps, insights])
+
   const expertise = (agent?.expertise_index || {}) as ExpertiseIndex
   const coreThemes = expertise.core_themes || []
   const openQuestions = questions.filter(q => q.status === 'open' || q.status === 'partially_addressed')
-
-  // Merge and deduplicate signals, sort by recency
-  const allSignals = useMemo(() => {
-    const seen = new Set<string>()
-    return [...signalsOut, ...signalsIn]
-      .filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true })
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  }, [signalsOut, signalsIn])
 
   // Sliced lists
   const themesToShow = themesExpanded ? coreThemes : coreThemes.slice(0, TOP_N)
@@ -457,7 +306,6 @@ export function AgentProfileView() {
   const questionsToShow = questionsExpanded ? openQuestions : openQuestions.slice(0, TOP_N)
   const gapsToShow = gapsExpanded ? gaps : gaps.slice(0, TOP_N)
   const insightsToShow = insightsExpanded ? insights : insights.slice(0, TOP_N)
-  const signalsToShow = signalsExpanded ? allSignals : allSignals.slice(0, TOP_N)
 
   // ─── RENDER ─────────────────────────────────────────────────────────────────
 
@@ -555,7 +403,7 @@ export function AgentProfileView() {
               <SectionHeader label="Standing Questions" count={openQuestions.length} total={openQuestions.length} expanded={questionsExpanded} onToggle={() => setQuestionsExpanded(v => !v)} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {questionsToShow.map(q => (
-                  <div key={q.id} style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px' }}>
+                  <div key={q.id} id={`council-item-${q.id}`} style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <span style={{ width: 6, height: 6, borderRadius: '50%', background: QUESTION_TYPE_COLORS[q.question_type] || '#6b7280', flexShrink: 0 }} />
                       <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>{q.question_type.replace('_', ' ')}</span>
@@ -575,7 +423,7 @@ export function AgentProfileView() {
               <SectionHeader label="Knowledge Gaps" count={gaps.length} total={gaps.length} expanded={gapsExpanded} onToggle={() => setGapsExpanded(v => !v)} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {gapsToShow.map(g => (
-                  <div key={g.id} style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px' }}>
+                  <div key={g.id} id={`council-item-${g.id}`} style={{ background: 'var(--color-bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '10px 14px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-primary)' }}>{g.topic}</span>
                       <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-body)', padding: '1px 7px', borderRadius: 10, background: g.severity === 'significant' ? '#fee2e2' : g.severity === 'moderate' ? '#fef3c7' : '#f3f4f6', color: g.severity === 'significant' ? '#dc2626' : g.severity === 'moderate' ? '#b45309' : '#6b7280' }}>
@@ -609,21 +457,15 @@ export function AgentProfileView() {
             {insights.length > 0 && (
               <>
                 <SectionHeader label="Insights Surfaced" count={insights.length} total={insights.length} expanded={insightsExpanded} onToggle={() => setInsightsExpanded(v => !v)} />
-                {insightsToShow.map(ins => <InsightActivityCard key={ins.id} insight={ins} />)}
-              </>
-            )}
-
-            {/* Signals */}
-            {allSignals.length > 0 && (
-              <>
-                <SectionHeader label="Cross-Agent Signals" count={allSignals.length} total={allSignals.length} expanded={signalsExpanded} onToggle={() => setSignalsExpanded(v => !v)} />
-                {signalsToShow.map(sig => (
-                  <SignalActivityCard key={sig.id} signal={sig} agentNameMap={agentNameMap} agentId={agentId!} context={signalContextMap.get(sig.id)} />
+                {insightsToShow.map(ins => (
+                  <div key={ins.id} id={`council-item-${ins.id}`}>
+                    <InsightActivityCard insight={ins} />
+                  </div>
                 ))}
               </>
             )}
 
-            {insights.length === 0 && allSignals.length === 0 && (
+            {insights.length === 0 && (
               <div style={{ textAlign: 'center', padding: '48px 0', fontSize: 13, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>
                 No recent activity for this agent
               </div>

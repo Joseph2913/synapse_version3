@@ -1,28 +1,18 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { StaggerList, StaggerItem } from '../ui/StaggerList'
-import { Database, GitBranch, Anchor, Zap, Youtube, FileText, BookOpen, StickyNote, Video, Globe, Mail, ArrowUpRight, Search, MessageSquare, Users } from 'lucide-react'
+import { Database, GitBranch, Anchor, Zap, Youtube, FileText, BookOpen, StickyNote, Video, Globe, Mail, Search, MessageSquare } from 'lucide-react'
 import { useGraphContext } from '../../hooks/useGraphContext'
 import { useHomeDashboard } from '../../hooks/useHomeDashboard'
 import { useAuth } from '../../hooks/useAuth'
 import { PROVIDER_CONFIG } from '../../config/sourceTypes'
-import { supabase, fetchDomainAgents, fetchAgentCounts } from '../../services/supabase'
+import { supabase } from '../../services/supabase'
 import { RecentSourcesPanel } from './RecentSourcesPanel'
-import { buildSourceChatContext, buildInsightChatContext, buildSignalChatContext, buildSkillChatContext } from '../../config/chatEntryContexts'
-import type { KnowledgeSource, AgentInsightRow, AgentSignalRow } from '../../types/database'
+import { CouncilDigestCard } from './CouncilDigestCard'
+import { HomeSignalsCard } from './HomeSignalsCard'
+import { buildSourceChatContext, buildInsightChatContext, buildSkillChatContext } from '../../config/chatEntryContexts'
+import type { KnowledgeSource, AgentInsightRow } from '../../types/database'
 
 // Fixed layout — no resizing on dashboard
-
-function formatRelativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
 
 function getGreeting(): string {
   const hour = new Date().getHours()
@@ -188,62 +178,6 @@ export function InsightRow({ insight, isLast }: { insight: AgentInsightRow; isLa
   )
 }
 
-export function SignalRow({ signal, isLast }: { signal: AgentSignalRow & { source_name?: string; target_name?: string }; isLast: boolean }) {
-  const [hovered, setHovered] = useState(false)
-  const navigate = useNavigate()
-
-  const handleChat = () => {
-    const context = buildSignalChatContext(signal, signal.source_name ?? 'Unknown', signal.target_name ?? 'Unknown')
-    navigate('/ask', { state: { chatContext: context } })
-  }
-
-  return (
-    <div
-      className="relative overflow-hidden"
-      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', flex: '1 1 0' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <button
-        type="button"
-        onClick={() => navigate('/council')}
-        className="flex w-full text-left bg-transparent cursor-pointer border-none"
-        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: hovered ? 'var(--color-bg-hover)' : 'transparent', transition: 'background 0.15s ease' }}
-      >
-        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: '50%', border: '2px solid var(--color-accent-500)', background: 'var(--color-accent-50)' }}>
-          <ArrowUpRight size={15} style={{ color: 'var(--color-accent-500)' }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center" style={{ gap: 6, marginBottom: 3 }}>
-            <span className="font-body text-text-primary" style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.4 }}>
-              {signal.source_name} → {signal.target_name}
-            </span>
-            {(signal.extracted_entity_ids?.length ?? 0) > 0 && (
-              <span className="font-body" style={{ fontSize: 10, fontWeight: 600, color: '#15803d', background: '#dcfce7', padding: '1px 6px', borderRadius: 10 }}>
-                {signal.extracted_entity_ids.length} extracted
-              </span>
-            )}
-          </div>
-          <div className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-            {signal.reason}
-          </div>
-        </div>
-      </button>
-      <div
-        style={{
-          position: 'absolute', top: 0, right: 0, bottom: 0, width: 144,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
-          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
-          transition: 'transform 0.2s ease',
-          background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)',
-        }}
-      >
-        <HoverActionOverlay onExplore={() => navigate('/council')} onChat={handleChat} />
-      </div>
-    </div>
-  )
-}
-
 export interface TopSkill {
   id: string
   name: string
@@ -312,201 +246,6 @@ export function SkillRow({ skill, isLast }: { skill: TopSkill; isLast: boolean }
   )
 }
 
-// ── Home Council Card — Agent-centric view ──────────────────────────────────
-
-const HEALTH_BADGE: Record<string, { bg: string; text: string; label: string }> = {
-  strong:       { bg: '#dcfce7', text: '#15803d', label: 'Strong' },
-  growing:      { bg: '#d1fae5', text: '#047857', label: 'Growing' },
-  thin:         { bg: '#fef3c7', text: '#b45309', label: 'Thin' },
-  stale:        { bg: '#fee2e2', text: '#dc2626', label: 'Stale' },
-  initialising: { bg: '#f3f4f6', text: '#6b7280', label: 'Init' },
-}
-
-interface AgentSummary {
-  id: string
-  name: string
-  description: string | null
-  health_status: string
-  source_count: number
-  entity_count: number
-  insights: number
-  signalsOut: number
-}
-
-function AgentRow({ agent, isLast }: { agent: AgentSummary; isLast: boolean }) {
-  const [hovered, setHovered] = useState(false)
-  const navigate = useNavigate()
-  const health = HEALTH_BADGE[agent.health_status] ?? HEALTH_BADGE.initialising!
-
-  const handleChat = () => {
-    const context: import('../../types/chatRouting').ChatEntryContext = {
-      autoQuery: `As my "${agent.name}" advisor, give me a briefing. What are the most important insights, open questions, and cross-domain connections in your domain right now?`,
-      systemDirective: `The user wants a briefing from their "${agent.name}" domain advisor. This advisor covers: ${agent.description ?? 'their domain'}. It has ${agent.source_count} sources and ${agent.entity_count} entities. Provide a concise but substantive briefing covering: (1) the most important recent insights or patterns, (2) any open questions or gaps, (3) notable cross-domain connections to other advisors. Speak as this advisor — use "I" and reflect its reasoning style.`,
-      queryConfig: { mindset: 'analytical', toolMode: 'deep' },
-      entryPoint: 'council_insight_chat',
-      displayLabel: `Advisor: ${agent.name}`,
-    }
-    navigate('/ask', { state: { chatContext: context } })
-  }
-
-  return (
-    <div
-      className="relative overflow-hidden"
-      style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', height: '100%' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <button
-        type="button"
-        onClick={() => navigate('/council')}
-        className="flex w-full text-left bg-transparent cursor-pointer border-none flex-1"
-        style={{ gap: 14, padding: '14px 20px', alignItems: 'flex-start', background: 'transparent', transition: 'background 0.15s ease' }}
-      >
-        <div className="shrink-0 flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--color-accent-50)' }}>
-          <Users size={15} style={{ color: 'var(--color-accent-500)' }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center" style={{ gap: 8, marginBottom: 4 }}>
-            <span className="font-display text-text-primary truncate" style={{ fontSize: 13, fontWeight: 700 }}>
-              {agent.name}
-            </span>
-            <span
-              className="font-body shrink-0"
-              style={{ fontSize: 9, fontWeight: 600, padding: '1px 7px', borderRadius: 20, background: health.bg, color: health.text }}
-            >
-              {health.label}
-            </span>
-            <span className="flex items-center shrink-0 font-body" style={{ gap: 6, marginLeft: 'auto', fontSize: 10, color: 'var(--color-text-placeholder)' }}>
-              {agent.source_count} sources
-              {agent.insights > 0 && <span style={{ color: '#b45309' }}>{agent.insights} insights</span>}
-              {agent.signalsOut > 0 && <span style={{ color: 'var(--color-accent-500)' }}>{agent.signalsOut} signals</span>}
-            </span>
-          </div>
-          <p className="font-body text-text-secondary" style={{ fontSize: 12, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', margin: 0 }}>
-            {agent.description ?? ''}
-          </p>
-        </div>
-      </button>
-      <div
-        style={{
-          position: 'absolute', top: 0, right: 0, bottom: 0, width: 144,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
-          transform: hovered ? 'translateX(0)' : 'translateX(144px)',
-          transition: 'transform 0.2s ease',
-          background: 'var(--color-bg-card)', borderLeft: '1px solid var(--border-subtle)',
-        }}
-      >
-        <HoverActionOverlay onExplore={() => navigate('/council')} onChat={handleChat} />
-      </div>
-    </div>
-  )
-}
-
-function HomeInsightsCard() {
-  const navigate = useNavigate()
-  const [agents, setAgents] = useState<AgentSummary[]>([])
-  const [dataLoading, setDataLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const rawAgents = await fetchDomainAgents()
-        if (cancelled) return
-
-        // Fetch counts for top agents (limit to 5 by source_count — already sorted from fetchDomainAgents)
-        const top = rawAgents.slice(0, 5)
-        const counts = await Promise.all(top.map(a => fetchAgentCounts(a.id)))
-        if (cancelled) return
-
-        setAgents(top.map((a, i) => ({
-          id: a.id,
-          name: a.name,
-          description: a.description,
-          health_status: a.health_status,
-          source_count: a.source_count,
-          entity_count: a.entity_count,
-          insights: counts[i]!.insights,
-          signalsOut: counts[i]!.signalsOut,
-        })))
-      } catch { /* ignore */ }
-      finally { if (!cancelled) setDataLoading(false) }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [])
-
-  return (
-    <div className="bg-bg-card border border-border-subtle overflow-hidden flex flex-col flex-1" style={{ borderRadius: 12, minHeight: 0 }}>
-      {/* Header */}
-      <div
-        className="flex items-center justify-between shrink-0"
-        style={{ padding: '12px 20px' }}
-      >
-        <div className="flex items-center" style={{ gap: 10 }}>
-          <div
-            className="shrink-0 flex items-center justify-center"
-            style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--color-accent-50)' }}
-          >
-            <Users size={14} style={{ color: 'var(--color-accent-500)' }} />
-          </div>
-          <span className="font-display text-text-primary" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.01em' }}>
-            Council
-          </span>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => navigate('/council')}
-          className="font-body cursor-pointer bg-transparent border-none"
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: 'var(--color-accent-500)',
-            padding: '4px 12px',
-            borderRadius: 6,
-            border: '1px solid rgba(214,58,0,0.15)',
-            background: 'var(--color-accent-50)',
-          }}
-        >
-          View all →
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {dataLoading ? (
-          <div className="flex flex-col flex-1">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="flex items-center" style={{ flex: '1 1 0', gap: 14, padding: '14px 20px', borderBottom: i < 4 ? '1px solid var(--border-subtle)' : 'none' }}>
-                <div className="bg-bg-inset animate-pulse" style={{ width: 36, height: 36, borderRadius: 9 }} />
-                <div className="flex-1">
-                  <div className="bg-bg-inset animate-pulse" style={{ height: 13, borderRadius: 4, marginBottom: 6 }} />
-                  <div className="bg-bg-inset animate-pulse" style={{ height: 11, borderRadius: 4, width: '70%' }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : agents.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center" style={{ padding: '24px 20px', textAlign: 'center' }}>
-            <p className="font-body text-text-secondary" style={{ fontSize: 13 }}>
-              No advisors yet. Connect YouTube playlists to build your council.
-            </p>
-          </div>
-        ) : (
-          <StaggerList className="flex flex-col flex-1">
-            {agents.map((agent, i) => (
-              <StaggerItem key={agent.id} style={{ flex: '1 1 0', minHeight: 0 }}>
-                <AgentRow agent={agent} isLast={i === agents.length - 1} />
-              </StaggerItem>
-            ))}
-          </StaggerList>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function HomeView() {
@@ -537,7 +276,6 @@ export function HomeView() {
 
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] ?? user?.email?.split('@')[0] ?? ''
   const stats = dashboard.stats
-  const pipeline = dashboard.pipelineStatus
   const snapshot = dashboard.snapshot
 
   // Source badges (exclude Meeting — replaced by providers)
@@ -554,17 +292,48 @@ export function HomeView() {
             className="bg-bg-card border border-border-subtle animate-[fadeUp_0.4s_var(--ease-out-expo)]"
             style={{ borderRadius: 14, animationFillMode: 'both', boxShadow: 'var(--shadow-md)' }}
           >
-            {/* Row 1: Greeting + Stats */}
-            <div className="flex items-center justify-between" style={{ padding: '20px 28px', gap: 24 }}>
+            {/* Single row: Greeting + Source badges + Stats */}
+            <div className="flex items-center justify-between" style={{ padding: '18px 24px', gap: 20 }}>
               <div className="shrink-0">
-                <p className="font-body text-text-secondary" style={{ fontSize: 12, marginBottom: 2 }}>{getGreeting()}</p>
-                <h1 className="font-display text-text-primary" style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.035em', lineHeight: 1.1 }}>
+                <p className="font-body text-text-secondary" style={{ fontSize: 11, marginBottom: 2 }}>{getGreeting()}</p>
+                <h1 className="font-display text-text-primary" style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.035em', lineHeight: 1.1 }}>
                   {firstName ? `${firstName}.` : 'Welcome.'}
                 </h1>
               </div>
 
+              {/* Source badges — compact, inline */}
+              {(activeSourceTypes.length > 0 || meetingProviders.length > 0) && (
+                <div className="flex items-center flex-wrap min-w-0" style={{ gap: 6, flex: '1 1 auto', justifyContent: 'center' }}>
+                  {activeSourceTypes.map(({ source_type, count }) => {
+                    const badge = getSourceBadge(source_type)
+                    return (
+                      <div key={source_type} className="flex items-center shrink-0" style={{ gap: 4, padding: '3px 8px', borderRadius: 20, background: badge.bg, border: `1px solid ${badge.color}20` }}>
+                        {badge.logo ? (
+                          <img src={badge.logo} alt={badge.label} style={{ width: 11, height: 11, borderRadius: 2, objectFit: 'contain' }} />
+                        ) : (
+                          <span style={{ color: badge.color, display: 'flex' }}>{badge.icon}</span>
+                        )}
+                        <span className="font-body" style={{ fontSize: 10, fontWeight: 600, color: badge.color }}>{badge.label}</span>
+                        <span className="font-body" style={{ fontSize: 10, fontWeight: 500, color: `${badge.color}99`, fontVariantNumeric: 'tabular-nums' }}>{count}</span>
+                      </div>
+                    )
+                  })}
+                  {meetingProviders.map((p) => (
+                    <div key={p.key} className="flex items-center shrink-0" style={{ gap: 4, padding: '3px 8px', borderRadius: 20, background: p.bg, border: `1px solid ${p.color}20` }}>
+                      {p.logo ? (
+                        <img src={p.logo} alt={p.label} style={{ width: 11, height: 11, borderRadius: 2, objectFit: 'contain' }} />
+                      ) : (
+                        <span style={{ color: p.color, display: 'flex' }}>{p.icon}</span>
+                      )}
+                      <span className="font-body" style={{ fontSize: 10, fontWeight: 600, color: p.color }}>{p.label}</span>
+                      <span className="font-body" style={{ fontSize: 10, fontWeight: 500, color: `${p.color}99`, fontVariantNumeric: 'tabular-nums' }}>{p.count}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {stats && !dashboard.loading.stats ? (
-                <div className="flex items-center" style={{ gap: 6 }}>
+                <div className="flex items-center shrink-0" style={{ gap: 6 }}>
                   {[
                     { icon: <Database size={12} style={{ color: 'var(--color-accent-500)' }} />, value: stats.totalSources, label: 'Sources' },
                     { icon: <GitBranch size={12} style={{ color: 'var(--color-accent-500)' }} />, value: stats.totalNodes, label: 'Nodes' },
@@ -574,11 +343,11 @@ export function HomeView() {
                     <div key={stat.label} className="flex items-center">
                       {i > 0 && <div style={{ width: 1, height: 22, background: 'var(--border-subtle)', margin: '0 10px' }} />}
                       <div className="flex items-center" style={{ gap: 7 }}>
-                        <div className="shrink-0 flex items-center justify-center" style={{ width: 26, height: 26, borderRadius: 6, background: 'var(--color-accent-50)' }}>
+                        <div className="shrink-0 flex items-center justify-center" style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--color-accent-50)' }}>
                           {stat.icon}
                         </div>
                         <div>
-                          <div className="font-display text-text-primary" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                          <div className="font-display text-text-primary" style={{ fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
                             {stat.value.toLocaleString()}
                           </div>
                           <div className="font-body text-text-secondary" style={{ fontSize: 10 }}>{stat.label}</div>
@@ -589,68 +358,26 @@ export function HomeView() {
                 </div>
               ) : null}
             </div>
-
-            {/* Row 2: Source badges (left) + Status (right) — single row */}
-            {(activeSourceTypes.length > 0 || meetingProviders.length > 0 || pipeline) && (
-              <div
-                className="flex items-center justify-between"
-                style={{ padding: '12px 28px', borderTop: '1px solid var(--border-subtle)' }}
-              >
-                {/* Left: Ingested from badges */}
-                <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
-                  <span className="font-body text-text-secondary shrink-0" style={{ fontSize: 11, fontWeight: 500, marginRight: 2 }}>
-                    Ingested from
-                  </span>
-                  {activeSourceTypes.map(({ source_type, count }) => {
-                    const badge = getSourceBadge(source_type)
-                    return (
-                      <div key={source_type} className="flex items-center" style={{ gap: 5, padding: '4px 10px', borderRadius: 16, background: badge.bg, border: `1px solid ${badge.color}20` }}>
-                        {badge.logo ? (
-                          <img src={badge.logo} alt={badge.label} style={{ width: 13, height: 13, borderRadius: 2, objectFit: 'contain' }} />
-                        ) : (
-                          <span style={{ color: badge.color, display: 'flex' }}>{badge.icon}</span>
-                        )}
-                        <span className="font-body" style={{ fontSize: 11, fontWeight: 600, color: badge.color }}>{badge.label}</span>
-                        <span className="font-body" style={{ fontSize: 10, fontWeight: 500, color: `${badge.color}99` }}>{count}</span>
-                      </div>
-                    )
-                  })}
-                  {meetingProviders.map((p) => (
-                    <div key={p.key} className="flex items-center" style={{ gap: 5, padding: '4px 10px', borderRadius: 16, background: p.bg, border: `1px solid ${p.color}20` }}>
-                      {p.logo ? (
-                        <img src={p.logo} alt={p.label} style={{ width: 13, height: 13, borderRadius: 2, objectFit: 'contain' }} />
-                      ) : (
-                        <span style={{ color: p.color, display: 'flex' }}>{p.icon}</span>
-                      )}
-                      <span className="font-body" style={{ fontSize: 11, fontWeight: 600, color: p.color }}>{p.label}</span>
-                      <span className="font-body" style={{ fontSize: 10, fontWeight: 500, color: `${p.color}99` }}>{p.count}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Right: Last ingested */}
-                {pipeline?.lastProcessedSource && (
-                  <div className="flex items-center shrink-0 font-body text-text-secondary" style={{ fontSize: 11, gap: 6 }}>
-                    <span style={{ fontWeight: 500 }}>Last ingested</span>
-                    <span style={{ fontWeight: 600, color: 'var(--color-text-body)' }}>
-                      {pipeline.lastProcessedSource.title}
-                    </span>
-                    <span>·</span>
-                    <span>{formatRelativeTime(pipeline.lastProcessedSource.created_at)}</span>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
+        </div>
+
+        {/* ── COUNCIL DIGEST — full-width weekly brief ── */}
+        <div
+          className="shrink-0 animate-[fadeUp_0.4s_ease]"
+          style={{ padding: '20px 36px 0 36px', animationDelay: '0.08s', animationFillMode: 'both' }}
+        >
+          <CouncilDigestCard />
         </div>
 
         {/* ══════ TWO-COLUMN LAYOUT — fills remaining viewport height ══════ */}
         <div className="flex items-stretch flex-1 min-h-0" style={{ padding: '20px 36px 36px 36px', gap: 20 }}>
           {/* Left column: Recent Sources — fills available height */}
-          <div className="animate-[fadeUp_0.4s_ease] flex flex-col min-h-0" style={{ flex: '0 0 60%', animationDelay: '0.05s', animationFillMode: 'both' }}>
+          <div className="animate-[fadeUp_0.4s_ease] flex flex-col min-h-0" style={{ flex: '0 0 50%', animationDelay: '0.05s', animationFillMode: 'both' }}>
             <RecentSourcesPanel
               sources={dashboard.recentSources}
               entityCounts={dashboard.sourceEntityCounts}
+              crossConnectionCounts={dashboard.sourceCrossConnectionCounts}
+              relatedSourceCounts={dashboard.sourceRelatedSourceCounts}
               loading={dashboard.loading.sources}
               error={dashboard.errors.sources}
               onSourceClick={handleSourceClick}
@@ -661,9 +388,9 @@ export function HomeView() {
             />
           </div>
 
-          {/* Right column: Insights / Signals / Skills toggle card */}
+          {/* Right column: Signals — split pane (Anchors + Skills) */}
           <div className="flex-1 flex flex-col min-h-0 animate-[fadeUp_0.4s_ease]" style={{ minWidth: 0, animationDelay: '0.05s', animationFillMode: 'both' }}>
-            <HomeInsightsCard />
+            <HomeSignalsCard />
           </div>
         </div>
       </div>

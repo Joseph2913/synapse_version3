@@ -383,7 +383,7 @@ async function extractKnowledgeForItem(
 //   3. Gemini ingestion-time analysis (insights + question eval + summary)
 //   4. Persist detected insights
 //   5. Update standing questions
-//   6. Detect cross-domain signals from edges
+//   6. (retired) Cross-domain signal detection — see Phase 0 of council cron
 //   7. Flag expertise index as stale, update counters
 
 interface AdvisoryInsight {
@@ -660,119 +660,10 @@ Return ONLY valid JSON matching this schema:
     console.log(`[advisory-council] Updated ${analysis.question_updates.length} standing questions`);
   }
 
-  // ── Step 6: Detect cross-domain signals (no LLM call) ─────────────────────
-  // Find edges where one node belongs to the new source and the other belongs
-  // to a different domain agent's scope.
-  const newSourceNodeIds = nodes.map(n => n.id);
-
-  if (newSourceNodeIds.length > 0) {
-    // Get all edges involving nodes from this source
-    const { data: outEdges } = await supabase
-      .from('knowledge_edges')
-      .select('id, source_node_id, target_node_id, evidence')
-      .eq('user_id', item.user_id)
-      .in('source_node_id', newSourceNodeIds);
-
-    const { data: inEdges } = await supabase
-      .from('knowledge_edges')
-      .select('id, source_node_id, target_node_id, evidence')
-      .eq('user_id', item.user_id)
-      .in('target_node_id', newSourceNodeIds);
-
-    type EdgeRow = { id: string; source_node_id: string; target_node_id: string; evidence: string | null };
-    const allEdges = [...((outEdges ?? []) as EdgeRow[]), ...((inEdges ?? []) as EdgeRow[])];
-
-    // Collect "other side" node IDs (nodes NOT from the new source)
-    const newNodeSet = new Set(newSourceNodeIds);
-    const otherNodeIds = new Set<string>();
-    for (const e of allEdges) {
-      if (!newNodeSet.has(e.source_node_id)) otherNodeIds.add(e.source_node_id);
-      if (!newNodeSet.has(e.target_node_id)) otherNodeIds.add(e.target_node_id);
-    }
-
-    if (otherNodeIds.size > 0) {
-      // Find which domain agents own these other nodes (via domain_agent_sources → knowledge_nodes.source_id)
-      const otherNodeIdArr = Array.from(otherNodeIds);
-      const { data: otherNodes } = await supabase
-        .from('knowledge_nodes')
-        .select('id, source_id')
-        .in('id', otherNodeIdArr.slice(0, 200)); // Cap to avoid oversized IN clause
-
-      const nodeSourceMap = new Map<string, string>();
-      for (const n of ((otherNodes ?? []) as Array<{ id: string; source_id: string | null }>)) {
-        if (n.source_id) nodeSourceMap.set(n.id, n.source_id);
-      }
-
-      const otherSourceIds = [...new Set(Array.from(nodeSourceMap.values()))];
-      if (otherSourceIds.length > 0) {
-        const { data: otherAgentSources } = await supabase
-          .from('domain_agent_sources')
-          .select('agent_id, source_id')
-          .in('source_id', otherSourceIds.slice(0, 200))
-          .neq('agent_id', agentId); // Exclude our own agent
-
-        const sourceToAgents = new Map<string, Set<string>>();
-        for (const das of ((otherAgentSources ?? []) as Array<{ agent_id: string; source_id: string }>)) {
-          if (!sourceToAgents.has(das.source_id)) sourceToAgents.set(das.source_id, new Set());
-          sourceToAgents.get(das.source_id)!.add(das.agent_id);
-        }
-
-        // Get existing bridge_edge_ids to dedup
-        const edgeIds = allEdges.map(e => e.id);
-        const { data: existingSignals } = await supabase
-          .from('agent_signals')
-          .select('bridge_edge_id')
-          .in('bridge_edge_id', edgeIds.slice(0, 200));
-
-        const existingBridgeEdges = new Set(
-          ((existingSignals ?? []) as Array<{ bridge_edge_id: string | null }>)
-            .map(s => s.bridge_edge_id)
-            .filter((id): id is string => !!id)
-        );
-
-        // Create signals for each cross-domain edge
-        const signalRows: Array<Record<string, unknown>> = [];
-        for (const edge of allEdges) {
-          if (existingBridgeEdges.has(edge.id)) continue; // Already signalled
-
-          const otherNodeId = newNodeSet.has(edge.source_node_id)
-            ? edge.target_node_id
-            : edge.source_node_id;
-          const otherSourceId = nodeSourceMap.get(otherNodeId);
-          if (!otherSourceId) continue;
-
-          const targetAgents = sourceToAgents.get(otherSourceId);
-          if (!targetAgents) continue;
-
-          for (const targetAgentId of targetAgents) {
-            signalRows.push({
-              user_id: item.user_id,
-              source_agent_id: agentId,
-              target_agent_id: targetAgentId,
-              trigger_source_id: sourceId,
-              bridge_entity_ids: [edge.source_node_id, edge.target_node_id],
-              bridge_edge_id: edge.id,
-              reason: edge.evidence ?? 'Cross-domain edge detected during ingestion',
-              status: 'pending',
-            });
-          }
-        }
-
-        if (signalRows.length > 0) {
-          // Batch insert (dedup on bridge_edge_id already handled above)
-          const { error: sigError } = await supabase
-            .from('agent_signals')
-            .insert(signalRows);
-
-          if (sigError) {
-            console.warn('[advisory-council] Failed to insert signals:', sigError.message);
-          } else {
-            console.log(`[advisory-council] Created ${signalRows.length} cross-domain signals`);
-          }
-        }
-      }
-    }
-  }
+  // ── Step 6: Cross-domain signal detection retired ────────────────────────
+  // The `agent_signals` table has been dropped. Cross-agent connections now
+  // surface as `novel_connection` insights produced by Phase 0 of the nightly
+  // council cron, which re-runs answer checks against new chunks.
 
   // ── Step 7: Flag expertise index as stale, update counters ────────────────
   // Count entities across all of this agent's sources
