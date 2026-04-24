@@ -773,18 +773,25 @@ Gap types: structural (expected knowledge absent), orphan (isolated entities), r
       resolved_gap_topics: string[];
     }>(systemPrompt, userContent);
 
-    // Insert new questions
+    // Insert new questions. Embed each one so Phase 0 can match them against new
+    // source chunks on subsequent runs. Embedding is best-effort: on failure the
+    // question still inserts (with NULL embedding) and simply skips pull matching.
     if (result.standing_questions?.length > 0) {
-      const qRows = result.standing_questions.map(q => ({
-        user_id: agent.user_id,
-        agent_id: agent.id,
-        question: q.question,
-        question_type: q.question_type,
-        priority: q.priority,
-        trigger_description: q.trigger_description,
-        status: 'open',
-        generated_at: new Date().toISOString(),
-      }));
+      const qRows: Array<Record<string, unknown>> = [];
+      for (const q of result.standing_questions) {
+        const emb = await generateEmbedding(q.question);
+        qRows.push({
+          user_id: agent.user_id,
+          agent_id: agent.id,
+          question: q.question,
+          question_type: q.question_type,
+          priority: q.priority,
+          trigger_description: q.trigger_description,
+          status: 'open',
+          generated_at: new Date().toISOString(),
+          embedding: emb.length > 0 ? JSON.stringify(emb) : null,
+        });
+      }
       await supabase.from('agent_standing_questions').insert(qRows);
     }
 
