@@ -203,8 +203,8 @@ export interface AgentStandingQuestion {
   priority: number
   trigger_description: string | null
   trigger_source_id: string | null
-  addressing_source_ids: string[]
-  addressing_evidence: string | null
+  addressing_source_ids: string[] | null
+  addressing_evidence: import('./council').AddressingEvidenceEntry[] | null
   generated_at: string
   status_changed_at: string | null
   created_at: string

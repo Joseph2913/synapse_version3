@@ -6,6 +6,7 @@ import type { ExtractionSession } from '../types/extraction'
 import type { YouTubePlaylist, QueueStats, PlaylistSettings } from '../types/youtube'
 import type { QueueItem, QueueStatusFilter, ScanHistoryEntry, YouTubeSettings, AutomationSummary } from '../types/automate'
 import type { DigestHistoryEntry, DigestModuleInput, DigestChannelInput } from '../types/digest'
+import type { CouncilDigest, CouncilCronRun } from '../types/council'
 import { generateSynapseCode } from './youtube'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
@@ -2705,6 +2706,21 @@ export async function fetchAgentWithPlaylist(agentId: string): Promise<{ agent: 
   return { agent: agent as DomainAgent, playlistName }
 }
 
+export async function fetchLatestCouncilRun(userId: string): Promise<CouncilCronRun | null> {
+  const { data, error } = await supabase
+    .from('council_cron_runs')
+    .select('id, started_at, finished_at, status, phase_counts, error')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    console.error('[fetchLatestCouncilRun]', error)
+    return null
+  }
+  return data as CouncilCronRun | null
+}
+
 export async function fetchAgentQuestions(agentId: string): Promise<AgentStandingQuestion[]> {
   const { data, error } = await supabase
     .from('agent_standing_questions')
@@ -3079,4 +3095,32 @@ export async function fetchBriefingSkillAssignments(limit = 30): Promise<Briefin
       skill_status: (skill?.status as string) || 'draft',
     }
   })
+}
+
+// ─── Recent Source Relation Counts (Home panel enrichment) ───────────────────
+
+export interface SourceRelationCounts {
+  source_id: string
+  cross_connection_count: number
+  related_source_count: number
+}
+
+export async function fetchRecentSourceRelationCounts(userId: string, limit: number = 5): Promise<SourceRelationCounts[]> {
+  const { data, error } = await supabase.rpc('get_recent_source_relation_counts', {
+    p_user_id: userId,
+    p_limit: limit,
+  })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as SourceRelationCounts[]
+}
+
+// ─── Council Weekly Digest ───────────────────────────────────────────────────
+
+export async function fetchCouncilDigest(userId: string, days: number = 7): Promise<CouncilDigest> {
+  const { data, error } = await supabase.rpc('get_council_digest', {
+    p_user_id: userId,
+    p_days: days,
+  })
+  if (error) throw new Error(error.message)
+  return data as CouncilDigest
 }

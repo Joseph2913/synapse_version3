@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { SpotlightCard } from '../components/ui/SpotlightCard'
 import { GripVertical, ChevronDown, ChevronRight, ArrowLeft, Sparkles, Clock, Search, RefreshCw, Bot, HelpCircle, Zap, Circle, Check, type LucideIcon } from 'lucide-react'
 import {
@@ -12,6 +13,9 @@ import {
   fetchAgentCounts,
 } from '../services/supabase'
 import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, AgentSignalRow } from '../types/database'
+import type { AddressingEvidenceEntry } from '../types/council'
+import { QuestionStatusBadge } from '../components/council/QuestionStatusBadge'
+import { CouncilTelemetryStrip } from '../components/council/CouncilTelemetryStrip'
 
 // ── Design tokens (inline for mockup) ───────────────────────────────────────
 
@@ -87,10 +91,10 @@ interface StandingQuestion {
   id: string
   question: string
   type: string
-  status: string
+  status: 'open' | 'partially_addressed' | 'answered' | 'dismissed'
   age: string
   trigger?: string
-  evidence?: string
+  addressingEvidence: AddressingEvidenceEntry[] | null
 }
 
 interface AgentInsight {
@@ -212,7 +216,7 @@ function mapQuestion(q: AgentStandingQuestion): StandingQuestion {
     status: q.status,
     age: timeAgo(q.generated_at),
     trigger: q.trigger_description ?? undefined,
-    evidence: q.addressing_evidence ?? undefined,
+    addressingEvidence: q.addressing_evidence ?? null,
   }
 }
 
@@ -853,6 +857,7 @@ function AdvisorDetailRight({ advisor }: { advisor: Advisor }) {
             {advisor.questions.map((q) => (
               <div
                 key={q.id}
+                id={`council-item-${q.id}`}
                 style={{
                   background: 'var(--color-bg-card)',
                   borderRadius: 8,
@@ -873,15 +878,13 @@ function AdvisorDetailRight({ advisor }: { advisor: Advisor }) {
                     <span className="font-body" style={{ fontSize: 10, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
                       {q.type.replace('_', ' ')}
                     </span>
+                    <QuestionStatusBadge status={q.status} addressingEvidence={q.addressingEvidence} />
                   </div>
                   <span
                     className="font-body"
-                    style={{
-                      fontSize: 10,
-                      color: q.status === 'partially_addressed' ? '#15803d' : 'var(--color-text-secondary)',
-                    }}
+                    style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}
                   >
-                    {q.status.replace('_', ' ')} · {q.age}
+                    {q.age}
                   </span>
                 </div>
                 <div className="font-body" style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', lineHeight: 1.5 }}>
@@ -890,11 +893,6 @@ function AdvisorDetailRight({ advisor }: { advisor: Advisor }) {
                 {q.trigger && (
                   <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 6, lineHeight: 1.4 }}>
                     {q.trigger}
-                  </div>
-                )}
-                {q.evidence && (
-                  <div className="font-body" style={{ fontSize: 11, color: '#15803d', marginTop: 6, lineHeight: 1.4 }}>
-                    {q.evidence}
                   </div>
                 )}
               </div>
@@ -911,6 +909,7 @@ function AdvisorDetailRight({ advisor }: { advisor: Advisor }) {
             {advisor.insights.map((ins) => (
               <div
                 key={ins.id}
+                id={`council-item-${ins.id}`}
                 style={{
                   background: 'var(--color-bg-card)',
                   borderRadius: 8,
@@ -994,6 +993,7 @@ function AdvisorDetailRight({ advisor }: { advisor: Advisor }) {
             {advisor.agentGaps.map((g) => (
               <div
                 key={g.id}
+                id={`council-item-${g.id}`}
                 style={{
                   background: 'var(--color-bg-card)',
                   borderRadius: 8,
@@ -1074,6 +1074,13 @@ export function CouncilView() {
   const [globalSignals, setGlobalSignals] = useState<Array<{ source: string; target: string; reason: string; status: string }>>([])
   const [globalInsights, setGlobalInsights] = useState<Array<{ type: string; agent: string; claim: string }>>([])
 
+  // Deep-linking from Home Council Digest: ?agent=<id>&focus=<itemId>
+  const [searchParams] = useSearchParams()
+  const paramAgentId = searchParams.get('agent')
+  const paramFocusId = searchParams.get('focus')
+  const appliedParamAgentRef = useRef<string | null>(null)
+  const scrolledFocusRef = useRef<string | null>(null)
+
   // Load all advisors from DB
   useEffect(() => {
     let cancelled = false
@@ -1115,6 +1122,40 @@ export function CouncilView() {
     load()
     return () => { cancelled = true }
   }, [])
+
+  // Pre-select agent from ?agent= query param once advisors are loaded
+  useEffect(() => {
+    if (!paramAgentId) return
+    if (appliedParamAgentRef.current === paramAgentId) return
+    if (advisors.length === 0) return
+    const match = advisors.find(a => a.id === paramAgentId)
+    if (match) {
+      setSelectedAdvisorId(paramAgentId)
+      appliedParamAgentRef.current = paramAgentId
+    }
+  }, [paramAgentId, advisors])
+
+  // After detail loads for the selected agent, scroll the focused item into view
+  useEffect(() => {
+    if (!paramFocusId || !selectedAdvisorId) return
+    if (scrolledFocusRef.current === paramFocusId) return
+    // Poll briefly: item renders after detail fetch resolves
+    let attempts = 0
+    const handle = window.setInterval(() => {
+      const el = document.getElementById(`council-item-${paramFocusId}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.style.transition = 'box-shadow 0.3s ease'
+        el.style.boxShadow = '0 0 0 2px var(--color-accent-500)'
+        window.setTimeout(() => { el.style.boxShadow = '' }, 1800)
+        scrolledFocusRef.current = paramFocusId
+        window.clearInterval(handle)
+      } else if (++attempts > 40) {
+        window.clearInterval(handle)
+      }
+    }, 100)
+    return () => window.clearInterval(handle)
+  }, [paramFocusId, selectedAdvisorId])
 
   // Load detail data when an advisor is selected
   const selectedAdvisor = advisors.find((a) => a.id === selectedAdvisorId) ?? null
@@ -1330,6 +1371,8 @@ export function CouncilView() {
           </>
         )}
       </div>
+
+      <CouncilTelemetryStrip />
 
       {/* Two-column content */}
       <div ref={containerRef} className="flex flex-1 overflow-hidden">
