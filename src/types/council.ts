@@ -51,12 +51,25 @@ export interface CouncilDigestAgentSummary {
   new_gaps: number
 }
 
+export interface CouncilDigestRecentlyAnswered {
+  id: string
+  agent_id: string
+  agent_name: string
+  question: string
+  question_type: 'gap_driven' | 'frontier' | 'cross_domain' | 'user_defined'
+  status: 'answered' | 'partially_addressed'
+  status_changed_at: string
+  addressing_source_ids: string[] | null
+  addressing_evidence: AddressingEvidenceEntry[] | null
+}
+
 export interface CouncilDigest {
   summary: CouncilDigestSummary
   top_tensions: CouncilDigestTension[]
   top_frontier_questions: CouncilDigestQuestion[]
   top_gaps: CouncilDigestGap[]
   active_agents: CouncilDigestAgentSummary[]
+  recently_answered_questions: CouncilDigestRecentlyAnswered[]
 }
 
 // ─── Phase 0 (pull-based answer check) ──────────────────────────────────────
