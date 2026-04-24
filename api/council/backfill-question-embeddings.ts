@@ -85,10 +85,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       }
 
       if (updates.length > 0) {
-        const { error: upsertErr } = await sb
-          .from('agent_standing_questions')
-          .upsert(updates, { onConflict: 'id' })
-        if (upsertErr) throw upsertErr
+        const { error: rpcErr } = await sb.rpc('bulk_set_question_embeddings', {
+          p_user_id: userId,
+          p_updates: updates,
+        })
+        if (rpcErr) {
+          console.error('[backfill-question-embeddings] rpc error', rpcErr)
+          throw new Error(`bulk_set_question_embeddings failed: ${rpcErr.message} (code=${rpcErr.code ?? 'none'}) details=${rpcErr.details ?? 'none'}`)
+        }
         totalUpdated += updates.length
       }
 
@@ -102,7 +106,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     })
   } catch (err) {
     console.error('[backfill-question-embeddings]', err)
-    const message = err instanceof Error ? err.message : 'unknown'
+    const message = err instanceof Error
+      ? err.message
+      : (typeof err === 'object' && err !== null ? JSON.stringify(err) : String(err))
     return res.status(500).json({ error: message })
   }
 }
