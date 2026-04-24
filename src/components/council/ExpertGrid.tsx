@@ -3,29 +3,30 @@ import type { CouncilOverviewAgent } from '../../types/council'
 import { ExpertCard } from './ExpertCard'
 import { ExpertListRow, LIST_GRID_COLUMNS } from './ExpertListRow'
 
+type FocusKey = 'insights' | 'novel' | 'skills' | 'sources' | 'entities'
+
 interface Props {
   agents: CouncilOverviewAgent[]
   viewMode: 'cards' | 'list'
   onOpenAgent: (agentId: string) => void
-  onOpenNovel: (agentId: string) => void
+  onOpenAgentFocused: (agentId: string, focus: FocusKey) => void
   onClearFilters: () => void
   hasAnyAgents: boolean
 }
 
-function useColumnCount(): 1 | 2 | 3 {
-  const [count, setCount] = useState<1 | 2 | 3>(() => {
-    if (typeof window === 'undefined') return 2
-    if (window.innerWidth >= 1600) return 3
-    if (window.innerWidth >= 1200) return 2
+function useColumnCount(): 1 | 2 | 3 | 4 {
+  const compute = (w: number): 1 | 2 | 3 | 4 => {
+    if (w >= 1500) return 4
+    if (w >= 1150) return 3
+    if (w >= 800) return 2
     return 1
-  })
+  }
+  const [count, setCount] = useState<1 | 2 | 3 | 4>(() =>
+    typeof window === 'undefined' ? 4 : compute(window.innerWidth),
+  )
 
   useEffect(() => {
-    const handler = () => {
-      if (window.innerWidth >= 1600) setCount(3)
-      else if (window.innerWidth >= 1200) setCount(2)
-      else setCount(1)
-    }
+    const handler = () => setCount(compute(window.innerWidth))
     window.addEventListener('resize', handler)
     return () => window.removeEventListener('resize', handler)
   }, [])
@@ -33,7 +34,7 @@ function useColumnCount(): 1 | 2 | 3 {
   return count
 }
 
-export function ExpertGrid({ agents, viewMode, onOpenAgent, onOpenNovel, onClearFilters, hasAnyAgents }: Props) {
+export function ExpertGrid({ agents, viewMode, onOpenAgent, onOpenAgentFocused, onClearFilters, hasAnyAgents }: Props) {
   const columns = useColumnCount()
 
   if (agents.length === 0) {
@@ -91,7 +92,7 @@ export function ExpertGrid({ agents, viewMode, onOpenAgent, onOpenNovel, onClear
             key={a.id}
             agent={a}
             onClick={() => onOpenAgent(a.id)}
-            onNovelClick={() => onOpenNovel(a.id)}
+            onFocus={(focus) => onOpenAgentFocused(a.id, focus)}
           />
         ))}
       </div>

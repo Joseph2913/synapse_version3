@@ -38,7 +38,7 @@ export function CouncilOverviewView() {
 
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<FilterValue>('all')
-  const [sort, setSort] = useState<SortValue>('recent')
+  const [sort, setSort] = useState<SortValue>('relevance')
   const [viewMode, setViewMode] = useState<ViewMode>(hydrateViewMode)
   const [isRecalibrating, setIsRecalibrating] = useState(false)
 
@@ -76,7 +76,6 @@ export function CouncilOverviewView() {
         sorted.sort((a, b) => (HEALTH_RANK[a.health_status] ?? 5) - (HEALTH_RANK[b.health_status] ?? 5) || a.name.localeCompare(b.name))
         break
       case 'recent':
-      default:
         sorted.sort((a, b) => {
           const at = a.last_activity_at ? new Date(a.last_activity_at).getTime() : -Infinity
           const bt = b.last_activity_at ? new Date(b.last_activity_at).getTime() : -Infinity
@@ -84,9 +83,25 @@ export function CouncilOverviewView() {
           return bt - at
         })
         break
+      case 'relevance':
+      default:
+        // Composite relevance: weighted sum across the five core signals.
+        // Novel connections weighted higher (cross-domain is rarer and more valuable).
+        // Entity count divided by 10 because it's an order of magnitude larger than the others.
+        sorted.sort((a, b) => {
+          const score = (x: typeof a) =>
+            x.total_insights +
+            x.total_novel * 2 +
+            x.total_skills +
+            x.source_count * 1.5 +
+            x.entity_count / 10
+          const s = score(b) - score(a)
+          return s === 0 ? a.name.localeCompare(b.name) : s
+        })
+        break
     }
 
-    if (sort !== 'alpha') {
+    if (sort !== 'alpha' && sort !== 'relevance') {
       const active = sorted.filter(isActiveThisWeek)
       const quiet = sorted.filter(a => !isActiveThisWeek(a))
       return [...active, ...quiet]
@@ -111,9 +126,12 @@ export function CouncilOverviewView() {
     navigate(`/council/${agentId}`)
   }, [navigate])
 
-  const handleOpenNovel = useCallback((agentId: string) => {
-    navigate(`/council/${agentId}?focus=novel`)
-  }, [navigate])
+  const handleOpenAgentFocused = useCallback(
+    (agentId: string, focus: 'insights' | 'novel' | 'skills' | 'sources' | 'entities') => {
+      navigate(`/council/${agentId}?focus=${focus}`)
+    },
+    [navigate],
+  )
 
   const handleClearFilters = useCallback(() => {
     setSearch('')
@@ -155,7 +173,7 @@ export function CouncilOverviewView() {
             agents={filteredAgents}
             viewMode={viewMode}
             onOpenAgent={handleOpenAgent}
-            onOpenNovel={handleOpenNovel}
+            onOpenAgentFocused={handleOpenAgentFocused}
             onClearFilters={handleClearFilters}
             hasAnyAgents={agents.length > 0}
           />

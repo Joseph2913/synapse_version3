@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Search, ChevronDown, LayoutGrid, List } from 'lucide-react'
 
 export type FilterValue = 'all' | 'active' | 'needs_attention'
-export type SortValue = 'recent' | 'alpha' | 'sources' | 'health'
+export type SortValue = 'relevance' | 'recent' | 'alpha' | 'sources' | 'health'
 export type ViewMode = 'cards' | 'list'
 
 interface Props {
@@ -23,6 +23,7 @@ const FILTER_OPTIONS: { value: FilterValue; label: string }[] = [
 ]
 
 const SORT_OPTIONS: { value: SortValue; label: string }[] = [
+  { value: 'relevance', label: 'Most relevant' },
   { value: 'recent', label: 'Most recent activity' },
   { value: 'alpha', label: 'Alphabetical' },
   { value: 'sources', label: 'Sources' },
@@ -169,7 +170,7 @@ export function CouncilControlsBar({
             onClick={() => setSortOpen(v => !v)}
             style={pillStyle(false)}
           >
-            Sort: {activeSort?.label ?? 'Most recent activity'} <ChevronDown size={12} />
+            Sort: {activeSort?.label ?? 'Most relevant'} <ChevronDown size={12} />
           </button>
           {sortOpen && (
             <div style={dropdownStyle}>

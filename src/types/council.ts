@@ -137,6 +137,11 @@ export interface CouncilOverviewNovelPeer {
   connection_count: number
 }
 
+export interface CouncilOverviewTopSkill {
+  skill_title: string
+  relevance: number | null
+}
+
 export type CouncilHealthStatus = 'strong' | 'growing' | 'thin' | 'stale' | 'initialising'
 
 export interface CouncilOverviewAgent {
@@ -156,4 +161,5 @@ export interface CouncilOverviewAgent {
   last_activity_at: string | null
   significant_gap_count: number
   novel_peers: CouncilOverviewNovelPeer[]
+  top_skills: CouncilOverviewTopSkill[]
 }

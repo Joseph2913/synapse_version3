@@ -51,6 +51,8 @@ GRANT EXECUTE ON FUNCTION get_council_overview_summary(UUID, INT) TO authenticat
 -- ============================================================================
 -- 2. get_council_overview_agents
 -- ============================================================================
+DROP FUNCTION IF EXISTS get_council_overview_agents(UUID, INT);
+
 CREATE OR REPLACE FUNCTION get_council_overview_agents(
   p_user_id UUID,
   p_days INT DEFAULT 7
@@ -71,7 +73,8 @@ RETURNS TABLE (
   total_skills INT,
   last_activity_at TIMESTAMPTZ,
   significant_gap_count INT,
-  novel_peers JSONB
+  novel_peers JSONB,
+  top_skills JSONB
 )
 LANGUAGE sql
 SECURITY INVOKER
@@ -209,6 +212,33 @@ AS $$
       FROM novel_peer_ranked
       WHERE rn <= 5
       GROUP BY owner_agent_id
+    ),
+    skill_ranked AS (
+      SELECT
+        das.agent_id,
+        COALESCE(NULLIF(ks.title, ''), ks.name) AS skill_title,
+        das.relevance,
+        row_number() OVER (
+          PARTITION BY das.agent_id
+          ORDER BY das.relevance DESC NULLS LAST, ks.title ASC
+        ) AS rn
+      FROM domain_agent_skills das
+      JOIN knowledge_skills ks ON ks.id = das.skill_id
+      WHERE das.user_id = p_user_id
+    ),
+    top_skills_agg AS (
+      SELECT
+        agent_id,
+        jsonb_agg(
+          jsonb_build_object(
+            'skill_title', skill_title,
+            'relevance', relevance
+          )
+          ORDER BY relevance DESC NULLS LAST, skill_title ASC
+        ) AS skills
+      FROM skill_ranked
+      WHERE rn <= 3
+      GROUP BY agent_id
     )
   SELECT
     b.id,
@@ -226,7 +256,8 @@ AS $$
     COALESCE(st.cnt, 0) AS total_skills,
     GREATEST(li.ts, la.ts) AS last_activity_at,
     COALESCE(gs.cnt, 0) AS significant_gap_count,
-    COALESCE(npa.peers, '[]'::jsonb) AS novel_peers
+    COALESCE(npa.peers, '[]'::jsonb) AS novel_peers,
+    COALESCE(tsk.skills, '[]'::jsonb) AS top_skills
   FROM base b
   LEFT JOIN ins_week iw        ON iw.agent_id = b.id
   LEFT JOIN answered_week aw   ON aw.agent_id = b.id
@@ -239,6 +270,7 @@ AS $$
   LEFT JOIN last_ans la        ON la.agent_id = b.id
   LEFT JOIN gap_sig gs         ON gs.agent_id = b.id
   LEFT JOIN novel_peers_agg npa ON npa.owner_agent_id = b.id
+  LEFT JOIN top_skills_agg tsk  ON tsk.agent_id = b.id
   ORDER BY b.name ASC;
 $$;
 
