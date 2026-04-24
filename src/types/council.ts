@@ -121,3 +121,39 @@ export interface CouncilCronRun {
   phase_counts: CouncilCronPhaseCounts
   error: string | null
 }
+
+// ─── Council Overview (landing page) ────────────────────────────────────────
+
+export interface CouncilOverviewSummary {
+  insights_this_week: number
+  answered_this_week: number
+  novel_this_week: number
+  new_skills_this_week: number
+}
+
+export interface CouncilOverviewNovelPeer {
+  peer_agent_id: string
+  peer_name: string
+  connection_count: number
+}
+
+export type CouncilHealthStatus = 'strong' | 'growing' | 'thin' | 'stale' | 'initialising'
+
+export interface CouncilOverviewAgent {
+  id: string
+  name: string
+  description: string | null
+  health_status: CouncilHealthStatus
+  source_count: number
+  entity_count: number
+  insights_this_week: number
+  answered_this_week: number
+  novel_this_week: number
+  new_skills_this_week: number
+  total_insights: number
+  total_novel: number
+  total_skills: number
+  last_activity_at: string | null
+  significant_gap_count: number
+  novel_peers: CouncilOverviewNovelPeer[]
+}

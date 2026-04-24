@@ -6,7 +6,7 @@ import type { ExtractionSession } from '../types/extraction'
 import type { YouTubePlaylist, QueueStats, PlaylistSettings } from '../types/youtube'
 import type { QueueItem, QueueStatusFilter, ScanHistoryEntry, YouTubeSettings, AutomationSummary } from '../types/automate'
 import type { DigestHistoryEntry, DigestModuleInput, DigestChannelInput } from '../types/digest'
-import type { CouncilDigest, CouncilCronRun } from '../types/council'
+import type { CouncilDigest, CouncilCronRun, CouncilOverviewSummary, CouncilOverviewAgent } from '../types/council'
 import { generateSynapseCode } from './youtube'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
@@ -2984,4 +2984,24 @@ export async function fetchCouncilDigest(userId: string, days: number = 7): Prom
   })
   if (error) throw new Error(error.message)
   return data as CouncilDigest
+}
+
+// ─── Council Overview (landing page) ────────────────────────────────────────
+
+export async function fetchCouncilOverviewSummary(userId: string, days: number = 7): Promise<CouncilOverviewSummary> {
+  const { data, error } = await supabase.rpc('get_council_overview_summary', {
+    p_user_id: userId,
+    p_days: days,
+  })
+  if (error) throw new Error(error.message)
+  return data as CouncilOverviewSummary
+}
+
+export async function fetchCouncilOverviewAgents(userId: string, days: number = 7): Promise<CouncilOverviewAgent[]> {
+  const { data, error } = await supabase.rpc('get_council_overview_agents', {
+    p_user_id: userId,
+    p_days: days,
+  })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as CouncilOverviewAgent[]
 }
