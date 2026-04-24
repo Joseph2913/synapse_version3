@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, ChevronDown, GripVertical, RefreshCw, X } from 'lucide-react'
+import { CouncilTelemetryStrip } from '../components/council/CouncilTelemetryStrip'
 import {
   fetchDomainAgents,
   fetchAgentSkills,
@@ -569,6 +570,8 @@ export function CouncilOverviewView() {
         totalSkills={totalUniqueSkills}
         isRecalibrating={isRecalibrating} onRecalibrate={handleRecalibrate}
       />
+
+      <CouncilTelemetryStrip />
 
       <div ref={containerRef} className="flex flex-1 overflow-hidden"
         style={{ background: 'var(--color-bg-content)', userSelect: isDragging ? 'none' : undefined, cursor: isDragging ? 'col-resize' : undefined }}>

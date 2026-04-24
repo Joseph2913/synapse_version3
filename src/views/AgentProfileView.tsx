@@ -10,6 +10,8 @@ import {
   type AgentSkillAssignment,
 } from '../services/supabase'
 import type { DomainAgent, AgentStandingQuestion, AgentInsightRow, AgentGapRow, HealthStatus } from '../types/database'
+import type { AddressingEvidenceEntry } from '../types/council'
+import { QuestionStatusBadge } from '../components/council/QuestionStatusBadge'
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────────────
 
@@ -407,8 +409,9 @@ export function AgentProfileView() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <span style={{ width: 6, height: 6, borderRadius: '50%', background: QUESTION_TYPE_COLORS[q.question_type] || '#6b7280', flexShrink: 0 }} />
                       <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-body)', color: 'var(--color-text-secondary)' }}>{q.question_type.replace('_', ' ')}</span>
-                      <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)' }}>
-                        P{q.priority}{q.status === 'partially_addressed' && ' · partial'}
+                      <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11, fontFamily: 'var(--font-body)', color: 'var(--color-text-placeholder)' }}>P{q.priority}</span>
+                        <QuestionStatusBadge status={q.status} addressingEvidence={q.addressing_evidence as AddressingEvidenceEntry[] | null} />
                       </span>
                     </div>
                     <div style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--color-text-body)', lineHeight: 1.5 }}>{q.question}</div>
