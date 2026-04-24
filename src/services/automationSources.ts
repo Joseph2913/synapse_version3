@@ -623,8 +623,35 @@ export async function addYouTubePlaylist(
   }
 
   const pl = data as Record<string, unknown>
+  const playlistRowId = pl.id as string
+
+  // Auto-create a Council domain expert for this playlist so ingested videos
+  // immediately populate the expert's sources/entities/insights pipeline.
+  // Mirrors api/council/backfill.ts step1_createAgents so the two paths stay in sync.
+  const { data: agentRow, error: agentErr } = await supabase
+    .from('domain_agents')
+    .insert({
+      user_id: user.id,
+      playlist_id: playlistRowId,
+      name: playlistName,
+      linked_anchor_ids: settings.linkedAnchorIds ?? [],
+      health_status: 'initialising',
+    })
+    .select('id')
+    .single()
+
+  if (agentErr) {
+    console.error('[addYouTubePlaylist] Failed to create domain agent:', agentErr)
+  } else if (agentRow?.id) {
+    const { error: linkErr } = await supabase
+      .from('youtube_playlists')
+      .update({ domain_agent_id: agentRow.id })
+      .eq('id', playlistRowId)
+    if (linkErr) console.error('[addYouTubePlaylist] Failed to link playlist → agent:', linkErr)
+  }
+
   return {
-    id: pl.id as string,
+    id: playlistRowId,
     category: 'youtube-playlist',
     name: pl.playlist_name as string,
     status: 'active',
