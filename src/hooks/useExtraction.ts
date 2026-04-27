@@ -8,7 +8,7 @@ import type {
 } from '../types/extraction'
 import { useAuth } from './useAuth'
 import { buildExtractionPrompt } from '../utils/promptBuilder'
-import { chunkSourceContent } from '../utils/chunking'
+import { chunkSourceContent, buildEmbeddingInput } from '../utils/chunking'
 import { resolveSummary } from '../utils/summarize'
 import { extractEntities, generateEmbeddings } from '../services/gemini'
 import {
@@ -281,25 +281,34 @@ export function useExtraction(): UseExtractionReturn {
         })
 
         let chunkCount = 0
+        let chunks: string[]
         try {
-          const chunks = chunkSourceContent(content)
-          if (chunks.length > 0) {
-            update({
-              statusText: `Embedding ${chunks.length} source chunks...`,
-            })
+          chunks = chunkSourceContent(content)
+        } catch (chunkErr) {
+          await supabase
+            .from('knowledge_sources')
+            .update({ status: 'failed' })
+            .eq('id', sourceId)
+            .eq('user_id', userId)
+          throw chunkErr
+        }
 
-            // Attempt embeddings, but save chunks regardless
-            let chunkEmbeddings: (number[] | null)[] = chunks.map(() => null)
-            try {
-              chunkEmbeddings = await generateEmbeddings(chunks, 5)
-            } catch (embErr) {
-              console.warn('[useExtraction] Chunk embedding failed, saving chunks without vectors:', embErr)
-            }
+        if (chunks.length > 0) {
+          update({ statusText: `Embedding ${chunks.length} source chunks...` })
+          const sourceTitle = (metadataRef.current?.title ?? '').toString()
+          const inputs = chunks.map(c => buildEmbeddingInput(sourceTitle, c))
+          try {
+            const chunkEmbeddings = await generateEmbeddings(inputs, 5)
             await saveChunks(userId, sourceId, chunks, chunkEmbeddings)
             chunkCount = chunks.length
+          } catch (embErr) {
+            await supabase
+              .from('knowledge_sources')
+              .update({ status: 'degraded' })
+              .eq('id', sourceId)
+              .eq('user_id', userId)
+            throw embErr
           }
-        } catch (chunkErr) {
-          console.warn('[useExtraction] Chunking failed entirely:', chunkErr)
         }
 
         // Step 8: Discover cross-connections

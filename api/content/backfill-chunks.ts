@@ -1,22 +1,52 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 // Allow up to 300s on Vercel Pro (batch embedding can be slow)
 export const maxDuration = 300;
 
-// ─── ENVIRONMENT ───────────────────────────────────────────────────────────────
+// ─── Supabase env + factories ────────────────────────────────────────────────
+
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const CRON_SECRET = process.env.CRON_SECRET;
 
-const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY');
+}
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY');
+}
+
+function getServiceSupabase(): SupabaseClient {
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+}
+
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001';
+const EMBEDDING_BATCH_SIZE = 100;
 
-const BATCH_SIZE = 5; // Sources per invocation (to stay within time limits)
-const EMBEDDING_CONCURRENCY = 5;
+// ─── Structured logging ─────────────────────────────────────────────────────
 
-// ─── AUTH ──────────────────────────────────────────────────────────────────────
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped';
+
+interface LogFields {
+  stage: string;
+  user_id?: string;
+  source_id?: string;
+  duration_ms?: number;
+  status?: LogStatus;
+  error?: string;
+  [k: string]: unknown;
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }));
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }));
+}
 
 function verifyAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
@@ -25,138 +55,301 @@ function verifyAuth(req: VercelRequest): boolean {
   return !!(auth && auth === `Bearer ${CRON_SECRET}`);
 }
 
-// ─── CHUNKING (mirrors src/utils/chunking.ts) ─────────────────────────────────
+// ─── CHUNKING (paste-in copy of src/utils/chunking.ts) ─────────────────────
+// If this changes, also update src/utils/chunking.ts and api/pipeline/extract-pipeline.ts.
 
-function chunkText(content: string, targetTokens: number = 500): string[] {
+const CHUNK_TARGET_CHARS = 2000;
+const CHUNK_OVERLAP_CHARS = 100;
+const CHUNK_MAX_CHARS = 3000;
+
+const ABBREVIATIONS = [
+  'Dr', 'Mr', 'Mrs', 'Ms', 'Prof', 'Sr', 'Jr', 'St',
+  'vs', 'etc', 'e.g', 'i.e', 'U.S', 'U.K', 'U.N',
+  'No', 'Inc', 'Ltd', 'Co', 'Corp', 'Fig', 'cf', 'al',
+];
+const DOT_SENTINEL = String.fromCharCode(0xE000);
+const ABBREV_RE = new RegExp(
+  '\\b(' + ABBREVIATIONS.map(a => a.replace(/\./g, '\\.')).join('|') + ')\\.',
+  'g',
+);
+
+function splitSentences(text: string): string[] {
+  const masked = text.replace(ABBREV_RE, (_, a) => `${a}${DOT_SENTINEL}`);
+  const parts = masked.split(/(?<=[.!?])\s+(?=["'(\[]?[A-Z0-9])/g);
+  return parts.map(p => p.split(DOT_SENTINEL).join('.').trim()).filter(Boolean);
+}
+
+function splitSections(text: string): string[] {
+  const lines = text.split('\n');
+  const sections: string[] = [];
+  let buf: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const isHeading = /^#{1,6}\s/.test(line);
+    const isRule = /^[-_*]{3,}$/.test(trimmed);
+    if (isHeading || isRule) {
+      if (buf.length) sections.push(buf.join('\n').trim());
+      buf = [line];
+    } else {
+      buf.push(line);
+    }
+  }
+  if (buf.length) sections.push(buf.join('\n').trim());
+  return sections.filter(s => s.length > 0);
+}
+
+function splitParagraphs(text: string): string[] {
+  return text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+}
+
+function chunkText(
+  content: string,
+  targetChars: number = CHUNK_TARGET_CHARS,
+  overlapChars: number = CHUNK_OVERLAP_CHARS,
+  maxChars: number = CHUNK_MAX_CHARS,
+): string[] {
   if (!content || !content.trim()) return [];
-
-  const targetChars = targetTokens * 4;
-  const overlapChars = 100;
-
-  const sentences = content.match(/[^.!?]+[.!?]+/g);
-  if (!sentences) {
-    const trimmed = content.trim();
-    return trimmed.length >= 50 ? [trimmed] : [];
+  const units: string[] = [];
+  for (const section of splitSections(content)) {
+    for (const para of splitParagraphs(section)) {
+      if (para.length <= targetChars) {
+        units.push(para);
+        continue;
+      }
+      for (const sent of splitSentences(para)) {
+        if (sent.length <= maxChars) {
+          units.push(sent);
+        } else {
+          for (let i = 0; i < sent.length; i += targetChars) {
+            units.push(sent.slice(i, i + targetChars));
+          }
+        }
+      }
+    }
   }
-
   const chunks: string[] = [];
-  let currentChunk = '';
-
-  for (const sentence of sentences) {
-    if (currentChunk.length + sentence.length > targetChars && currentChunk.length > 0) {
-      chunks.push(currentChunk.trim());
-      const overlapStart = Math.max(0, currentChunk.length - overlapChars);
-      currentChunk = currentChunk.substring(overlapStart) + sentence;
+  let current = '';
+  for (const unit of units) {
+    const sep = current ? '\n\n' : '';
+    if (current.length + sep.length + unit.length > targetChars && current.length > 0) {
+      chunks.push(current.trim());
+      const overlapStart = Math.max(0, current.length - overlapChars);
+      current = current.substring(overlapStart).trim() + '\n\n' + unit;
     } else {
-      currentChunk += sentence;
+      current += sep + unit;
     }
   }
-
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk.trim());
-  }
-
-  // Merge very small chunks
+  if (current.trim()) chunks.push(current.trim());
   const merged: string[] = [];
-  for (const chunk of chunks) {
-    if (merged.length > 0 && chunk.length < 100) {
-      merged[merged.length - 1] += ' ' + chunk;
+  for (const c of chunks) {
+    if (merged.length > 0 && c.length < 200) {
+      merged[merged.length - 1] += '\n\n' + c;
     } else {
-      merged.push(chunk);
+      merged.push(c);
     }
   }
-
   return merged.filter(c => c.length > 0);
 }
 
-// ─── EMBEDDING ─────────────────────────────────────────────────────────────────
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
-        content: { parts: [{ text }] },
-      }),
-      signal: AbortSignal.timeout(15000),
-    }
-  );
-
-  if (!response.ok) return [];
-
-  const data = await response.json() as { embedding?: { values?: number[] } };
-  return data.embedding?.values ?? [];
+function buildChunkEmbeddingInput(title: string | null | undefined, chunkContent: string): string {
+  const t = (title ?? '').trim();
+  return t ? `${t}\n\n${chunkContent}` : chunkContent;
 }
 
-// ─── HANDLER ───────────────────────────────────────────────────────────────────
+// ─── EMBEDDING (canonical batch helper) ────────────────────────────────────
+
+async function embedTexts(texts: string[], timeoutMs = 60000): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const out: number[][] = [];
+  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
+    const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE);
+    const url = `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          requests: slice.map(text => ({
+            model: `models/${GEMINI_EMBEDDING_MODEL}`,
+            content: { parts: [{ text }] },
+          })),
+        }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => '');
+        throw new Error(`Batch embedding ${resp.status}: ${t.slice(0, 200)}`);
+      }
+      const data = (await resp.json()) as { embeddings?: Array<{ values?: number[] }> };
+      const vectors = (data.embeddings ?? []).map(e => e.values ?? []);
+      if (vectors.length !== slice.length) {
+        throw new Error(`Batch embedding length mismatch: ${vectors.length} vs ${slice.length}`);
+      }
+      out.push(...vectors);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return out;
+}
+
+// ─── BACKFILL ──────────────────────────────────────────────────────────────
+
+interface SourceRow {
+  id: string;
+  user_id: string;
+  content: string;
+  title: string | null;
+  status: string | null;
+}
+
+interface BackfillResult {
+  sourceId: string;
+  title: string | null;
+  outcome: 'backfilled' | 'no_chunks' | 'failed' | 'degraded';
+  chunksCreated: number;
+  error?: string;
+}
+
+async function processSource(
+  source: SourceRow,
+  supabase: SupabaseClient,
+): Promise<BackfillResult> {
+  const chunks = chunkText(source.content);
+  if (chunks.length === 0) {
+    return {
+      sourceId: source.id,
+      title: source.title,
+      outcome: 'no_chunks',
+      chunksCreated: 0,
+    };
+  }
+
+  let embeddings: number[][];
+  try {
+    const inputs = chunks.map(c => buildChunkEmbeddingInput(source.title, c));
+    embeddings = await embedTexts(inputs);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await supabase
+      .from('knowledge_sources')
+      .update({ status: 'degraded' })
+      .eq('id', source.id)
+      .eq('user_id', source.user_id);
+    return {
+      sourceId: source.id,
+      title: source.title,
+      outcome: 'degraded',
+      chunksCreated: 0,
+      error: msg,
+    };
+  }
+
+  const missing = embeddings.findIndex(e => !e || e.length === 0);
+  if (missing >= 0) {
+    await supabase
+      .from('knowledge_sources')
+      .update({ status: 'degraded' })
+      .eq('id', source.id)
+      .eq('user_id', source.user_id);
+    return {
+      sourceId: source.id,
+      title: source.title,
+      outcome: 'degraded',
+      chunksCreated: 0,
+      error: `Embedding missing for chunk ${missing}`,
+    };
+  }
+
+  const rows = chunks.map((content, i) => ({
+    user_id: source.user_id,
+    source_id: source.id,
+    chunk_index: i,
+    content,
+    embedding: embeddings[i],
+  }));
+
+  const { error } = await supabase
+    .from('source_chunks')
+    .upsert(rows, { onConflict: 'source_id,chunk_index', ignoreDuplicates: true });
+
+  if (error) {
+    await supabase
+      .from('knowledge_sources')
+      .update({ status: 'failed' })
+      .eq('id', source.id)
+      .eq('user_id', source.user_id);
+    return {
+      sourceId: source.id,
+      title: source.title,
+      outcome: 'failed',
+      chunksCreated: 0,
+      error: error.message,
+    };
+  }
+
+  // Restore source state to 'complete' if it was previously failed/degraded/pending.
+  if (source.status && source.status !== 'complete') {
+    await supabase
+      .from('knowledge_sources')
+      .update({ status: 'complete' })
+      .eq('id', source.id)
+      .eq('user_id', source.user_id);
+  }
+
+  return {
+    sourceId: source.id,
+    title: source.title,
+    outcome: 'backfilled',
+    chunksCreated: chunks.length,
+  };
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  if (!verifyAuth(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (!verifyAuth(req)) return res.status(401).json({ error: 'Unauthorized' });
 
   const startTime = Date.now();
-  const supabase = getSupabase();
+  const supabase = getServiceSupabase();
 
-  // Optional: target a specific user
-  const { userId, batchSize: requestedBatchSize } = (req.body ?? {}) as {
+  const { userId, batchSize: requestedBatchSize, mode } = (req.body ?? {}) as {
     userId?: string;
     batchSize?: number;
+    mode?: 'all' | 'missing-only';
   };
-  const limit = Math.min(requestedBatchSize ?? BATCH_SIZE, 20);
+  const limit = Math.min(requestedBatchSize ?? 10, 50);
+  const includeFailedOrDegraded = mode !== 'missing-only';
+
+  log({ stage: 'chunk:backfill', status: 'ok', user_id: userId, batch_size: limit, mode: mode ?? 'all' });
 
   try {
-    // ── Find sources missing chunks ──────────────────────────────────────────
+    // Find candidate sources: chunkable content AND (no chunks OR status in failed/degraded/pending).
     let query = supabase
       .from('knowledge_sources')
-      .select('id, user_id, content, source_type, title')
+      .select('id, user_id, content, title, status')
       .not('content', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+      .order('created_at', { ascending: true })
+      .limit(limit * 4); // Over-fetch since most are already complete; we filter below.
 
-    if (userId) {
-      query = query.eq('user_id', userId);
-    }
+    if (userId) query = query.eq('user_id', userId);
 
     const { data: candidates, error: fetchError } = await query;
-
     if (fetchError) {
+      logError({ stage: 'chunk:backfill', error: fetchError.message });
       return res.status(500).json({ error: fetchError.message });
     }
 
-    if (!candidates || candidates.length === 0) {
-      return res.status(200).json({
-        success: true,
-        backfilled: 0,
-        skipped: 0,
-        failed: 0,
-        message: 'No candidate sources found',
-        duration_ms: Date.now() - startTime,
-      });
-    }
+    const candidateRows = (candidates ?? []) as SourceRow[];
+    const toProcess: SourceRow[] = [];
 
-    // Filter to only sources that actually need backfill (no existing chunks + content >= 200 chars)
-    const sourcesToBackfill: Array<{
-      id: string;
-      user_id: string;
-      content: string;
-      source_type: string;
-      title: string;
-    }> = [];
-
-    for (const source of candidates) {
-      const s = source as { id: string; user_id: string; content: string | null; source_type: string; title: string };
+    for (const s of candidateRows) {
+      if (toProcess.length >= limit) break;
       if (!s.content || s.content.length < 200) continue;
 
       const { count } = await supabase
@@ -164,140 +357,97 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('id', { count: 'exact', head: true })
         .eq('source_id', s.id);
 
-      if (count === 0) {
-        sourcesToBackfill.push({
-          id: s.id,
-          user_id: s.user_id,
-          content: s.content,
-          source_type: s.source_type,
-          title: s.title,
-        });
+      const noChunks = (count ?? 0) === 0;
+      const inRetryState = includeFailedOrDegraded
+        && s.status !== null
+        && s.status !== 'complete';
+
+      if (noChunks || inRetryState) {
+        toProcess.push(s);
       }
     }
 
-    if (sourcesToBackfill.length === 0) {
+    if (toProcess.length === 0) {
+      log({ stage: 'chunk:backfill', status: 'ok', message: 'no_candidates', duration_ms: Date.now() - startTime });
       return res.status(200).json({
         success: true,
         backfilled: 0,
-        skipped: candidates.length,
+        skipped: candidateRows.length,
         failed: 0,
-        message: 'All candidate sources already have chunks',
+        message: 'No candidates to process',
         duration_ms: Date.now() - startTime,
       });
     }
 
-    // ── Backfill each source ─────────────────────────────────────────────────
-    const results: Array<{
-      sourceId: string;
-      title: string;
-      status: 'backfilled' | 'failed';
-      chunksCreated: number;
-      chunksWithEmbeddings: number;
-      error?: string;
-    }> = [];
-
-    for (const source of sourcesToBackfill) {
+    const results: BackfillResult[] = [];
+    for (const source of toProcess) {
+      const t0 = Date.now();
       try {
-        const chunks = chunkText(source.content);
-        if (chunks.length === 0) {
-          results.push({
-            sourceId: source.id,
-            title: source.title,
-            status: 'failed',
-            chunksCreated: 0,
-            chunksWithEmbeddings: 0,
-            error: 'No chunks produced from content',
-          });
-          continue;
-        }
-
-        // Generate embeddings in batches
-        const embeddings: (number[] | null)[] = new Array(chunks.length).fill(null);
-
-        for (let i = 0; i < chunks.length; i += EMBEDDING_CONCURRENCY) {
-          const batch = chunks.slice(i, i + EMBEDDING_CONCURRENCY);
-          const batchResults = await Promise.allSettled(
-            batch.map(text => generateEmbedding(text))
-          );
-
-          batchResults.forEach((result, j) => {
-            if (result.status === 'fulfilled' && result.value.length > 0) {
-              embeddings[i + j] = result.value;
-            }
-          });
-        }
-
-        // Insert chunks
-        const toInsert = chunks.map((content, i) => {
-          const row: Record<string, unknown> = {
-            user_id: source.user_id,
-            source_id: source.id,
-            chunk_index: i,
-            content,
-          };
-          if (embeddings[i]) {
-            row.embedding = embeddings[i];
-          }
-          return row;
+        const r = await processSource(source, supabase);
+        results.push(r);
+        log({
+          stage: 'chunk:backfill',
+          source_id: source.id,
+          user_id: source.user_id,
+          status: r.outcome === 'backfilled' ? 'ok' : 'failed',
+          outcome: r.outcome,
+          chunks: r.chunksCreated,
+          duration_ms: Date.now() - t0,
         });
-
-        const { error: insertError } = await supabase
-          .from('source_chunks')
-          .insert(toInsert);
-
-        if (insertError) {
-          results.push({
-            sourceId: source.id,
-            title: source.title,
-            status: 'failed',
-            chunksCreated: 0,
-            chunksWithEmbeddings: 0,
-            error: insertError.message,
-          });
-          continue;
-        }
-
-        const withEmbeddings = embeddings.filter(e => e !== null).length;
-        results.push({
-          sourceId: source.id,
-          title: source.title,
-          status: 'backfilled',
-          chunksCreated: chunks.length,
-          chunksWithEmbeddings: withEmbeddings,
-        });
-
-        console.log(
-          `[backfill-chunks] ${source.title}: ${chunks.length} chunks (${withEmbeddings} with embeddings)`
-        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         results.push({
           sourceId: source.id,
           title: source.title,
-          status: 'failed',
+          outcome: 'failed',
           chunksCreated: 0,
-          chunksWithEmbeddings: 0,
           error: msg,
+        });
+        await supabase
+          .from('knowledge_sources')
+          .update({ status: 'failed' })
+          .eq('id', source.id)
+          .eq('user_id', source.user_id);
+        logError({
+          stage: 'chunk:backfill',
+          source_id: source.id,
+          user_id: source.user_id,
+          error: msg,
+          duration_ms: Date.now() - t0,
         });
       }
     }
 
-    const backfilled = results.filter(r => r.status === 'backfilled').length;
-    const failed = results.filter(r => r.status === 'failed').length;
+    const backfilled = results.filter(r => r.outcome === 'backfilled').length;
+    const degraded = results.filter(r => r.outcome === 'degraded').length;
+    const failed = results.filter(r => r.outcome === 'failed').length;
+    const noChunks = results.filter(r => r.outcome === 'no_chunks').length;
     const totalChunks = results.reduce((sum, r) => sum + r.chunksCreated, 0);
+
+    log({
+      stage: 'chunk:backfill',
+      status: failed > 0 ? 'partial' : 'ok',
+      backfilled,
+      degraded,
+      failed,
+      no_chunks: noChunks,
+      total_chunks: totalChunks,
+      duration_ms: Date.now() - startTime,
+    });
 
     return res.status(200).json({
       success: true,
       backfilled,
+      degraded,
       failed,
-      skipped: candidates.length - sourcesToBackfill.length,
-      totalChunksCreated: totalChunks,
+      no_chunks: noChunks,
+      total_chunks_created: totalChunks,
       results,
       duration_ms: Date.now() - startTime,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[backfill-chunks] Fatal error:', err);
+    logError({ stage: 'chunk:backfill', error: msg, duration_ms: Date.now() - startTime });
     return res.status(500).json({ success: false, error: msg, duration_ms: Date.now() - startTime });
   }
 }

@@ -1086,23 +1086,106 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 // ─── CHUNKING ──────────────────────────────────────────────────────────────
+// Byte-equivalent paste-in copy of src/utils/chunking.ts. Vercel forbids
+// shared local imports, so this lives inline. If you change anything here,
+// update src/utils/chunking.ts and api/content/backfill-chunks.ts to match.
 
-export function chunkText(text: string, targetTokens = 500): string[] {
-  const targetChars = targetTokens * 4;
-  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+const CHUNK_TARGET_CHARS = 2000;
+const CHUNK_OVERLAP_CHARS = 100;
+const CHUNK_MAX_CHARS = 3000;
+
+const ABBREVIATIONS = [
+  'Dr', 'Mr', 'Mrs', 'Ms', 'Prof', 'Sr', 'Jr', 'St',
+  'vs', 'etc', 'e.g', 'i.e', 'U.S', 'U.K', 'U.N',
+  'No', 'Inc', 'Ltd', 'Co', 'Corp', 'Fig', 'cf', 'al',
+];
+const DOT_SENTINEL = String.fromCharCode(0xE000);
+const ABBREV_RE = new RegExp(
+  '\\b(' + ABBREVIATIONS.map(a => a.replace(/\./g, '\\.')).join('|') + ')\\.',
+  'g',
+);
+
+function splitSentences(text: string): string[] {
+  const masked = text.replace(ABBREV_RE, (_, a) => `${a}${DOT_SENTINEL}`);
+  const parts = masked.split(/(?<=[.!?])\s+(?=["'(\[]?[A-Z0-9])/g);
+  return parts.map(p => p.split(DOT_SENTINEL).join('.').trim()).filter(Boolean);
+}
+
+function splitSections(text: string): string[] {
+  const lines = text.split('\n');
+  const sections: string[] = [];
+  let buf: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const isHeading = /^#{1,6}\s/.test(line);
+    const isRule = /^[-_*]{3,}$/.test(trimmed);
+    if (isHeading || isRule) {
+      if (buf.length) sections.push(buf.join('\n').trim());
+      buf = [line];
+    } else {
+      buf.push(line);
+    }
+  }
+  if (buf.length) sections.push(buf.join('\n').trim());
+  return sections.filter(s => s.length > 0);
+}
+
+function splitParagraphs(text: string): string[] {
+  return text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+}
+
+export function chunkText(
+  content: string,
+  targetChars: number = CHUNK_TARGET_CHARS,
+  overlapChars: number = CHUNK_OVERLAP_CHARS,
+  maxChars: number = CHUNK_MAX_CHARS,
+): string[] {
+  if (!content || !content.trim()) return [];
+  const units: string[] = [];
+  for (const section of splitSections(content)) {
+    for (const para of splitParagraphs(section)) {
+      if (para.length <= targetChars) {
+        units.push(para);
+        continue;
+      }
+      for (const sent of splitSentences(para)) {
+        if (sent.length <= maxChars) {
+          units.push(sent);
+        } else {
+          for (let i = 0; i < sent.length; i += targetChars) {
+            units.push(sent.slice(i, i + targetChars));
+          }
+        }
+      }
+    }
+  }
   const chunks: string[] = [];
   let current = '';
-
-  for (const sentence of sentences) {
-    if (current.length + sentence.length > targetChars && current.length > 0) {
+  for (const unit of units) {
+    const sep = current ? '\n\n' : '';
+    if (current.length + sep.length + unit.length > targetChars && current.length > 0) {
       chunks.push(current.trim());
-      current = sentence;
+      const overlapStart = Math.max(0, current.length - overlapChars);
+      current = current.substring(overlapStart).trim() + '\n\n' + unit;
     } else {
-      current += sentence;
+      current += sep + unit;
     }
   }
   if (current.trim()) chunks.push(current.trim());
-  return chunks.filter(c => c.length > 50);
+  const merged: string[] = [];
+  for (const c of chunks) {
+    if (merged.length > 0 && c.length < 200) {
+      merged[merged.length - 1] += '\n\n' + c;
+    } else {
+      merged.push(c);
+    }
+  }
+  return merged.filter(c => c.length > 0);
+}
+
+function buildChunkEmbeddingInput(title: string | null | undefined, chunkContent: string): string {
+  const t = (title ?? '').trim();
+  return t ? `${t}\n\n${chunkContent}` : chunkContent;
 }
 
 // ─── DEDUPLICATION ─────────────────────────────────────────────────────────
@@ -1423,31 +1506,46 @@ export async function queueNearMatches(
 // ─── TRANSCRIPT CHUNKS ─────────────────────────────────────────────────────
 
 /**
- * Split content into ~500-token chunks, batch-embed them all in one call,
- * then bulk-insert into source_chunks. Returns the count of chunks saved.
+ * Split content into ~500-token chunks, batch-embed them with the source
+ * title prepended for retrieval context, then bulk-upsert into source_chunks.
+ *
+ * Failure semantics (Stage 3):
+ *   - Chunking failure -> throws (caller sets source.status='failed').
+ *   - Embedding failure for any chunk -> throws (caller sets status='degraded').
+ *   - All-or-nothing: if any chunk lacks an embedding, no rows are inserted.
+ *   - Idempotent: insert uses ON CONFLICT (source_id, chunk_index) DO NOTHING.
  */
 export async function saveTranscriptChunks(
   content: string,
   sourceId: string,
   userId: string,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  title: string | null = null
 ): Promise<number> {
   const chunks = chunkText(content);
   if (chunks.length === 0) return 0;
 
-  const embeddings = await batchEmbed(chunks);
+  const embeddingInputs = chunks.map(c => buildChunkEmbeddingInput(title, c));
+  const embeddings = await batchEmbed(embeddingInputs);
+
+  const missing = embeddings.findIndex(e => !e || e.length === 0);
+  if (missing >= 0) {
+    throw new Error(`Embedding missing for chunk ${missing} of source ${sourceId}`);
+  }
+
   const rows = chunks.map((chunk, i) => ({
     user_id: userId,
     source_id: sourceId,
     chunk_index: i,
     content: chunk,
-    embedding: (embeddings[i]?.length ?? 0) > 0 ? embeddings[i] : null,
+    embedding: embeddings[i],
   }));
 
-  const { error } = await supabase.from('source_chunks').insert(rows);
+  const { error } = await supabase
+    .from('source_chunks')
+    .upsert(rows, { onConflict: 'source_id,chunk_index', ignoreDuplicates: true });
   if (error) {
-    console.warn(`[extract-pipeline] Bulk chunk insert failed:`, error.message);
-    return 0;
+    throw new Error(`source_chunks upsert failed: ${error.message}`);
   }
   return chunks.length;
 }
@@ -1659,10 +1757,31 @@ export async function runExtractionCore(params: {
   // 5. Edges
   let edgesCreated = await saveEdges(relationships, savedNodeMap, userId, supabase, extractedEdgeWeight);
 
-  // 6. Chunks
+  // 6. Chunks. Stage 3 policy: chunking failure -> 'failed', embedding failure -> 'degraded'.
   let chunksCreated = 0;
   if (enableChunking) {
-    chunksCreated = await saveTranscriptChunks(content, source.sourceId, userId, supabase);
+    try {
+      chunksCreated = await saveTranscriptChunks(content, source.sourceId, userId, supabase, source.sourceLabel ?? null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isEmbeddingFailure = message.startsWith('Embedding missing') || message.includes('RATE_LIMITED');
+      const newStatus = isEmbeddingFailure ? 'degraded' : 'failed';
+      await supabase
+        .from('knowledge_sources')
+        .update({ status: newStatus })
+        .eq('id', source.sourceId)
+        .eq('user_id', userId);
+      console.error(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        stage: 'chunk',
+        source_id: source.sourceId,
+        user_id: userId,
+        status: newStatus,
+        error: message,
+      }));
+      throw err;
+    }
   }
 
   // 7. Cross-connections

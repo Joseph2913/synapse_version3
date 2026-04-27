@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { saveChunks } from './extractionPersistence'
-import { chunkSourceContent } from '../utils/chunking'
+import { chunkSourceContent, buildEmbeddingInput } from '../utils/chunking'
+import { generateEmbeddings } from './gemini'
 import { runHeadlessExtraction } from './extractionPipeline'
 
 interface CreateManualAnchorInput {
@@ -78,7 +79,19 @@ export async function createManualAnchorFromScratch({
 
   const chunks = chunkSourceContent(noteContent)
   if (chunks.length > 0) {
-    await saveChunks(userId, sourceRow.id, chunks, chunks.map(() => null))
+    const sourceTitle = `${trimmedTitle} anchor brief`
+    const inputs = chunks.map(c => buildEmbeddingInput(sourceTitle, c))
+    try {
+      const embeddings = await generateEmbeddings(inputs, 5)
+      await saveChunks(userId, sourceRow.id, chunks, embeddings)
+    } catch (err) {
+      await supabase
+        .from('knowledge_sources')
+        .update({ status: 'degraded' })
+        .eq('id', sourceRow.id)
+        .eq('user_id', userId)
+      throw err
+    }
   }
 
   const { data: nodeRow, error: nodeError } = await supabase

@@ -226,34 +226,42 @@ export async function updateNodeEmbeddings(
 
 // --- Save Chunks ---
 
+/**
+ * Bulk-upsert chunks for a source.
+ *
+ * Stage 3 contract: every chunk must have a non-null embedding. If any
+ * embedding is missing the function throws — the caller must update the
+ * source state to 'degraded'. Idempotent via ON CONFLICT (source_id, chunk_index).
+ */
 export async function saveChunks(
   userId: string,
   sourceId: string,
   chunks: string[],
   embeddings: (number[] | null)[]
 ): Promise<void> {
-  const toInsert = chunks.map((content, i) => {
-    const row: Record<string, unknown> = {
-      user_id: userId,
-      source_id: sourceId,
-      chunk_index: i,
-      content,
-    }
-    if (embeddings[i]) {
-      row.embedding = embeddings[i]
-    }
-    return row
-  })
+  if (chunks.length === 0) return
 
-  const { error, data } = await supabase.from('source_chunks').insert(toInsert).select('id')
-
-  if (error) throw new PersistenceError('Failed to save chunks', error)
-  if (!data || data.length === 0) {
+  const missing = embeddings.findIndex(e => !e || e.length === 0)
+  if (missing >= 0) {
     throw new PersistenceError(
-      'Failed to save chunks — insert returned 0 rows (likely RLS rejection)',
-      { message: `Attempted ${toInsert.length} rows for source ${sourceId}, got 0 back`, details: '', hint: '', code: 'EMPTY_INSERT' },
+      `Embedding missing for chunk ${missing} — refusing to save chunks without vectors`,
+      { sourceId, chunkIndex: missing },
     )
   }
+
+  const toInsert = chunks.map((content, i) => ({
+    user_id: userId,
+    source_id: sourceId,
+    chunk_index: i,
+    content,
+    embedding: embeddings[i],
+  }))
+
+  const { error } = await supabase
+    .from('source_chunks')
+    .upsert(toInsert, { onConflict: 'source_id,chunk_index', ignoreDuplicates: true })
+
+  if (error) throw new PersistenceError('Failed to save chunks', error)
 }
 
 // --- Save Extraction Session ---
