@@ -18,7 +18,7 @@ This is a **complete rebuild** (v2) with a new codebase connecting to an **exist
 | Styling | Tailwind CSS 4 | with custom theme tokens via CSS variables |
 | Database | Supabase (PostgreSQL) | Client v2 |
 | AI | Google Gemini 2.0 Flash | via REST API |
-| Embeddings | Gemini text-embedding-004 | 768-dimensional vectors |
+| Embeddings | Gemini gemini-embedding-001 | 3072-dimensional vectors |
 | Vector Search | pgvector | via Supabase |
 | Graph Viz | D3.js | v7 |
 | Icons | Lucide React | Latest |
@@ -127,7 +127,7 @@ synapse-v2/
 
 ### Gemini AI
 - Model: `gemini-2.0-flash` for extraction and Graph RAG
-- Embeddings: `text-embedding-004` (768 dimensions)
+- Embeddings: `gemini-embedding-001` (3072 dimensions). Indexed with HNSW over `halfvec_cosine_ops` because pgvector's standard `vector_cosine_ops` caps at 2000 dims.
 - All AI calls go through `services/gemini.ts`
 - Prompt construction is modular: base instructions + extraction mode + user profile + anchor context + custom guidance
 - System prompts are composed via `utils/promptBuilder.ts`
@@ -191,7 +191,7 @@ The build is organized into 14 PRDs across 5 phases, defined in `docs/BUILD-PLAN
 | **2: Data Surfaces** | PRD 3–6 | Settings, Browse, Graph, Home — all read-only views showing existing data |
 | **3: Intelligence** | PRD 7–8 | Ingestion pipeline (Gemini extraction) + Graph RAG chat |
 | **4: Automation** | PRD 9–11 | YouTube/Meetings/Documents ingestion tabs + serverless pipeline |
-| **5: Polish + Advanced** | PRD 12–14 | Full command palette search, Orientation Engine, Chrome Extension |
+| **5: Polish + Advanced** | PRD 12–13 | Full command palette search, Orientation Engine |
 
 ### Current Build Status
 
@@ -210,7 +210,12 @@ The build is organized into 14 PRDs across 5 phases, defined in `docs/BUILD-PLAN
 - [ ] PRD 11 — YouTube Serverless Pipeline
 - [ ] PRD 12 — Command Palette: Full Search
 - [ ] PRD 13 — Orientation Engine (Digests)
-- [ ] PRD 14 — Chrome Extension
+
+---
+
+## Removed features
+
+- **Chrome extension** — removed on 2026-04-26. May be reintroduced later as a separate workstream. Do not list it as an active ingestion source.
 
 ---
 

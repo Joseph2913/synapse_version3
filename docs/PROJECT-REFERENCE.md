@@ -241,7 +241,6 @@ The YouTube ingestion UI is split across two navigation areas:
 - **AI**: Google Gemini 2.0 Flash for extraction and Graph RAG, Gemini text-embedding-004 for vector embeddings
 - **Hosting**: Vercel (automatic deployment from GitHub)
 - **Icons**: Lucide React
-- **Browser Extension**: Chrome extension for one-click capture from YouTube and web articles
 
 ### Key Services
 
@@ -359,10 +358,8 @@ Originally planned to include anchor suggestion system, bias mitigation, serendi
 
 1. **Graph RAG implementation** — Hybrid search (keyword + semantic vector search) implemented for the chat interface. Chunking system splits source content for better context assembly during retrieval. Ongoing refinement needed for retrieval accuracy.
 
-2. **Chrome Extension distribution** — Built and functional for YouTube capture and article extraction. Distributed via Chrome Web Store. Uses Supabase Auth (JWT stored in chrome.storage.local). Content saved to `knowledge_sources` with `extraction_pending: true` for backend processing.
+2. **Cross-connection quality** — Gemini compares new nodes against existing graph nodes to create connecting edges. Quality is variable and depends on graph density. More nodes = better cross-connections, but also more noise. May need confidence thresholds tuned over time.
 
-3. **Cross-connection quality** — Gemini compares new nodes against existing graph nodes to create connecting edges. Quality is variable and depends on graph density. More nodes = better cross-connections, but also more noise. May need confidence thresholds tuned over time.
+3. **Agent fleet vision** — The long-term vision of the graph as persistent memory for AI agent fleets (where anchors update Claude Skills automatically) is compelling but architecturally distant. Current focus remains on the six Knowledge Value Modes as the near-term product roadmap.
 
-4. **Agent fleet vision** — The long-term vision of the graph as persistent memory for AI agent fleets (where anchors update Claude Skills automatically) is compelling but architecturally distant. Current focus remains on the six Knowledge Value Modes as the near-term product roadmap.
-
-5. **B2B pivot potential** — The Tokai Project (partnership with InfoCert and Bird & Bird for AI TRiSM services) represents a potential enterprise market using the same context graph technology for compliance and governance. Enterprise context graphs for AI agent audit trails is a growing market ($1.07B → $6.9B at 36.6% CAGR).
+4. **B2B pivot potential** — The Tokai Project (partnership with InfoCert and Bird & Bird for AI TRiSM services) represents a potential enterprise market using the same context graph technology for compliance and governance. Enterprise context graphs for AI agent audit trails is a growing market ($1.07B → $6.9B at 36.6% CAGR).

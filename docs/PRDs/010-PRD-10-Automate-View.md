@@ -1,5 +1,7 @@
 # PRD 10 — Automate View: Integration Dashboard & Queue Management
 
+> **Note (2026-04-26):** The Chrome Extension card (Card 5) and all `chrome_extension` metadata queries described in this PRD have been removed from the codebase. Treat any mention of `ChromeExtensionCard`, `extension` summary fields, or `metadata.source = 'chrome_extension'` filters as historical only.
+
 **Phase:** 4 — Automation
 **Dependencies:** PRD 2 (Shell + Navigation), PRD 9 (Ingest YouTube/Meetings/Documents — provides playlist and queue data in the database)
 **Estimated Complexity:** Low–Medium (1 session)

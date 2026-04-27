@@ -1,0 +1,8 @@
+Q3 strategy review notes
+
+We discussed three priorities for next quarter:
+- Ship the council overview redesign
+- Migrate the YouTube pipeline to the three-tier strategy
+- Close out Stage 1 capture hardening
+
+Next step: Joseph to confirm the size limits with the team.

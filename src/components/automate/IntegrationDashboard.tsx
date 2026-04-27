@@ -1,6 +1,5 @@
 import { YouTubePlaylistsCard } from './YouTubePlaylistsCard'
 import { MeetingIntegrationsCard } from './MeetingIntegrationsCard'
-import { ChromeExtensionCard } from './ChromeExtensionCard'
 import { IntegrationStatusCard } from './IntegrationStatusCard'
 import type { AutomationSummary } from '../../types/automate'
 import type { YouTubePlaylist } from '../../types/youtube'
@@ -44,8 +43,6 @@ export function IntegrationDashboard({ summary, playlists, queueSectionRef }: In
           queueSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         }}
       />
-
-      <ChromeExtensionCard summary={summary} />
     </div>
   )
 }

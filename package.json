@@ -14,7 +14,9 @@
     "remotion:render:ig-post": "npx remotion render remotion/index.ts InstagramPost out/ig-post.mp4",
     "remotion:render:ig-story": "npx remotion render remotion/index.ts InstagramStory out/ig-story.mp4",
     "remotion:render:week1:gif": "npx remotion render remotion/index.ts TranscriptExtraction out/week1.gif --codec=gif --every-nth-frame=2 --number-of-gif-loops=0",
-    "remotion:render:week1:mp4": "npx remotion render remotion/index.ts TranscriptExtraction out/week1.mp4"
+    "remotion:render:week1:mp4": "npx remotion render remotion/index.ts TranscriptExtraction out/week1.mp4",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@remotion/cli": "^4.0.446",
@@ -39,12 +41,14 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@types/formidable": "^3.5.1",
+    "@types/node": "^25.6.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vercel/node": "^5.6.9",
     "@vitejs/plugin-react": "^4.3.4",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.6.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^4.1.5"
   }
 }

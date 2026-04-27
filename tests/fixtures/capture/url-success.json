@@ -1,0 +1,7 @@
+{
+  "title": "How attention works in transformers",
+  "content": "Transformers are a class of neural network architectures that have become foundational in modern deep learning. The core mechanism, attention, allows each position in a sequence to weigh information from every other position when computing its output. This is in contrast to recurrent networks, which process sequences token by token.\n\nSelf-attention computes three projections of each input vector: queries, keys, and values. The dot product of queries and keys yields a similarity score, which is normalised via softmax and used to weight the values.\n\nMulti-head attention extends this by running several attention computations in parallel, each with its own learned projections.",
+  "language": "en",
+  "fetched": true,
+  "fetch_error": null
+}

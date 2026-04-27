@@ -1,0 +1,17 @@
+{
+  "content": "Welcome back to the channel. Today we are talking about how transformer models actually work. Most explainers focus on the math, but I want to start with the intuition.\n\nA transformer takes in a sequence of tokens. It produces a contextual representation for each one. The trick is that every token can attend to every other token in parallel. That is the whole game.",
+  "title": "How transformers work — the intuition first",
+  "source_type": "youtube",
+  "source_url": "https://www.youtube.com/watch?v=abc12345678",
+  "metadata": {
+    "video_id": "abc12345678",
+    "channel": "Knowledge Graph Weekly",
+    "duration_seconds": 720,
+    "published_at": "2026-03-12T10:00:00Z",
+    "thumbnail_url": "https://i.ytimg.com/vi/abc12345678/hqdefault.jpg",
+    "char_count": 365,
+    "language": "en",
+    "tier_used": 1,
+    "duration_ms": 32100
+  }
+}

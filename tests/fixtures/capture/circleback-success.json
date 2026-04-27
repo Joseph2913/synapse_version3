@@ -1,0 +1,25 @@
+{
+  "id": 472518,
+  "name": "Q3 strategy sync",
+  "createdAt": "2026-04-25T14:00:00Z",
+  "duration": 2640,
+  "url": "https://app.circleback.ai/meetings/472518",
+  "recordingUrl": "https://recordings.circleback.ai/472518.mp4",
+  "tags": ["strategy", "leadership"],
+  "icalUid": "abc123@google.com",
+  "attendees": [
+    { "name": "Joseph Thomas", "email": "joseph.thomas@oxygyconsulting.com" },
+    { "name": "Sam Carter", "email": "sam@example.com" },
+    { "name": null, "email": "alex@example.com" }
+  ],
+  "notes": "**People**: Joseph Thomas, Sam Carter and Alex Lee\n\nReviewed the Q3 priorities. Council overview redesign is shipped. YouTube three-tier strategy is next up. Stage 1 capture hardening continues.",
+  "transcript": [
+    { "speaker": "Joseph", "text": "Let's kick off with where we are on the council redesign.", "timestamp": 0 },
+    { "speaker": "Sam", "text": "Shipped on April twenty-fourth. The aggregate-first cards landed.", "timestamp": 14 },
+    { "speaker": "Joseph", "text": "Great. What does Q3 look like?", "timestamp": 32 }
+  ],
+  "actionItems": [
+    { "id": 1, "title": "Confirm Apify default for YouTube", "description": "Tier 1 across both manual capture and the cron pipeline.", "assignee": { "name": "Joseph", "email": "joseph.thomas@oxygyconsulting.com" }, "status": "DONE" },
+    { "id": 2, "title": "Wire meeting webhook to CapturedSource", "assignee": { "name": "Sam" }, "status": "PENDING" }
+  ]
+}

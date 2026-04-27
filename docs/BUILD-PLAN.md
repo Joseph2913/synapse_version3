@@ -114,7 +114,7 @@ Synapse V2 connects to an existing Supabase database with real user data. The sc
 - **Anchors tab:** Lists all nodes where `is_anchor = true`. Each anchor shows entity dot, label, type, connection count (count edges). "Demote" button removes anchor status. "Add Anchor" button opens a search modal where user can find any existing node and promote it to anchor.
 - **Extraction tab:** Default Mode selector (4 modes in a 2×2 grid, styled per mockup). Default Anchor Emphasis selector (Passive/Standard/Aggressive in a row). Reads/writes `extraction_settings` table.
 - **Digests tab:** Read-only list of existing `digest_profiles` if any exist. "Coming soon" state if none.
-- **Integrations tab:** Read-only cards showing connection status for Gemini API, Supabase, Circleback, Chrome Extension. Status is determined by checking if API keys are configured (env vars present) and if integration tables have data.
+- **Integrations tab:** Read-only cards showing connection status for Gemini API, Supabase, Circleback. Status is determined by checking if API keys are configured (env vars present) and if integration tables have data.
 
 **Design requirements:**
 - Form inputs use `--bg-inset` background with `--border-subtle` borders
@@ -346,7 +346,7 @@ Synapse V2 connects to an existing Supabase database with real user data. The sc
 ### PRD 10 — Automate View
 
 **What gets built:**
-- Integration dashboard with status cards for: YouTube Channels (count + RSS interval), YouTube Playlists (count + SYN codes), Meeting Integrations (connected services), Processing Queue (pending/failed counts + last activity), Chrome Extension (connection status + capture count)
+- Integration dashboard with status cards for: YouTube Channels (count + RSS interval), YouTube Playlists (count + SYN codes), Meeting Integrations (connected services), Processing Queue (pending/failed counts + last activity)
 - Each card shows: title, description, active/idle status indicator (green dot for active, gray for idle), key metric
 - Expandable cards with configuration options and "Manage" actions
 - Queue section with filter bar (All/Pending/Processing/Complete/Failed) and per-item cards showing 5-step processing status
@@ -402,20 +402,6 @@ Synapse V2 connects to an existing Supabase database with real user data. The sc
 
 ---
 
-### PRD 14 — Chrome Extension
-
-**What gets built:**
-- Manifest V3 Chrome extension
-- Auth: Supabase JWT stored in `chrome.storage.local`
-- YouTube capture: when on a YouTube video page, extension icon activates. One click saves video URL + metadata to `knowledge_sources` with `extraction_pending: true`
-- Web article capture: highlight text on any page, right-click → "Save to Synapse". Saves highlighted text + page URL + title to `knowledge_sources`
-- Popup UI: shows recent captures, link to open Synapse app
-- Backend processing picks up pending sources via the existing queue system
-
-**Testable after:** Install extension. Sign in. Capture a YouTube video. Capture a web article. See both appear in Synapse's activity feed and processing queue.
-
----
-
 ## Dependency Graph
 
 ```
@@ -426,11 +412,10 @@ PRD 1 (Scaffold + Auth)
        │         │                                    └─ PRD 10 (Automate)
        │         │                                         └─ PRD 11 (YouTube Serverless)
        │         └─ PRD 8 (Ask: RAG) ──────── PRD 13 (Orientation Engine)
-       ├─ PRD 4 (Browse)
-       │    ├─ PRD 5 (Graph)
-       │    ├─ PRD 6 (Home)
-       │    └─ PRD 12 (Command Palette Search)
-       └─ PRD 14 (Chrome Extension) ← depends on PRD 7
+       └─ PRD 4 (Browse)
+            ├─ PRD 5 (Graph)
+            ├─ PRD 6 (Home)
+            └─ PRD 12 (Command Palette Search)
 ```
 
 ---

@@ -2,8 +2,13 @@ import { useState, useRef, useCallback } from 'react'
 import { ArrowLeft, Loader } from 'lucide-react'
 import { useExtraction } from '../../hooks/useExtraction'
 import { useSettings } from '../../hooks/useSettings'
+import { useAuth } from '../../hooks/useAuth'
 import { useFileUpload } from '../../hooks/useFileUpload'
-import { extractTextFromFile } from '../../utils/fileParser'
+import { capturePaste, PASTE_MAX_CHARS } from '../../adapters/capture/paste'
+import { captureUrl } from '../../adapters/capture/url'
+import { captureFile } from '../../adapters/capture/file'
+import { captureYoutube } from '../../adapters/capture/youtube'
+import { CaptureError, FILE_MAX_BYTES, FILE_SUPPORTED_MIME } from '../../types/capture'
 import { AdvancedOptions } from '../ingest/AdvancedOptions'
 import { ExtractionProgress } from '../ingest/ExtractionProgress'
 import { ExtractionSummary } from '../ingest/ExtractionSummary'
@@ -25,12 +30,13 @@ const PANEL_TITLES: Record<ManualUploadType, string> = {
   youtube: 'Add YouTube Video',
 }
 
+// Stage 2 — lowercase canonical strings only.
 const SOURCE_TYPE_MAP: Record<ManualUploadType, string> = {
-  document: 'Document',
-  text: 'Note',
-  url: 'Web',
-  transcript: 'Meeting',
-  youtube: 'YouTube',
+  document: 'file',
+  text: 'paste',
+  url: 'url',
+  transcript: 'meeting',
+  youtube: 'youtube',
 }
 
 const YOUTUBE_PATTERN = /(youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/
@@ -67,6 +73,7 @@ function applyBlur(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) 
 
 export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
   const { profile, extractionSettings, anchors } = useSettings()
+  const { session } = useAuth()
   const { state, start, approveAndSave, reExtract, reset } = useExtraction()
   const { isDragging, dragHandlers } = useFileUpload()
 
@@ -87,38 +94,18 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
   const [transcriptTitle, setTranscriptTitle] = useState('')
   const [transcriptDate, setTranscriptDate] = useState('')
   const [youtubeUrl, setYoutubeUrl] = useState('')
-  const [fileContent, setFileContent] = useState<string | null>(null)
-  const [fileName, setFileName] = useState<string | null>(null)
-  const [fileSize, setFileSize] = useState<number | null>(null)
+  const [stagedFile, setStagedFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
-  const [isParsingFile, setIsParsingFile] = useState(false)
+  const [pasteError, setPasteError] = useState<string | null>(null)
+  const [urlError, setUrlError] = useState<string | null>(null)
+  const [youtubeError, setYoutubeError] = useState<string | null>(null)
+  const [isCapturing, setIsCapturing] = useState(false)
 
   const latestEntitiesRef = useRef<ReviewEntity[] | null>(null)
 
-  // Derive current content for the type
-  const getContent = (): string => {
-    switch (type) {
-      case 'document': return fileContent ?? ''
-      case 'text': return textContent
-      case 'url': return urlValue.trim()
-      case 'transcript': return transcriptContent
-      case 'youtube': return youtubeUrl.trim()
-    }
-  }
-
-  const getSourceTitle = (): string => {
-    switch (type) {
-      case 'document': return fileName ?? 'Document'
-      case 'text': return 'Note'
-      case 'url': return urlValue.trim()
-      case 'transcript': return transcriptTitle.trim() || 'Transcript'
-      case 'youtube': return youtubeUrl.trim()
-    }
-  }
-
   const isContentReady = (): boolean => {
     switch (type) {
-      case 'document': return fileContent !== null && fileContent.trim().length > 0
+      case 'document': return stagedFile !== null
       case 'text': return textContent.trim().length > 0
       case 'url': return urlValue.trim().length > 0
       case 'transcript': return transcriptContent.trim().length > 0
@@ -126,30 +113,91 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
     }
   }
 
-  const handleFilesAdded = useCallback(async (files: File[]) => {
+  const handleFilesAdded = useCallback((files: File[]) => {
     const file = files[0]
     if (!file) return
     setFileError(null)
-    setIsParsingFile(true)
-    try {
-      const text = await extractTextFromFile(file)
-      if (!text.trim()) {
-        setFileError('Could not read this file. Supported formats: PDF, DOCX, MD, TXT')
-        return
-      }
-      setFileContent(text)
-      setFileName(file.name)
-      setFileSize(file.size)
-    } catch {
-      setFileError('Could not read this file. Supported formats: PDF, DOCX, MD, TXT')
-    } finally {
-      setIsParsingFile(false)
+    const mime = (file.type || '').toLowerCase()
+    if (!mime || !(mime in FILE_SUPPORTED_MIME)) {
+      setFileError('Unsupported file type. Supported: PDF, DOCX, TXT, MD, MP3, M4A, WAV, MP4, MOV, JPG, PNG.')
+      return
     }
+    if (file.size > FILE_MAX_BYTES) {
+      setFileError(`File is too large. Maximum is ${(FILE_MAX_BYTES / (1024 * 1024)).toFixed(0)} MB.`)
+      return
+    }
+    setStagedFile(file)
   }, [])
 
   const handleExtract = useCallback(async () => {
-    const content = getContent()
-    if (!content.trim()) return
+    const sourceTypeForDb = SOURCE_TYPE_MAP[type]
+    let resolvedContent = ''
+    let resolvedTitle = ''
+    let resolvedSourceUrl: string | null = null
+
+    // Stage 1 capture adapters. Paste/URL/file run through canonical adapters.
+    // Transcript and YouTube continue on the legacy inline path until their
+    // adapters land. DB-facing source_type strings stay unchanged here — the
+    // lowercase->DB translation moves to Stage 2.
+    try {
+      if (type === 'text') {
+        setPasteError(null)
+        const captured = capturePaste({ content: textContent })
+        resolvedContent = captured.content
+        resolvedTitle = captured.title
+      } else if (type === 'url') {
+        setUrlError(null)
+        if (!session?.access_token) {
+          setUrlError('Not signed in.')
+          return
+        }
+        setIsCapturing(true)
+        const captured = await captureUrl({ url: urlValue, authToken: session.access_token })
+        resolvedContent = captured.content
+        resolvedTitle = captured.title
+        resolvedSourceUrl = captured.source_url
+      } else if (type === 'document') {
+        setFileError(null)
+        if (!stagedFile) return
+        if (!session?.access_token) {
+          setFileError('Not signed in.')
+          return
+        }
+        setIsCapturing(true)
+        const captured = await captureFile({ file: stagedFile, authToken: session.access_token })
+        resolvedContent = captured.content
+        resolvedTitle = captured.title
+      } else if (type === 'transcript') {
+        if (!transcriptContent.trim()) return
+        resolvedContent = transcriptContent
+        resolvedTitle = transcriptTitle.trim() || 'Transcript'
+      } else if (type === 'youtube') {
+        setYoutubeError(null)
+        if (!youtubeUrl.trim()) return
+        if (!session?.access_token) {
+          setYoutubeError('Not signed in.')
+          return
+        }
+        setIsCapturing(true)
+        const captured = await captureYoutube({ url: youtubeUrl, authToken: session.access_token })
+        resolvedContent = captured.content
+        resolvedTitle = captured.title
+        resolvedSourceUrl = captured.source_url
+      }
+    } catch (err) {
+      if (err instanceof CaptureError) {
+        if (type === 'url') setUrlError(err.message)
+        else if (type === 'document') setFileError(err.message)
+        else if (type === 'text') setPasteError(err.message)
+        else if (type === 'youtube') setYoutubeError(err.message)
+        return
+      }
+      throw err
+    } finally {
+      setIsCapturing(false)
+    }
+
+    if (!resolvedContent.trim()) return
 
     const config: ExtractionConfig = {
       mode,
@@ -161,13 +209,14 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
       customGuidance: customGuidance || undefined,
     }
 
-    await start(content, config, {
-      title: getSourceTitle(),
-      sourceType: SOURCE_TYPE_MAP[type],
+    await start(resolvedContent, config, {
+      title: resolvedTitle,
+      sourceType: sourceTypeForDb,
+      sourceUrl: resolvedSourceUrl ?? undefined,
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, mode, emphasis, anchors, selectedAnchorIds, profile, customGuidance, start,
-      fileContent, textContent, urlValue, transcriptContent, transcriptTitle, youtubeUrl])
+      stagedFile, textContent, urlValue, transcriptContent, transcriptTitle, youtubeUrl, session])
 
   const handleEntitiesChange = useCallback((entities: ReviewEntity[]) => {
     latestEntitiesRef.current = entities
@@ -257,7 +306,7 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
             {/* ── Document ── */}
             {type === 'document' && (
               <div style={{ marginBottom: 16 }}>
-                {fileContent === null ? (
+                {stagedFile === null ? (
                   <>
                     <FileDropZone
                       onFilesAdded={handleFilesAdded}
@@ -265,17 +314,14 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                       dragHandlers={dragHandlers}
                       error={fileError}
                     />
-                    {isParsingFile && (
-                      <div className="font-body" style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} />
-                        Reading file…
-                      </div>
-                    )}
-                    {fileError && !isParsingFile && (
+                    {fileError && (
                       <p className="font-body" style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>
                         {fileError}
                       </p>
                     )}
+                    <p className="font-body" style={{ fontSize: 11, color: 'var(--color-text-placeholder)', marginTop: 8 }}>
+                      PDF, DOCX, TXT, MD, MP3, M4A, WAV, MP4, MOV, JPG, PNG. Up to {(FILE_MAX_BYTES / (1024 * 1024)).toFixed(0)} MB.
+                    </p>
                   </>
                 ) : (
                   <div style={{
@@ -290,23 +336,26 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                   }}>
                     <div style={{ minWidth: 0 }}>
                       <div className="font-body" style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {fileName}
+                        {stagedFile.name}
                       </div>
-                      {fileSize !== null && (
-                        <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                          {formatFileSize(fileSize)}
-                        </div>
-                      )}
+                      <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                        {formatFileSize(stagedFile.size)}
+                      </div>
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setFileContent(null); setFileName(null); setFileSize(null); setFileError(null) }}
+                      onClick={() => { setStagedFile(null); setFileError(null) }}
                       className="font-body"
                       style={{ fontSize: 11, color: 'var(--color-text-secondary)', background: 'transparent', border: 'none', cursor: 'pointer', flexShrink: 0 }}
                     >
                       Remove
                     </button>
                   </div>
+                )}
+                {fileError && stagedFile !== null && (
+                  <p className="font-body" style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>
+                    {fileError}
+                  </p>
                 )}
               </div>
             )}
@@ -316,7 +365,7 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
               <div style={{ marginBottom: 16 }}>
                 <textarea
                   value={textContent}
-                  onChange={e => setTextContent(e.target.value)}
+                  onChange={e => { setTextContent(e.target.value); if (pasteError) setPasteError(null) }}
                   placeholder="Paste or type your content here..."
                   style={{
                     ...INPUT_STYLE,
@@ -327,9 +376,24 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                   onFocus={applyFocus}
                   onBlur={applyBlur}
                 />
-                <div className="font-body" style={{ fontSize: 11, color: 'var(--color-text-placeholder)', textAlign: 'right', marginTop: 4 }}>
-                  {textContent.length.toLocaleString()} chars
+                <div
+                  className="font-body"
+                  style={{
+                    fontSize: 11,
+                    color: textContent.length > PASTE_MAX_CHARS
+                      ? '#ef4444'
+                      : 'var(--color-text-placeholder)',
+                    textAlign: 'right',
+                    marginTop: 4,
+                  }}
+                >
+                  {textContent.length.toLocaleString()} / {PASTE_MAX_CHARS.toLocaleString()} chars
                 </div>
+                {pasteError && (
+                  <p className="font-body" style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>
+                    {pasteError}
+                  </p>
+                )}
               </div>
             )}
 
@@ -339,7 +403,7 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                 <input
                   type="url"
                   value={urlValue}
-                  onChange={e => setUrlValue(e.target.value)}
+                  onChange={e => { setUrlValue(e.target.value); if (urlError) setUrlError(null) }}
                   placeholder="https://..."
                   style={INPUT_STYLE}
                   onFocus={applyFocus}
@@ -359,6 +423,11 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                       ×
                     </button>
                   </div>
+                )}
+                {urlError && (
+                  <p className="font-body" style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>
+                    {urlError}
+                  </p>
                 )}
               </div>
             )}
@@ -408,7 +477,7 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                 <input
                   type="url"
                   value={youtubeUrl}
-                  onChange={e => setYoutubeUrl(e.target.value)}
+                  onChange={e => { setYoutubeUrl(e.target.value); if (youtubeError) setYoutubeError(null) }}
                   placeholder="Paste a YouTube video URL..."
                   style={INPUT_STYLE}
                   onFocus={applyFocus}
@@ -426,6 +495,11 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
                       </div>
                     </div>
                   </div>
+                )}
+                {youtubeError && (
+                  <p className="font-body" style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>
+                    {youtubeError}
+                  </p>
                 )}
               </div>
             )}
@@ -494,7 +568,7 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
           <button
             type="button"
             onClick={() => void handleExtract()}
-            disabled={!isContentReady()}
+            disabled={!isContentReady() || isCapturing}
             className="font-body font-semibold"
             style={{
               width: '100%',
@@ -513,7 +587,12 @@ export function ManualUploadPanel({ type, onBack }: ManualUploadPanelProps) {
               gap: 8,
             }}
           >
-            {isRunning ? (
+            {isCapturing ? (
+              <>
+                <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                {type === 'url' ? 'Reading URL…' : type === 'document' ? 'Reading file…' : type === 'youtube' ? 'Fetching transcript…' : 'Capturing…'}
+              </>
+            ) : isRunning ? (
               <>
                 <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
                 Extracting…

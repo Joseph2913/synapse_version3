@@ -551,7 +551,7 @@ function IntegrationsTab() {
     supabase
       .from('knowledge_sources')
       .select('*', { count: 'exact', head: true })
-      .eq('source_type', 'Meeting')
+      .eq('source_type', 'meeting')
       .then(({ count }) => {
         setCirclebackConnected((count ?? 0) > 0)
       })
@@ -578,11 +578,6 @@ function IntegrationsTab() {
       name: 'Circleback',
       hint: circlebackConnected ? 'Webhook active' : 'Not connected',
       connected: circlebackConnected,
-    },
-    {
-      name: 'Chrome Extension',
-      hint: 'Not installed',
-      connected: false,
     },
   ]
 

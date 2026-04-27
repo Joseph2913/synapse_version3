@@ -80,10 +80,6 @@ export interface AutomationSummary {
     totalMeetings: number
     circlebackConnected: boolean
   }
-  extension: {
-    captureCount: number
-    connected: boolean
-  }
   queue: {
     pending: number
     processing: number

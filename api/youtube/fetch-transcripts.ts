@@ -20,6 +20,29 @@ const APIFY_RUN_PREFIX = 'APIFY_RUN:';
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
   if (!CRON_SECRET) return true;
@@ -268,22 +291,17 @@ async function fetchTranscriptForItem(
       .update({ status: 'fetching_transcript', started_at: new Date().toISOString() })
       .eq('id', item.id);
 
-    // Tier 1: youtube-caption-extractor
-    let transcript = await tryTier1(videoId);
-    console.log(`[fetch-transcripts] ${videoId} Tier 1: ${transcript ? 'success' : 'miss'}`);
+    // Tier order matches D-004: Apify default, youtube-caption-extractor as
+    // free fallback, Innertube as last-resort. Apify is fire-and-forget for the
+    // background pipeline (the cron checks back next tick), so we kick it off
+    // first — if it succeeds, we never need to call the unofficial scrapers.
+    let transcript: string | null = null;
 
-    // Tier 2: Innertube API
-    if (!transcript) {
-      transcript = await tryTier2(videoId);
-      console.log(`[fetch-transcripts] ${videoId} Tier 2: ${transcript ? 'success' : 'miss'}`);
-    }
-
-    // Tier 3: Apify fire-and-forget (if tiers 1+2 failed)
-    if (!transcript && APIFY_API_KEY) {
+    // Tier 1: Apify fire-and-forget (cron will check back next tick).
+    if (APIFY_API_KEY) {
       const runId = await startApifyRun(item.video_url);
       if (runId) {
-        console.log(`[fetch-transcripts] ${videoId} Tier 3: Apify run started (${runId})`);
-        // Store run ID and keep status as pending — next cron will check
+        console.log(`[fetch-transcripts] ${videoId} Tier 1: Apify run started (${runId})`);
         await supabase
           .from('youtube_ingestion_queue')
           .update({
@@ -294,6 +312,16 @@ async function fetchTranscriptForItem(
           .eq('id', item.id);
         return { id: item.id, success: false, error: 'Apify started (async)' };
       }
+    }
+
+    // Tier 2: youtube-caption-extractor (free, public timedtext scraper).
+    transcript = await tryTier1(videoId);
+    console.log(`[fetch-transcripts] ${videoId} Tier 2 (caption-extractor): ${transcript ? 'success' : 'miss'}`);
+
+    // Tier 3: Innertube (last-resort unofficial scraper).
+    if (!transcript) {
+      transcript = await tryTier2(videoId);
+      console.log(`[fetch-transcripts] ${videoId} Tier 3 (innertube): ${transcript ? 'success' : 'miss'}`);
     }
 
     // All tiers failed (no Apify or Apify start failed)

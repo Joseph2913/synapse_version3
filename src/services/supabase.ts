@@ -1011,7 +1011,7 @@ export async function fetchEntitySourceMentions(
       chunk_content: row.content,
       source_id: row.source_id,
       source_title: source.title ?? 'Unknown Source',
-      source_type: source.source_type ?? 'Document',
+      source_type: source.source_type ?? 'file',
       source_created_at: source.created_at,
       chunk_index: row.chunk_index,
     }
@@ -1559,7 +1559,6 @@ export async function getAutomationSummary(userId: string): Promise<AutomationSu
   const [
     playlistData,
     meetingCount,
-    extensionCount,
     queueStatsResult,
     lastCompletedAt,
   ] = await Promise.all([
@@ -1578,17 +1577,7 @@ export async function getAutomationSummary(userId: string): Promise<AutomationSu
           .from('knowledge_sources')
           .select('id', { count: 'exact', head: true })
           .eq('user_id', userId)
-          .eq('source_type', 'Meeting')
-        return count ?? 0
-      } catch { return 0 }
-    })(),
-    (async () => {
-      try {
-        const { count } = await supabase
-          .from('knowledge_sources')
-          .select('id', { count: 'exact', head: true })
-          .eq('user_id', userId)
-          .contains('metadata', { source: 'chrome_extension' })
+          .eq('source_type', 'meeting')
         return count ?? 0
       } catch { return 0 }
     })(),
@@ -1617,10 +1606,6 @@ export async function getAutomationSummary(userId: string): Promise<AutomationSu
     meetings: {
       totalMeetings: meetingCount,
       circlebackConnected: meetingCount > 0,
-    },
-    extension: {
-      captureCount: extensionCount,
-      connected: extensionCount > 0,
     },
     queue: {
       ...queueStatsResult,
@@ -1846,7 +1831,7 @@ export async function fetchActiveQueueItems(userId: string): Promise<PipelineSes
     return (data ?? []).map((item: any) => ({
       id: item.id,
       source_name: item.video_title ?? 'Untitled Video',
-      source_type: 'YouTube',
+      source_type: 'youtube',
       source_content_preview: null,
       extraction_mode: 'comprehensive',
       anchor_emphasis: 'standard',
@@ -1879,14 +1864,14 @@ export async function fetchActiveMeetingItems(userId: string): Promise<PipelineS
         .from('knowledge_sources')
         .select('id, title, metadata, created_at')
         .eq('user_id', userId)
-        .eq('source_type', 'Meeting')
+        .eq('source_type', 'meeting')
         .contains('metadata', { extraction_status: 'pending' })
         .order('created_at', { ascending: false }),
       supabase
         .from('knowledge_sources')
         .select('id, title, metadata, created_at')
         .eq('user_id', userId)
-        .eq('source_type', 'Meeting')
+        .eq('source_type', 'meeting')
         .contains('metadata', { extraction_status: 'processing' })
         .order('created_at', { ascending: false }),
     ])
@@ -1903,7 +1888,7 @@ export async function fetchActiveMeetingItems(userId: string): Promise<PipelineS
       return {
         id: item.id,
         source_name: item.title ?? 'Untitled Meeting',
-        source_type: 'Meeting',
+        source_type: 'meeting',
         source_content_preview: null,
         extraction_mode: 'comprehensive',
         anchor_emphasis: 'standard',
