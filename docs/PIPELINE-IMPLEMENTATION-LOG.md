@@ -300,7 +300,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 > - [x] Step 2 — `src/services/queryClassifier.ts` → `api/gemini/classify-query.ts` (2026-04-28). Auth-gated, tsc clean.
 > - [x] Step 3 — `src/services/reranker.ts` → `api/gemini/rerank.ts` (2026-04-28). Auth-gated, tsc clean.
 > - [x] Step 4 — `src/services/crossConnections.ts` → `api/gemini/cross-connect.ts` (2026-04-28). Auth-gated, tsc clean.
-> - [ ] Step 5 — `src/services/simulate.ts`
+> - [x] Step 5 — `src/services/simulate.ts` → `api/gemini/simulate.ts` (2026-04-28). Auth-gated, tsc clean. Endpoint accepts discriminated `kind: 'evidence' | 'synthesis'` payloads — prompts built server-side.
 > - [ ] Step 6 — `src/services/gemini.ts`
 > - [ ] Step 7 — `src/services/youtube.ts`
 > - [ ] Step 8 — `src/services/automationSources.ts`

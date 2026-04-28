@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { GEMINI_CHAT_MODEL } from './gemini'
+import { callApi } from './apiClient'
 import type {
   SimulationJob, SimulationSeedGraph, SimulationBuilderState,
   SimulationStatus, SimulationReport, SimulationNode,
@@ -9,9 +9,6 @@ import type {
 } from '../types/simulate'
 
 const SIDECAR_URL = import.meta.env.VITE_SIMULATE_SIDECAR_URL ?? 'http://localhost:8000'
-
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY ?? ''
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 // ─── SUPABASE QUERIES ───────────────────────────────────────────────
 
@@ -311,19 +308,30 @@ export async function checkSidecarHealth(): Promise<boolean> {
 
 // ─── PRD-Simulate-D: PERSONA GENERATION (client-side) ────────────────
 
-async function callGeminiForPersonas(prompt: string, temperature: number): Promise<string> {
-  const url = `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature, maxOutputTokens: 1024 },
-    }),
-  })
-  if (!response.ok) throw new Error(`Gemini API error: ${response.status}`)
-  const data = await response.json()
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+interface SimulateEvidenceArgs {
+  kind: 'evidence'
+  entityLabel: string
+  entityType: string
+  question: string
+  sourceMaterial: string
+}
+
+interface SimulateSynthesisArgs {
+  kind: 'synthesis'
+  entityLabel: string
+  entityType: string
+  influenceTier: string
+  documentedPosition: string
+  relationships: string[]
+  question: string
+  whatIfVariables: string[]
+  modeDirective: string
+  sensitivityDirective: string
+}
+
+async function callSimulateEndpoint(args: SimulateEvidenceArgs | SimulateSynthesisArgs): Promise<string> {
+  const { text } = await callApi<{ text: string }>('/api/gemini/simulate', args)
+  return text
 }
 
 function parseGeminiJSON<T>(text: string): T | null {
@@ -385,8 +393,6 @@ export async function generatePersonas(
   _userId: string,
   onProgress?: (progress: PersonaGenerationProgress) => void
 ): Promise<{ personas: SimulationPersona[]; diversity: PersonaSetDiversity }> {
-  if (!GEMINI_API_KEY) throw new Error('VITE_GEMINI_API_KEY is not configured.')
-
   // Step 1: Filter eligible nodes
   const eligibleTypes = new Set(['Person', 'Organization', 'Team'])
   const eligible = seedGraph.nodes
@@ -439,31 +445,13 @@ export async function generatePersonas(
     // Step 3: Evidence extraction
     if (chunkContent.length > 0) {
       try {
-        const evidenceText = await callGeminiForPersonas(
-          `You are extracting evidence about a specific entity from source documents.
-
-Entity: ${node.label} (${node.entityType})
-Question being investigated: ${config.question}
-
-Source material:
-${chunkContent}
-
-Return JSON only — no preamble, no markdown:
-{
-  "documented_position": "One sentence: what do these sources say this entity has said or done relevant to the question? If nothing relevant, state that explicitly.",
-  "stance_category": "pro | anti | conditional | uncertain | orthogonal",
-  "topic_proximity": 0.0,
-  "source_count": 0,
-  "grounding_quality": "strong | moderate | weak | inferred"
-}
-
-grounding_quality rules:
-- strong: 3+ sources with direct relevance
-- moderate: 1–2 directly relevant sources
-- weak: sources exist but are tangential
-- inferred: no relevant sources — derive from entity type and relationships only`,
-          0.1
-        )
+        const evidenceText = await callSimulateEndpoint({
+          kind: 'evidence',
+          entityLabel: node.label,
+          entityType: node.entityType,
+          question: config.question,
+          sourceMaterial: chunkContent,
+        })
         const parsed = parseGeminiJSON<{
           documented_position: string
           stance_category: StanceCategory
@@ -495,30 +483,18 @@ grounding_quality rules:
     let behaviouralPrompt = `You are ${node.label}, a ${node.entityType}. Respond based on your known position and relationships.`
 
     try {
-      const synthesisText = await callGeminiForPersonas(
-        `You are building a simulation agent profile for a multi-agent deliberation.
-
-Entity: ${node.label} (${node.entityType})
-Influence tier: ${influenceTier}
-Documented position: ${documentedPosition}
-Relationships to other agents: ${relationships.join(', ') || 'None identified'}
-Question: ${config.question}
-What-if conditions: ${config.whatIfVariables.join('; ') || 'None'}
-
-${modeDirective}
-${sensitivityDirective}
-
-Return JSON only — no preamble, no markdown:
-{
-  "question_specific_stance": "Their specific position on the question. One sentence. Evidence-grounded.",
-  "incentive_structure": "What they gain or lose from each possible outcome. One sentence.",
-  "epistemic_style": "empirical | ideological | opportunistic | contrarian | cautious | structural",
-  "update_conditions": "What specific evidence or argument would cause them to revise their position. One sentence.",
-  "blind_spots": "What they are systematically unlikely to see or acknowledge. One sentence.",
-  "behavioural_prompt": "3–4 sentence system prompt governing this agent's behaviour in the simulation. Written in second person. Incorporates all of the above."
-}`,
-        0.3
-      )
+      const synthesisText = await callSimulateEndpoint({
+        kind: 'synthesis',
+        entityLabel: node.label,
+        entityType: node.entityType,
+        influenceTier,
+        documentedPosition,
+        relationships,
+        question: config.question,
+        whatIfVariables: config.whatIfVariables,
+        modeDirective,
+        sensitivityDirective,
+      })
       const parsed = parseGeminiJSON<{
         question_specific_stance: string
         incentive_structure: string
