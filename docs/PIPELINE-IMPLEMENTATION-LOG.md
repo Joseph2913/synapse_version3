@@ -41,7 +41,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 |---|---|---|---|---|
 | 0 | Foundations | Done (Items 1, 2A, 3, 4, 5, 6, 7 done; 2B deferred) | [STAGE-0-FOUNDATIONS.md](STAGE-0-FOUNDATIONS.md) | 2026-04-26 |
 | 1 | Capture (front door, five adapters) | Done | [STAGE-1-CAPTURE.md](STAGE-1-CAPTURE.md) | 2026-04-26 |
-| 2 | Source persistence + dedup | Scoped (partial code shipped) | _pending_ | 2026-04-26 |
+| 2 | Source persistence + dedup | Done | [STAGE-2-PERSISTENCE.md](STAGE-2-PERSISTENCE.md) | 2026-04-28 |
 | 3 | Chunking + chunk embeddings | Done | [STAGE-3-CHUNKING.md](STAGE-3-CHUNKING.md) | 2026-04-27 |
 | 4 | Prompt composition | Not started | _pending_ | 2026-04-26 |
 | 5 | Entity extraction | Partial (v2 pipeline shipped) | _pending_ | 2026-04-26 |
@@ -118,27 +118,28 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 ### Stage 2 — Source persistence + deduplication
 
-**Status:** Scoped (partial code shipped pre-audit).
+**Status:** Done. Migration applied 2026-04-28; code shipped on `main` the same day.
 
-**Owner doc:** _to be created at `docs/STAGE-2-PERSISTENCE.md`._
+**Owner doc:** [STAGE-2-PERSISTENCE.md](STAGE-2-PERSISTENCE.md). Read it first for the `persistSource()` contract, dedup rules, validation results, and open follow-ups.
 
-**Shipped (pre-audit, opportunistic fixes):**
-- YouTube duplicate-source fix (commit `475598c`, 2026-04-21): "stop YouTube ingestion from creating duplicate sources".
-- YouTube upsert constraint fix (commit `dfc5bc0`, 2026-04-21): "YouTube source save fails with 'no unique constraint' on upsert".
-- These fixes are scoped to YouTube only. The systemic dedup gap across all source types remains.
-
-**In flight:** none.
+**Shipped:**
+- **`persistSource()` contract** — `(captured: CapturedSource, userId: string) => Promise<{ sourceId, isNew, status: 'inserted'|'replaced'|'skipped-duplicate' }>`. Browser canonical at [src/services/persistSource.ts](../src/services/persistSource.ts); per-file inlined variants in `api/meetings/webhook.ts`, `api/youtube/extract-knowledge.ts`, `api/microsoft/extract-knowledge.ts`, `api/ingest/session.ts` (Vercel bundling rule).
+- **Shared identity utilities** — `canonicalUrl()`, `extractYouTubeVideoId()`, `canonicalYouTubeUrl()`, `sha256Hex()`, `meetingPayloadSignature()` in [src/utils/sourceIdentity.ts](../src/utils/sourceIdentity.ts). Mirrored inline where serverless functions need them.
+- **Dedup identity rules per source type** — youtube/url use canonical URL via `(user_id, source_type, source_url)` partial unique index; file/paste/research/github use SHA-256 `content_hash` via `(user_id, source_type, content_hash)` partial unique index; meeting uses `circleback_meeting_id` via `(user_id, circleback_meeting_id)` partial unique index. All three indexes existed pre-Stage-2; Stage 2 wires the application-level checks to match.
+- **Re-ingest behaviour** — youtube/url/file/paste/research/github skip silently with telemetry; meeting compares `metadata.payload_signature` (decision A2 from Wave A) and replaces only when transcript or action items have actually changed.
+- **State machine** — `persistSource()` writes `status='pending'` on insert. Replace also resets `status='pending'` so downstream stages re-run. Stage 2 owns no other transition.
+- **Source-type rename** — migration `20260427_source_type_lowercase.sql` applied 2026-04-28. Maps `Note→paste`, `Web→url`, `Document→file`, `YouTube→youtube`, `Meeting→meeting`, `Research→research`, `GitHub→github` across `knowledge_sources` (200 rows pre-confirmed mostly already lowercase from the existing capture path), `knowledge_nodes`, `extraction_sessions`. Three RPC `COALESCE` defaults patched (`get_explore_source_graph_v2`, `get_explore_source_graph`, `get_all_sources_graph`).
+- **Pre-existing YouTube dedup retired** — the check-then-insert-or-update block from commits `475598c`/`dfc5bc0` (`api/youtube/extract-knowledge.ts:199-237`) replaced by inlined `persistYouTubeSource()`. Wipe-and-rerun semantics preserved for the cron path only.
+- **Stuck-source sweep** — new `api/cron/sweep-stuck-sources.ts` flips any non-terminal-status row older than 1 hour to `degraded`. Registered in `vercel.json` at `30 * * * *`. Idempotent.
+- **Tests passed (2026-04-28)** — see Validation suite section in `STAGE-2-PERSISTENCE.md`. Schema-side tests (1a/1b, 6a/6b/6c, 7a, 8a/8b) all passed against production. `tsc -b --force` clean (exit 0). Live-traffic tests 2–5 and 9 are open follow-ups.
 
 **Open:**
-- Define dedup identity rule per source type (videoId, canonical URL, content hash, meeting ID).
-- Add unique constraint on `(user_id, source_url)` and/or `(user_id, content_hash)` across all source types.
-- Single `persistSource()` function as the only path into `knowledge_sources`. **Inherited from Stage 1**: this is the layer that consumes a `CapturedSource` and writes it to the database. Stage 1 adapters do not write directly; they hand a `CapturedSource` to the call site, which today flows into the existing inline save path. Stage 2 replaces that inline save with `persistSource()`.
-- **Source-type string translation (inherited from Stage 1).** Map lowercase `CapturedSource.source_type` (`paste|url|file|youtube|meeting`) to the existing database-facing strings (`Note|Web|Document|YouTube|Meeting`) at the persistence boundary, then phase out the old strings DB-wide as part of this stage.
-- Source state machine: `pending → chunking → extracting → augmenting → complete | failed | degraded`.
-- Idempotency key per webhook entry point.
-- Replay test, conflict test, state machine test, idempotency test, RLS test.
+- Three out-of-scope `source_type` residuals in `knowledge_nodes`/`knowledge_sources` (`Manual` 16, `Unknown` 3139, `API` 1). Either fold into a future cleanup migration or formally deprecate.
+- Microsoft queue-claim race (non-atomic `.update({status:'extracting'})`) — out of Stage 2 scope; close when Microsoft pipeline gets its hardening pass.
+- `api/github/extract-knowledge.ts` carve-out — `repo_url` collides across daily digests; Stage 2 only renamed its source_type literal. Belongs to a GitHub-specific stage.
+- Live-traffic validation soak (24h) for the freshly-shipped persist paths. Watch for `persist:race-fallback` in Vercel logs.
 
-**Decisions:** see D-005, D-006.
+**Decisions:** D-005, D-006, plus three Wave A picks resolved here as D-011 (meeting payload signature), D-012 (Research/GitHub kept and lowercased), D-013 (YouTube cron carve-out). All approved 2026-04-28.
 
 ---
 
@@ -292,6 +293,19 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 **Open (Phase 2 — architectural refactor, real effort):**
 
+> Phase 2 plan: see [docs/PRDs/030-stage-s-phase-2.md](PRDs/030-stage-s-phase-2.md). Granular endpoint split (one per task) approved 2026-04-28; `extractEntities` is included in the migration scope, not left in the browser.
+>
+> **Migration progress:**
+> - [x] Step 1 — `src/utils/summarize.ts` → `api/gemini/summarize.ts` (2026-04-28). Auth-gated, tsc clean. `apiClient.ts` helper landed.
+> - [ ] Step 2 — `src/services/queryClassifier.ts`
+> - [ ] Step 3 — `src/services/reranker.ts`
+> - [ ] Step 4 — `src/services/crossConnections.ts`
+> - [ ] Step 5 — `src/services/simulate.ts`
+> - [ ] Step 6 — `src/services/gemini.ts`
+> - [ ] Step 7 — `src/services/youtube.ts`
+> - [ ] Step 8 — `src/services/automationSources.ts`
+> - [ ] Step 9 — `src/components/modals/SettingsModal.tsx` (cosmetic)
+
 - **Move all Gemini calls server-side.** New endpoints under `api/gemini/` (suggested split: `chat`, `embed`, `classify-query`, `rerank`, `summarize`, `cross-connect`, `simulate-persona`). Each endpoint reads `GEMINI_API_KEY` server-side, validates the calling user's auth token, calls Gemini, returns the result. Update each of the seven `src/` files listed above to invoke the matching endpoint via `fetch('/api/gemini/...')` instead of `import.meta.env.VITE_GEMINI_API_KEY`. Restores Ask, RAG, summaries, cross-connections, query classifier, reranker, and persona simulation. Constraint: every endpoint must enforce per-user auth + RLS-equivalent access checks before calling Gemini, otherwise the endpoint itself becomes a quota-drain vector.
 - **Move all YouTube API calls server-side.** Two files: [src/services/youtube.ts](../src/services/youtube.ts) and [src/services/automationSources.ts](../src/services/automationSources.ts). New endpoint `api/youtube/lookup` (or similar) reads `YOUTUBE_API_KEY` server-side. Browser fetches metadata via the endpoint. Delete `VITE_YOUTUBE_API_KEY` from Vercel and `.env.local` once the refactor lands.
 - **Audit `import.meta.env.VITE_*` usage.** Confirm no other vendor credentials are being read in the browser. As of 2026-04-28 the only `VITE_*` reads beyond Supabase and Gemini and YouTube are `VITE_SIMULATE_SIDECAR_URL` (a URL, not a credential) and `VITE_GEMINI_MODEL` (model name, not a credential). Both safe.
@@ -378,6 +392,24 @@ Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
 **Rationale:** Vite inlines every `VITE_*` value into the production JavaScript bundle in plain text. This is the documented Vite behaviour and is correct for genuinely public values like the Supabase publishable key, which is designed to be safe in the browser when RLS is enforced. It is catastrophic for vendor credentials, which carry billing capability and have no equivalent of RLS. The 2026-04-28 incident (Gemini key scraped from production bundle, project suspended, ~£100 in unauthorised charges) is the proof. The cost of restating this rule explicitly is zero; the cost of a repeat is another suspension.
 **Status:** Active.
 
+### D-011 — Stage 2 meeting re-ingest rule: payload signature comparison (A2)
+**Date:** 2026-04-28
+**Decision:** When the meeting webhook receives a payload for an existing `circleback_meeting_id`, compare a content-stable signature stored at `metadata.payload_signature` (SHA-256 of `transcript_segment_count + action_item_count + content.length + content[0..4096]`). Equal → skip silently. Different → replace `content` / `metadata` / `title` and reset `status='pending'` so downstream stages re-run.
+**Rationale:** Circleback payloads do not carry a `lastModified` timestamp. Wall-clock receipt time would treat every webhook redelivery as "newer" and lose the protection. Content-driven signature is the cheapest correct option, survives webhook redelivery, and triggers replays only when the transcript or action items have actually changed.
+**Status:** Active.
+
+### D-012 — Stage 2: Research and GitHub source types kept, renamed lowercase
+**Date:** 2026-04-28
+**Decision:** `'Research'` and `'GitHub'` rows are not deleted. They are renamed to `'research'` and `'github'` and their writers (`api/microsoft/extract-knowledge.ts`, `api/ingest/session.ts`) are routed through inlined `persistSource` variants with content_hash dedup. Both stay as DB-only types — neither has a Stage 1 capture adapter yet.
+**Rationale:** These two paths are real production write paths. Removing them would break the Microsoft and MCP-session ingestion flows. Keeping them mixed-case while everything else lowercased would leave a lingering inconsistency and another future migration. The right move is to bring them into the new convention now.
+**Status:** Active.
+
+### D-013 — Stage 2: YouTube cron stays as a separate `persistSource` write path
+**Date:** 2026-04-28
+**Decision:** The YouTube cron extractor (`api/youtube/extract-knowledge.ts`) and the interactive YouTube capture endpoint (`api/capture/youtube.ts`) remain as two distinct write paths into `knowledge_sources`, both routed through the inlined `persistYouTubeSource` variant. The partial unique index on `(user_id, source_type, source_url) WHERE source_url IS NOT NULL` continues to merge them when both fire for the same video.
+**Rationale:** Unifying the cron extractor as a downstream consumer of rows already created by the capture endpoint is a cleaner architecture but a bigger refactor than Stage 2 owns. Stage 2 closes the dedup gap and standardises persistence; the unification is a future stage's concern.
+**Status:** Active.
+
 ### D-006 — Stage 1 ↔ Stage 2 boundary kept as scoped; cross-cutting work moved
 **Date:** 2026-04-26
 **Decision:** Stage 1 produces `CapturedSource`. The full "adapters never write to the DB directly" cutover lands in Stage 2 because Stage 2 owns persistence. The lowercase `source_type` rename across the database-facing code also lands in Stage 2. Stage 0 Item 2 (canonical Gemini wrapper) must complete before Adapter 3 (file upload). Stage 0 logging helper must complete before Stage 1 final sign-off; until then, Stage 1 adapters log via a structured `console.info` placeholder.
@@ -423,7 +455,7 @@ Items the agent should not act on without explicit approval.
 Themes that span multiple stages and should be tracked holistically.
 
 - **Browser vs serverless divergence.** Several stages (3, 5, 6, 7) implement the same logic in two places. The hardening goal is to consolidate to one path. Track this in each stage's open list.
-- **Idempotency across webhooks.** Affects Stage 1 (capture entry points) and Stage 2 (persistence). Resolved in Stage 2.
+- **Idempotency across webhooks.** Affects Stage 1 (capture entry points) and Stage 2 (persistence). **Resolved in Stage 2 (2026-04-28)** — every webhook / queue-driven write path now routes through a `persistSource` variant with the appropriate dedup index. Production currently shows zero violations across all three identity rules.
 - **Failure policy.** Affects every stage. Defined once in Stage 0 Item 5, applied per-stage.
 - **Secret hygiene + browser exposure.** Owned by Stage S. Affects any stage that calls a paid third-party API from the browser today (Stages 8 cross-connection, 13 surfacing/RAG, plus the `src/services/gemini.ts` callers in summarisation and reranking). Every new third-party integration must consult `CLAUDE.md` Secret Hygiene before adding env vars.
 
@@ -434,6 +466,7 @@ Themes that span multiple stages and should be tracked holistically.
 Reverse chronological. Every meaningful update goes here.
 
 ### 2026-04-28
+- **Stage 2 — Source persistence + deduplication. Implemented and validated.** `persistSource()` now owns every write into `knowledge_sources`. Browser canonical at [src/services/persistSource.ts](../src/services/persistSource.ts); per-file inlined variants in `api/meetings/webhook.ts`, `api/youtube/extract-knowledge.ts`, `api/microsoft/extract-knowledge.ts`, `api/ingest/session.ts`. Shared identity utilities at [src/utils/sourceIdentity.ts](../src/utils/sourceIdentity.ts). Source-type rename migration `20260427_source_type_lowercase.sql` applied to production: `Note→paste`, `Web→url`, `Document→file`, `YouTube→youtube`, `Meeting→meeting`, `Research→research`, `GitHub→github` across `knowledge_sources`, `knowledge_nodes`, `extraction_sessions`. Three RPC `COALESCE` defaults patched in the same migration. Pre-existing YouTube dedup code (commits `475598c`/`dfc5bc0`) retired in favour of inlined `persistYouTubeSource()`; wipe-and-rerun preserved on the cron path. New stuck-source sweep cron at `api/cron/sweep-stuck-sources.ts`, registered hourly. Decisions D-011 / D-012 / D-013 recorded. Schema-side validation tests 1a/1b, 6a/6b/6c, 7a, 8a/8b all passed against production — zero rows violate any of the three dedup invariants. `tsc -b --force` clean. Live-traffic tests 2–5 and 9 deferred to a 24h soak window. Owner doc: [STAGE-2-PERSISTENCE.md](STAGE-2-PERSISTENCE.md). Cross-stage theme "Idempotency across webhooks" marked resolved.
 - **Stage S — Secret hygiene + client-server boundary. Created and partially shipped (incident response).** New cross-cutting hardening stage added in response to a confirmed credential leak on 2026-04-28: a third party scraped `VITE_GEMINI_API_KEY` from the production browser bundle at `connectsynapse.com`, used it to spin up unauthorised resources in the GCP project that backed Synapse's Gemini calls, generated approximately £100 in charges, and triggered a Google Trust & Safety suspension of the project (`gen-lang-client-0813591585`, "Reg Tracker"). Incident response shipped the same day: all seven Vercel-stored secrets rotated (`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`, `YOUTUBE_API_KEY`, `APIFY_API_KEY`); Supabase migrated to the new publishable + secret key system; new Gemini key created in a fresh `synapse-prod` GCP project with HTTP referrer restrictions, API restrictions, and a £20/month budget alert; `VITE_GEMINI_API_KEY` removed from Vercel and `.env.local`; production redeployed and verified. Phase 2 (move 7 `src/` files calling Gemini directly to new `api/gemini/*` endpoints; same for the 2 `src/` files calling YouTube directly) is open and is the actual architectural fix — until it lands, Ask chat / RAG / source summaries / cross-connections / query classifier / reranker / persona simulation are temporarily broken. Phase 3 (CI check banning `VITE_*_API_KEY`-style names, bundle scan, quarterly rotation cadence, disabling Supabase legacy JWT keys) tracked in the stage doc. Decision D-010 records the new rule: vendor credentials are server-side only. Billing dispute filed with Google Cloud requesting refund of the unauthorised charges.
 - **Root-cause analysis (four layers) recorded.** The leak was not a one-off mistake; it was the predictable outcome of an architectural drift between March 2026 (when v2 was a pure-frontend SPA and `VITE_GEMINI_API_KEY` was the correct pattern) and late April 2026 (when `api/` serverless functions had grown into the real backend but the original `src/` Gemini callers were never migrated). `CLAUDE.md` reinforced the unsafe pattern by listing `VITE_GEMINI_API_KEY` as a required env var. No defensive layers (HTTP referrer restriction, budget alert, CI bundle scan, secret rotation cadence) existed to catch the leak before exploitation. Stage S addresses all four layers explicitly so the same shape of incident does not recur with the next service.
 - **`CLAUDE.md` updated.** New "Secret Hygiene" section under Critical Rules enumerates exactly which credentials are safe in `VITE_*` (Supabase publishable + non-credential config) and which are not (any vendor API key, the Supabase service role key, any webhook / cron / ingest secret). Deployment section's required-env-vars list rewritten: `VITE_GEMINI_API_KEY` marked as deprecated and "must not exist"; full list of server-only env vars added (`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `RESEND_API_KEY`, `APIFY_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`, `CIRCLEBACK_WEBHOOK_SECRET`). Old single-bullet "use `VITE_` prefix for client-side access" rule replaced with a pointer to the new Secret Hygiene section.

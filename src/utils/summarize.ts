@@ -1,9 +1,6 @@
 import type { SummaryResult } from '../types/summary'
-import { fetchWithRetry, GEMINI_CHAT_MODEL } from '../services/gemini'
+import { callApi } from '../services/apiClient'
 import { stripMarkdown } from './stripMarkdown'
-
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 // --- Public API ---
 
@@ -97,47 +94,17 @@ export async function generateSummary(
   content: string,
   sourceType: string | null
 ): Promise<string> {
-  const truncatedContent = content.length > 8000
-    ? content.slice(0, 8000) + '\n\n[Content truncated for summarization]'
-    : content
-
-  const sourceLabel = sourceType || 'content'
-
-  const systemPrompt = `You are a concise summarizer. Given a piece of ${sourceLabel.toLowerCase()}, produce a 2–3 sentence summary that describes what this content contains. Rules:
-- Be factual and descriptive, not analytical or evaluative.
-- Describe the topics covered, not what the reader should take away.
-- Use plain, professional language.
-- Do not start with "This ${sourceLabel.toLowerCase()}..." — vary your openings.
-- Do not reference the format ("this transcript", "this document") — summarize the substance.
-- Maximum 300 characters.
-- Return ONLY the summary text, no preamble, no quotes, no formatting.`
-
   try {
-    const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: truncatedContent }] }],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 150,
-          },
-        }),
-      }
-    )
-
-    const data = await response.json()
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    const { text } = await callApi<{ text: string }>('/api/gemini/summarize', {
+      content,
+      sourceType,
+    })
 
     if (!text || text.trim().length === 0) {
       return truncateAsSummary(content, 300)
     }
 
     const clamped = clampSummary(text.trim())
-    // If Gemini returned something too short, fallback
     if (clamped.length < 20) {
       return truncateAsSummary(content, 300)
     }
