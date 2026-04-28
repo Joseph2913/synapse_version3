@@ -42,6 +42,67 @@ function logError(fields: LogFields & { error: string }): void {
   console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
 }
 
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
 async function resolveUserId(req: VercelRequest): Promise<string | null> {
   const auth = req.headers['authorization']
   if (!auth) return null
@@ -140,28 +201,23 @@ Nodes to evaluate:
 ${nodeList}`
 
     // 5. Call Gemini
-    const geminiResponse = await fetch(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    let geminiData: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+    try {
+      const { json } = await geminiFetch(
+        `${GEMINI_MODEL}:generateContent`,
+        {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
-        }),
-        signal: AbortSignal.timeout(45000),
-      }
-    )
-
-    if (!geminiResponse.ok) {
-      const errText = await geminiResponse.text()
-      console.error(`[on-confirm] Gemini error: ${geminiResponse.status} ${errText.slice(0, 200)}`)
+        },
+        45000,
+        'anchors:on-confirm'
+      )
+      geminiData = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+    } catch (err) {
+      console.error(`[on-confirm] Gemini error: ${(err as Error).message}`)
       return res.status(200).json({ success: true, edgesCreated: 0, note: 'Gemini call failed', duration_ms: Date.now() - startTime })
     }
 
-    const geminiData = await geminiResponse.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-    }
     const responseText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text
     if (!responseText) {
       return res.status(200).json({ success: true, edgesCreated: 0, note: 'No Gemini response', duration_ms: Date.now() - startTime })

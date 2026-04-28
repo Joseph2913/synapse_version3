@@ -238,30 +238,89 @@ ${rawLog}
 ${diffContent || '(no diffs available)'}`;
 }
 
+// ─── Gemini fetch helper (retry on 429/5xx, token-usage logging) ─────────────
+
+interface GeminiUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string,
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`;
+  const maxAttempts = 3;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage };
+        const usage = json.usageMetadata;
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }));
+        }
+        return { json, usage };
+      }
+      const txt = await resp.text().catch(() => '');
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`);
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
+    } catch (err) {
+      lastErr = err as Error;
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed');
+}
+
 async function callGemini(prompt: string): Promise<{ text: string | null; status: number }> {
-  const response = await fetch(
-    `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  try {
+    const { json } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
+      {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.3, maxOutputTokens: 4096 },
-      }),
-      signal: AbortSignal.timeout(60000),
-    }
-  );
-
-  if (!response.ok) {
-    return { text: null, status: response.status };
+      },
+      60000,
+      'github:compose-digest',
+    );
+    const data = json as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+    return { text, status: 200 };
+  } catch (err) {
+    const msg = (err as Error).message;
+    const m = /Gemini (\d{3})/.exec(msg);
+    const status = m ? parseInt(m[1], 10) : 500;
+    return { text: null, status };
   }
-
-  const data = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
-  return { text, status: 200 };
 }
 
 // ─── HANDLER ───────────────────────────────────────────────────────────────────

@@ -67,19 +67,65 @@ function parseJSON<T>(text: string): T {
   return JSON.parse(cleaned) as T;
 }
 
-// ─── GEMINI ───────────────────────────────────────────────────────────────────
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
 
-async function fetchWithRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const response = await fetch(url, options);
-    if (response.status === 429 && attempt < retries) {
-      const waitMs = Math.min(2000 * Math.pow(2, attempt), 15000);
-      await new Promise(r => setTimeout(r, waitMs));
-      continue;
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
     }
-    return response;
   }
-  throw new Error('fetchWithRetry: exhausted retries');
+  throw lastErr ?? new Error('[gemini] request failed')
 }
 
 async function callGemini<T>(
@@ -87,24 +133,17 @@ async function callGemini<T>(
   userContent: string,
   temperature = 0.3
 ): Promise<T> {
-  const response = await fetchWithRetry(
-    `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+  const { json } = await geminiFetch(
+    `${GEMINI_MODEL}:generateContent`,
     {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ parts: [{ text: userContent }] }],
-        generationConfig: { temperature, responseMimeType: 'application/json' },
-      }),
-      signal: AbortSignal.timeout(30000),
-    }
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userContent }] }],
+      generationConfig: { temperature, responseMimeType: 'application/json' },
+    },
+    30000,
+    'skills:rescore'
   );
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Gemini ${response.status}: ${text.slice(0, 200)}`);
-  }
-  const data = await response.json();
+  const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini returned empty response');
   return parseJSON<T>(text);

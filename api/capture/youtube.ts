@@ -60,34 +60,65 @@ if (!GEMINI_API_KEY) {
   throw new Error('[capture/youtube] Missing env var: GEMINI_API_KEY')
 }
 
-async function geminiGenerate(body: unknown, timeoutMs: number, stage: string): Promise<unknown> {
-  const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify(body),
-    })
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '')
-      throw new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
-    }
-    const json = await resp.json() as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } }
-    if (json.usageMetadata) {
-      log({
-        stage,
-        prompt_tokens: json.usageMetadata.promptTokenCount,
-        output_tokens: json.usageMetadata.candidatesTokenCount,
-        total_tokens: json.usageMetadata.totalTokenCount,
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
       })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
     }
-    return json
-  } finally {
-    clearTimeout(timer)
   }
+  throw lastErr ?? new Error('[gemini] request failed')
 }
 
 // ─── YouTube + Apify config ──────────────────────────────────────────────────
@@ -263,7 +294,8 @@ Return ONLY the JSON. No commentary.`
 
 async function tier3GeminiVideo(videoUrl: string): Promise<{ transcript: string; language: string | null } | null> {
   try {
-    const json = await geminiGenerate(
+    const { json } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
       {
         system_instruction: { parts: [{ text: GEMINI_VIDEO_PROMPT }] },
         contents: [{

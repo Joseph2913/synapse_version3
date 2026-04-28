@@ -20,6 +20,68 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
+
+// ─── Gemini fetch helper (retry on 429/5xx, token-usage logging) ──────────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
 // ─── AUTH (same pattern as api/youtube/process.ts) ─────────────────────────────
 
 
@@ -194,24 +256,21 @@ async function generateSummaryViaGemini(
 - Return ONLY the summary text, no preamble, no quotes, no formatting.`;
 
   try {
-    const response = await fetch(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+    const { json } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: truncatedContent }] }],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 150,
-          },
-        }),
-        signal: AbortSignal.timeout(30000),
-      }
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ parts: [{ text: truncatedContent }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 150,
+        },
+      },
+      30000,
+      'summaries:backfill'
     );
 
-    const data = await response.json();
+    const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!text || text.trim().length === 0) return null;

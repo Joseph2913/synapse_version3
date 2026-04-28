@@ -18,6 +18,7 @@ export const maxDuration = 60
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? ''
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? ''
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 
@@ -147,32 +148,96 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return ma && mb ? dot / (ma * mb) : 0
 }
 
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
+async function embedText(text: string, timeoutMs = 30000, stage = 'skills:process-source:embed'): Promise<number[]> {
+  const { json } = await geminiFetch(
+    `${GEMINI_EMBEDDING_MODEL}:embedContent`,
+    { model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } },
+    timeoutMs,
+    stage
+  )
+  const data = json as { embedding?: { values?: number[] } }
+  if (!data.embedding?.values) throw new Error('No embedding in Gemini response')
+  return data.embedding.values
+}
+
 async function callGemini(systemPrompt: string, userPrompt: string, maxTokens = 2048): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const { json } = await geminiFetch(
+    `${GEMINI_MODEL}:generateContent`,
+    {
       systemInstruction: { parts: [{ text: systemPrompt }] },
       contents: [{ parts: [{ text: userPrompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens },
-    }),
-  })
-  if (!res.ok) throw new Error(`Gemini ${res.status}`)
-  const data = await res.json()
+    },
+    30000,
+    'skills:process-source'
+  )
+  const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 }
 
 async function generateEmbedding(text: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } }),
-  })
-  if (!res.ok) throw new Error(`Embedding ${res.status}`)
-  const data = await res.json()
-  return data.embedding?.values ?? []
+  return embedText(text, 30000, 'skills:process-source:embed')
 }
 
 function bfsToAnchor(startId: string, anchorIds: Set<string>, adj: Record<string, string[]>): number | null {

@@ -37,12 +37,15 @@ async function getUserIdFromRequest(req: VercelRequest): Promise<string | null> 
 // ─── Gemini env + helpers ────────────────────────────────────────────────────
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+const GEMINI_FILES_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 
 if (!GEMINI_API_KEY) {
   throw new Error('[capture/file] Missing env var: GEMINI_API_KEY')
 }
+
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
 
 interface GeminiUsage {
   promptTokenCount?: number
@@ -50,8 +53,13 @@ interface GeminiUsage {
   totalTokenCount?: number
 }
 
-async function geminiGenerate(body: unknown, timeoutMs: number, stage: string): Promise<unknown> {
-  const url = `${GEMINI_BASE}/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
   const maxAttempts = 3
   let lastErr: Error | null = null
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -69,14 +77,13 @@ async function geminiGenerate(body: unknown, timeoutMs: number, stage: string): 
         const usage = json.usageMetadata
         if (usage) {
           console.log(JSON.stringify({
-            stage,
-            model: GEMINI_MODEL,
+            stage, model: endpoint.split(':')[0],
             prompt_tokens: usage.promptTokenCount,
             output_tokens: usage.candidatesTokenCount,
             total_tokens: usage.totalTokenCount,
           }))
         }
-        return json
+        return { json, usage }
       }
       const txt = await resp.text().catch(() => '')
       lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
@@ -105,7 +112,7 @@ interface GeminiFileUploadResult {
 
 /** Upload a file to Gemini File API (returns the file URI we then reference in generateContent). */
 async function uploadToGeminiFiles(buf: Buffer, mimeType: string, displayName: string): Promise<GeminiFileUploadResult['file']> {
-  const startUrl = `${GEMINI_BASE}/files?key=${GEMINI_API_KEY}&uploadType=multipart`
+  const startUrl = `${GEMINI_FILES_BASE}/files?key=${GEMINI_API_KEY}&uploadType=multipart`
   const boundary = `----capture-boundary-${Date.now().toString(16)}`
   const metadata = JSON.stringify({ file: { display_name: displayName } })
 
@@ -253,7 +260,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   let extracted: FileExtractionResult
   try {
-    const json = await geminiGenerate(
+    const { json } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
       {
         system_instruction: { parts: [{ text: FILE_EXTRACTION_PROMPT }] },
         contents: [{
@@ -265,7 +273,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
       },
       120_000,
-      'capture/file',
+      'capture:file',
     )
     const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text

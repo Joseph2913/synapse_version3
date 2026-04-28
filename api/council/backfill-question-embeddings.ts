@@ -70,42 +70,81 @@ async function getUser(req: VercelRequest): Promise<string | null> {
   } catch { return null }
 }
 
-async function embedText(text: string): Promise<number[]> {
-  const resp = await fetch(
-    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } }),
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
     }
-  )
-  const data = await resp.json()
-  if (!data.embedding?.values) throw new Error('No embedding')
-  return data.embedding.values as number[]
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
 }
 
 const EMBEDDING_BATCH_SIZE = 100
 
-async function embedTexts(texts: string[]): Promise<number[][]> {
+async function embedTexts(texts: string[], timeoutMs = 60000, stage = 'council:backfill-questions:embed'): Promise<number[][]> {
   if (texts.length === 0) return []
   const out: number[][] = []
   for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
     const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE)
-    const resp = await fetch(
-      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requests: slice.map(text => ({
-            model: `models/${GEMINI_EMBEDDING_MODEL}`,
-            content: { parts: [{ text }] },
-          })),
-        }),
-      }
+    const { json } = await geminiFetch(
+      `${GEMINI_EMBEDDING_MODEL}:batchEmbedContents`,
+      { requests: slice.map(text => ({ model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } })) },
+      timeoutMs,
+      stage
     )
-    if (!resp.ok) throw new Error(`Batch embedding ${resp.status}: ${await resp.text().catch(() => '')}`)
-    const data = await resp.json() as { embeddings?: Array<{ values?: number[] }> }
+    const data = json as { embeddings?: Array<{ values?: number[] }> }
     const vectors = (data.embeddings ?? []).map(e => e.values ?? [])
     if (vectors.length !== slice.length) throw new Error(`Batch embedding length mismatch: ${vectors.length} vs ${slice.length}`)
     out.push(...vectors)

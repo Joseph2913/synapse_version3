@@ -51,34 +51,90 @@ function verifyCronAuth(req: VercelRequest): boolean {
 
 // ─── GEMINI HELPERS (self-contained — serverless constraint) ──────────────────
 
-async function embedText(text: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: `models/${GEMINI_EMBEDDING_MODEL}`,
-      content: { parts: [{ text }] },
-    }),
-  })
-  if (!resp.ok) throw new Error(`Embedding failed: ${resp.statusText}`)
-  const data = await resp.json()
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
+async function embedText(text: string, timeoutMs = 30000, stage = 'digest:generate-scheduled:embedding'): Promise<number[]> {
+  const { json } = await geminiFetch(
+    `${GEMINI_EMBEDDING_MODEL}:embedContent`,
+    { model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } },
+    timeoutMs,
+    stage
+  )
+  const data = json as { embedding?: { values?: number[] } }
   return data.embedding?.values ?? []
 }
 
 async function generateWithGemini(systemPrompt: string, userPrompt: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const { json } = await geminiFetch(
+    `${GEMINI_MODEL}:generateContent`,
+    {
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
-    }),
-  })
-  if (!resp.ok) throw new Error(`Gemini generation failed: ${resp.statusText}`)
-  const data = await resp.json()
+    },
+    60000,
+    'digest:generate-scheduled'
+  )
+  const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 }
 

@@ -43,26 +43,54 @@ async function geminiFetch(
   endpoint: string,
   body: unknown,
   timeoutMs: number,
+  stage: string,
 ): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
   const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify(body),
-    })
-    if (!resp.ok) {
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage,
+            model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
       const txt = await resp.text().catch(() => '')
-      throw new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
     }
-    const json = await resp.json() as { usageMetadata?: GeminiUsage }
-    return { json, usage: json.usageMetadata }
-  } finally {
-    clearTimeout(timer)
   }
+  throw lastErr ?? new Error('[gemini] request failed')
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -125,6 +153,7 @@ Return only the JSON object.`
         },
       },
       15_000,
+      'gemini:classify-query',
     )
     const data = json as {
       candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] } }[]

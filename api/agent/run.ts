@@ -74,6 +74,67 @@ async function getUser(req: VercelRequest): Promise<string | null> {
   } catch { return null }
 }
 
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
 // ─── Gemini multi-turn JSON helper ───────────────────────────────────────────
 
 interface GeminiMessage {
@@ -87,56 +148,40 @@ async function geminiJson<T>(
   temperature = 0.2,
   timeoutMs = 30000
 ): Promise<T> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    // Map to Gemini's format: 'assistant' → 'model'
-    const contents = messages.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }))
-
-    const resp = await fetch(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents,
-          generationConfig: { temperature, responseMimeType: 'application/json' },
-        }),
-      }
-    )
-    if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${await resp.text()}`)
-    const data = await resp.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-    }
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!text) throw new Error('No response from Gemini')
-    return JSON.parse(text) as T
-  } finally {
-    clearTimeout(timeout)
+  // Map to Gemini's format: 'assistant' → 'model'
+  const contents = messages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }))
+  const { json } = await geminiFetch(
+    `${GEMINI_MODEL}:generateContent`,
+    {
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents,
+      generationConfig: { temperature, responseMimeType: 'application/json' },
+    },
+    timeoutMs,
+    'agent:run'
+  )
+  const data = json as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
   }
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('No response from Gemini')
+  return JSON.parse(text) as T
 }
 
 // ─── Embedding helper ────────────────────────────────────────────────────────
 
-async function embedText(text: string): Promise<number[]> {
-  const resp = await fetch(
-    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: `models/${GEMINI_EMBEDDING_MODEL}`,
-        content: { parts: [{ text }] },
-      }),
-    }
+async function embedText(text: string, timeoutMs = 30000, stage = 'agent:embedding'): Promise<number[]> {
+  const { json } = await geminiFetch(
+    `${GEMINI_EMBEDDING_MODEL}:embedContent`,
+    { model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } },
+    timeoutMs,
+    stage
   )
-  const data = await resp.json() as { embedding?: { values?: number[] } }
-  if (!data.embedding?.values) throw new Error('No embedding returned')
+  const data = json as { embedding?: { values?: number[] } }
+  if (!data.embedding?.values) throw new Error('No embedding in Gemini response')
   return data.embedding.values
 }
 

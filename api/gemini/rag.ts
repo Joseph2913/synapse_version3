@@ -202,8 +202,13 @@ interface GeminiUsage {
   totalTokenCount?: number
 }
 
-async function geminiFetch(body: unknown, timeoutMs: number) {
-  const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string,
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
   const maxAttempts = 3
   let lastErr: Error | null = null
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -218,12 +223,29 @@ async function geminiFetch(body: unknown, timeoutMs: number) {
       })
       if (resp.ok) {
         const json = await resp.json() as { usageMetadata?: GeminiUsage }
-        return { json, usage: json.usageMetadata }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage,
+            model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
       }
       const txt = await resp.text().catch(() => '')
       lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
       if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
-        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
         continue
       }
       throw lastErr
@@ -231,7 +253,7 @@ async function geminiFetch(body: unknown, timeoutMs: number) {
       clearTimeout(timer)
     }
   }
-  throw lastErr ?? new Error('Gemini request failed')
+  throw lastErr ?? new Error('[gemini] request failed')
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -270,15 +292,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const startedAt = Date.now()
   try {
-    const { json, usage } = await geminiFetch({
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: {
-        temperature: temperatureOverride ?? 0.3,
-        maxOutputTokens: maxOutputTokens ?? 32768,
-        responseMimeType: 'application/json',
+    const { json, usage } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
+      {
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: {
+          temperature: temperatureOverride ?? 0.3,
+          maxOutputTokens: maxOutputTokens ?? 32768,
+          responseMimeType: 'application/json',
+        },
       },
-    }, 120_000)
+      120_000,
+      'gemini:rag',
+    )
 
     const data = json as {
       candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[]

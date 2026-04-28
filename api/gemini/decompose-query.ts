@@ -27,6 +27,66 @@ async function getUserIdFromRequest(req: VercelRequest): Promise<string | null> 
   }
 }
 
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string,
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage,
+            model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
 interface DecomposeBody {
   question: string
 }
@@ -62,32 +122,19 @@ Rules:
 
 Return only the JSON array, nothing else.`
 
-  const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
   const startedAt = Date.now()
   try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 15_000)
-    let resp: Response
-    try {
-      resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-        }),
-      })
-    } finally {
-      clearTimeout(timer)
-    }
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '')
-      throw new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
-    }
-    const data = await resp.json() as {
+    const { json, usage } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+      },
+      15_000,
+      'gemini:decompose-query',
+    )
+    const data = json as {
       candidates?: { content?: { parts?: { text?: string }[] } }[]
-      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
     }
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 
@@ -96,8 +143,8 @@ Return only the JSON array, nothing else.`
       user_id: userId,
       duration_ms: Date.now() - startedAt,
       status: 'ok',
-      prompt_tokens: data.usageMetadata?.promptTokenCount,
-      output_tokens: data.usageMetadata?.candidatesTokenCount,
+      prompt_tokens: usage?.promptTokenCount,
+      output_tokens: usage?.candidatesTokenCount,
     }))
 
     return res.status(200).json({ text })

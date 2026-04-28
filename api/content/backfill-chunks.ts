@@ -156,14 +156,24 @@ function buildChunkEmbeddingInput(title: string | null | undefined, chunkContent
   return t ? `${t}\n\n${chunkContent}` : chunkContent;
 }
 
-// ─── EMBEDDING (canonical batch helper) ────────────────────────────────────
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
 
-async function embedTexts(texts: string[], timeoutMs = 60000): Promise<number[][]> {
-  if (texts.length === 0) return [];
-  const out: number[][] = [];
-  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
-    const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE);
-    const url = `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`;
+interface GeminiUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string,
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`;
+  const maxAttempts = 3;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -171,26 +181,66 @@ async function embedTexts(texts: string[], timeoutMs = 60000): Promise<number[][
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
-        body: JSON.stringify({
-          requests: slice.map(text => ({
-            model: `models/${GEMINI_EMBEDDING_MODEL}`,
-            content: { parts: [{ text }] },
-          })),
-        }),
+        body: JSON.stringify(body),
       });
-      if (!resp.ok) {
-        const t = await resp.text().catch(() => '');
-        throw new Error(`Batch embedding ${resp.status}: ${t.slice(0, 200)}`);
+      if (resp.ok) {
+        const json = (await resp.json()) as { usageMetadata?: GeminiUsage };
+        const usage = json.usageMetadata;
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }));
+        }
+        return { json, usage };
       }
-      const data = (await resp.json()) as { embeddings?: Array<{ values?: number[] }> };
-      const vectors = (data.embeddings ?? []).map(e => e.values ?? []);
-      if (vectors.length !== slice.length) {
-        throw new Error(`Batch embedding length mismatch: ${vectors.length} vs ${slice.length}`);
+      const txt = await resp.text().catch(() => '');
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`);
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
       }
-      out.push(...vectors);
+      throw lastErr;
+    } catch (err) {
+      lastErr = err as Error;
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
     } finally {
       clearTimeout(timer);
     }
+  }
+  throw lastErr ?? new Error('[gemini] request failed');
+}
+
+// ─── EMBEDDING (canonical batch helper) ────────────────────────────────────
+
+async function embedTexts(texts: string[], timeoutMs = 60000, stage = 'content:backfill-chunks'): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const out: number[][] = [];
+  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
+    const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE);
+    const { json } = await geminiFetch(
+      `${GEMINI_EMBEDDING_MODEL}:batchEmbedContents`,
+      {
+        requests: slice.map(text => ({
+          model: `models/${GEMINI_EMBEDDING_MODEL}`,
+          content: { parts: [{ text }] },
+        })),
+      },
+      timeoutMs,
+      stage,
+    );
+    const data = json as { embeddings?: Array<{ values?: number[] }> };
+    const vectors = (data.embeddings ?? []).map(e => e.values ?? []);
+    if (vectors.length !== slice.length) {
+      throw new Error(`Batch embedding length mismatch: ${vectors.length} vs ${slice.length}`);
+    }
+    out.push(...vectors);
   }
   return out;
 }

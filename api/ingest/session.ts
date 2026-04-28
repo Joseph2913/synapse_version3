@@ -3,7 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
 import {
   runExtractionCore,
-  fetchWithRetry,
   stripMarkdown,
   type Anchor,
   type UserProfile,
@@ -126,23 +125,84 @@ function verifyIngestSecret(req: VercelRequest): boolean {
   return secret === INGEST_SECRET;
 }
 
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string,
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`;
+  const maxAttempts = 3;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage };
+        const usage = json.usageMetadata;
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }));
+        }
+        return { json, usage };
+      }
+      const txt = await resp.text().catch(() => '');
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`);
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
+    } catch (err) {
+      lastErr = err as Error;
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed');
+}
+
 async function generateSummary(content: string): Promise<string> {
-  const response = await fetchWithRetry(
-    `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  try {
+    const { json } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
+      {
         system_instruction: { parts: [{ text: 'You are a concise summarizer. Produce a 2-3 sentence summary of the following content. Focus on what was accomplished, decided, or discovered.' }] },
         contents: [{ parts: [{ text: content.slice(0, 30000) }] }],
         generationConfig: { temperature: 0.2, maxOutputTokens: 256 },
-      }),
-      signal: AbortSignal.timeout(15000),
-    }
-  );
-  if (!response.ok) return '';
-  const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      },
+      15000,
+      'ingest:session:summary',
+    );
+    const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  } catch {
+    return '';
+  }
 }
 // ─── BACKGROUND PIPELINE ──────────────────────────────────────────────────────
 

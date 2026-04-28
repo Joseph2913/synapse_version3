@@ -78,6 +78,67 @@ function logError(fields: LogFields & { error: string }): void {
   console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
 }
 
+// ─── Gemini fetch helper (retry on 429/5xx, token-usage logging) ────────────
+
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
   if (!CRON_SECRET) return true;
@@ -667,32 +728,24 @@ Return ONLY valid JSON matching this schema:
   };
 
   try {
-    const geminiResponse = await fetch(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+    const { json: geminiData } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: analysisPrompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-          },
-        }),
-        signal: AbortSignal.timeout(30000),
-      }
+        contents: [{ parts: [{ text: analysisPrompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+        },
+      },
+      30000,
+      'youtube:extract-knowledge:advisory'
     );
-
-    if (geminiResponse.ok) {
-      const geminiData = await geminiResponse.json() as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) {
-        analysis = JSON.parse(text) as AdvisoryAnalysisResult;
-      }
-    } else {
-      console.warn(`[advisory-council] Gemini analysis call failed: ${geminiResponse.status}`);
+    const data = geminiData as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (text) {
+      analysis = JSON.parse(text) as AdvisoryAnalysisResult;
     }
   } catch (err) {
     console.warn('[advisory-council] Gemini analysis failed:', err);

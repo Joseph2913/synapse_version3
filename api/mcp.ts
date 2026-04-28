@@ -143,26 +143,77 @@ async function verifyApiKey(req: VercelRequest): Promise<{ userId: string } | nu
   return { userId: data.user_id as string }
 }
 
-// ─── Gemini helpers ──────────────────────────────────────────────────────────
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
 
-async function embedText(text: string): Promise<number[]> {
-  const response = await fetch(
-    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: `models/${GEMINI_EMBEDDING_MODEL}`,
-        content: { parts: [{ text }] },
-      }),
+interface GeminiUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  totalTokenCount?: number
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`
+  const maxAttempts = 3
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      })
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage }
+        const usage = json.usageMetadata
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }))
+        }
+        return { json, usage }
+      }
+      const txt = await resp.text().catch(() => '')
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`)
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } catch (err) {
+      lastErr = err as Error
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
+        continue
+      }
+      throw lastErr
+    } finally {
+      clearTimeout(timer)
     }
-  )
-
-  const data = await response.json()
-  if (!data.embedding?.values) {
-    throw new Error('No embedding in Gemini response')
   }
-  return data.embedding.values as number[]
+  throw lastErr ?? new Error('[gemini] request failed')
+}
+
+async function embedText(text: string, timeoutMs = 30000, stage = 'mcp:embedding'): Promise<number[]> {
+  const { json } = await geminiFetch(
+    `${GEMINI_EMBEDDING_MODEL}:embedContent`,
+    { model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } },
+    timeoutMs,
+    stage
+  )
+  const data = json as { embedding?: { values?: number[] } }
+  if (!data.embedding?.values) throw new Error('No embedding in Gemini response')
+  return data.embedding.values
 }
 
 // ─── Relationship Search (PRD-RAG-05) ───────────────────────────────────────
@@ -191,32 +242,18 @@ async function matchRelationships(
 }
 
 async function generateAnswer(systemPrompt: string, userPrompt: string): Promise<string> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8000)
-
-  try {
-    const response = await fetch(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 1024,
-          },
-        }),
-      }
-    )
-
-    const data = await response.json()
-    return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
-  } finally {
-    clearTimeout(timeout)
-  }
+  const { json } = await geminiFetch(
+    `${GEMINI_MODEL}:generateContent`,
+    {
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
+    },
+    8000,
+    'mcp:generate-answer'
+  )
+  const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 }
 
 // ─── Stop word removal ───────────────────────────────────────────────────────
@@ -300,31 +337,22 @@ async function rerankForMCP(
   const prompt = `Score each passage 0-10 for relevance to this query. Return ONLY a JSON array of numbers.\n\nQuery: "${query}"\n\nPassages:\n${candidateList}`
 
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 6000)
-    try {
-      const resp = await fetch(
-        `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { maxOutputTokens: 1024, temperature: 0, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
-          }),
-        }
-      )
-      const data = await resp.json()
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-      if (!text) throw new Error('empty')
-      const scores: number[] = JSON.parse(text)
-      const ranked = candidates.map((c, i) => ({ ...c, score: typeof scores[i] === 'number' ? scores[i] : 0 }))
-      ranked.sort((a, b) => b.score - a.score)
-      return ranked.slice(0, topN)
-    } finally {
-      clearTimeout(timeout)
-    }
+    const { json } = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 1024, temperature: 0, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
+      },
+      6000,
+      'mcp:rerank'
+    )
+    const data = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!text) throw new Error('empty')
+    const scores: number[] = JSON.parse(text)
+    const ranked = candidates.map((c, i) => ({ ...c, score: typeof scores[i] === 'number' ? scores[i] : 0 }))
+    ranked.sort((a, b) => b.score - a.score)
+    return ranked.slice(0, topN)
   } catch {
     return candidates.slice(0, topN).map(c => ({ ...c, score: 5 }))
   }
@@ -2645,41 +2673,22 @@ async function geminiJson<T>(
   temperature: number = 0.2,
   timeoutMs: number = 30000
 ): Promise<T> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    const response = await fetch(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: userContent }] }],
-          generationConfig: {
-            temperature,
-            responseMimeType: 'application/json',
-          },
-        }),
-      }
-    )
-
-    if (!response.ok) {
-      const errText = await response.text()
-      throw new Error(`Gemini ${response.status}: ${errText.slice(0, 300)}`)
-    }
-
-    const data = await response.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-    }
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!text) throw new Error('No response from Gemini')
-    return JSON.parse(text) as T
-  } finally {
-    clearTimeout(timeout)
+  const { json } = await geminiFetch(
+    `${GEMINI_MODEL}:generateContent`,
+    {
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userContent }] }],
+      generationConfig: { temperature, responseMimeType: 'application/json' },
+    },
+    timeoutMs,
+    'mcp:council'
+  )
+  const data = json as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
   }
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!text) throw new Error('No response from Gemini')
+  return JSON.parse(text) as T
 }
 
 // ─── Council handler ────────────────────────────────────────────────────────

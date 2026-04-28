@@ -580,6 +580,71 @@ export async function fetchWithRetry(
   throw lastErr ?? new Error('fetchWithRetry exhausted');
 }
 
+// ─── Gemini fetch + helpers (retry on 429/5xx, token-usage logging) ─────────
+
+interface GeminiUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+async function geminiFetch(
+  endpoint: string,
+  body: unknown,
+  timeoutMs: number,
+  stage: string,
+): Promise<{ json: unknown; usage: GeminiUsage | undefined }> {
+  const url = `${GEMINI_BASE}/${endpoint}?key=${GEMINI_API_KEY}`;
+  const maxAttempts = 3;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        const json = await resp.json() as { usageMetadata?: GeminiUsage };
+        const usage = json.usageMetadata;
+        if (usage) {
+          console.log(JSON.stringify({
+            stage, model: endpoint.split(':')[0],
+            prompt_tokens: usage.promptTokenCount,
+            output_tokens: usage.candidatesTokenCount,
+            total_tokens: usage.totalTokenCount,
+          }));
+        }
+        return { json, usage };
+      }
+      const txt = await resp.text().catch(() => '');
+      lastErr = new Error(`Gemini ${resp.status}: ${txt.slice(0, 200)}`);
+      if (resp.status === 429) {
+        // Mark for callers that need to distinguish rate-limit errors.
+        lastErr = new Error(`RATE_LIMITED: Gemini rate limit hit — ${txt.slice(0, 300)}`);
+      }
+      if ((resp.status === 429 || resp.status >= 500) && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
+    } catch (err) {
+      lastErr = err as Error;
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw lastErr;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error('[gemini] request failed');
+}
+
 // ─── PROMPT BUILDERS ───────────────────────────────────────────────────────
 
 /**
@@ -908,33 +973,29 @@ export async function extractEntities(
     throw new Error('extractEntities called with empty content');
   }
 
-  const response = await fetchWithRetry(
-    `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  let json: unknown;
+  try {
+    const result = await geminiFetch(
+      `${GEMINI_MODEL}:generateContent`,
+      {
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: [{ parts: [{ text: content.slice(0, MAX_TRANSCRIPT_CHARS) }] }],
-        generationConfig: {
-          temperature: 0.3,
-          responseMimeType: 'application/json',
-        },
-      }),
-      signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
+        generationConfig: { temperature: 0.3, responseMimeType: 'application/json' },
+      },
+      GEMINI_CALL_TIMEOUT_MS,
+      'pipeline:extract'
+    );
+    json = result.json;
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.startsWith('RATE_LIMITED')) {
+      console.error(`[extract-pipeline] Gemini 429 on extractEntities — ${msg.slice(0, 800)}`);
+      throw err;
     }
-  );
-
-  if (!response.ok) {
-    const errText = await response.text();
-    if (response.status === 429) {
-      console.error(`[extract-pipeline] Gemini 429 on extractEntities — raw body: ${errText.slice(0, 800)}`);
-      throw new Error(`RATE_LIMITED: Gemini rate limit hit — ${errText.slice(0, 300)}`);
-    }
-    throw new Error(`Gemini extraction failed: ${response.status} ${errText.slice(0, 200)}`);
+    throw new Error(`Gemini extraction failed: ${msg.slice(0, 200)}`);
   }
 
-  const data = await response.json() as {
+  const data = json as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -1061,32 +1122,31 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
 
   for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
     const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE);
-    const response = await fetchWithRetry(
-      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    let json: unknown;
+    try {
+      const result = await geminiFetch(
+        `${GEMINI_EMBEDDING_MODEL}:batchEmbedContents`,
+        {
           requests: slice.map(text => ({
             model: `models/${GEMINI_EMBEDDING_MODEL}`,
             content: { parts: [{ text }] },
           })),
-        }),
-        signal: AbortSignal.timeout(30_000),
+        },
+        30_000,
+        'pipeline:batch-embed'
+      );
+      json = result.json;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.startsWith('RATE_LIMITED')) {
+        console.error(`[extract-pipeline] Gemini 429 on batchEmbed — ${msg.slice(0, 800)}`);
+        throw new Error(`RATE_LIMITED: Gemini embedding rate limit hit — ${msg.slice(0, 300)}`);
       }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      if (response.status === 429) {
-        console.error(`[extract-pipeline] Gemini 429 on batchEmbed — raw body: ${errText.slice(0, 800)}`);
-        throw new Error(`RATE_LIMITED: Gemini embedding rate limit hit — ${errText.slice(0, 300)}`);
-      }
-      console.warn(`[extract-pipeline] batchEmbed HTTP ${response.status}: ${errText.slice(0, 200)}`);
+      console.warn(`[extract-pipeline] batchEmbed failed: ${msg.slice(0, 200)}`);
       continue;
     }
 
-    const data = await response.json() as { embeddings?: Array<{ values?: number[] }> };
+    const data = json as { embeddings?: Array<{ values?: number[] }> };
     const embeddings = data.embeddings ?? [];
     for (let i = 0; i < slice.length; i++) {
       results[start + i] = embeddings[i]?.values ?? [];
@@ -1097,21 +1157,18 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
 
 /** Single embedding — use batchEmbed() wherever possible instead. */
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetchWithRetry(
-    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: `models/${GEMINI_EMBEDDING_MODEL}`,
-        content: { parts: [{ text }] },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    }
-  );
-  if (!response.ok) return [];
-  const data = await response.json() as { embedding?: { values?: number[] } };
-  return data.embedding?.values ?? [];
+  try {
+    const { json } = await geminiFetch(
+      `${GEMINI_EMBEDDING_MODEL}:embedContent`,
+      { model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } },
+      15_000,
+      'pipeline:embedding'
+    );
+    const data = json as { embedding?: { values?: number[] } };
+    return data.embedding?.values ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // ─── CHUNKING ──────────────────────────────────────────────────────────────
@@ -1656,24 +1713,21 @@ Return ONLY valid JSON:
 
 Return an empty array if no genuine cross-source connections exist.`;
 
-    const crossResponse = await fetchWithRetry(
-      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    let crossData: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    try {
+      const { json } = await geminiFetch(
+        `${GEMINI_MODEL}:generateContent`,
+        {
           contents: [{ parts: [{ text: crossPrompt }] }],
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
-        }),
-        signal: AbortSignal.timeout(30_000),
-      }
-    );
-
-    if (!crossResponse.ok) return 0;
-
-    const crossData = await crossResponse.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
+        },
+        30_000,
+        'pipeline:cross-connections'
+      );
+      crossData = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    } catch {
+      return 0;
+    }
     const crossText = crossData.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!crossText) return 0;
 
