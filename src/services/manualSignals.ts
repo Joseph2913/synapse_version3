@@ -2,7 +2,6 @@ import { supabase } from './supabase'
 import { saveChunks } from './extractionPersistence'
 import { chunkSourceContent, buildEmbeddingInput } from '../utils/chunking'
 import { generateEmbeddings } from './gemini'
-import { runHeadlessExtraction } from './extractionPipeline'
 
 interface CreateManualAnchorInput {
   userId: string
@@ -200,18 +199,22 @@ export async function createAndProcessSkillSource({
   // The backfill endpoint needs chunks in source_chunks to pass its
   // pre-filter, so it must run AFTER extraction completes.
 
-  await runHeadlessExtraction({
-    userId,
-    accessToken,
-    content: trimmedContent,
-    existingSourceId: sourceId,
-    metadata: {
-      title: trimmedTitle || `Manual skill source (${inputType})`,
-      sourceType,
-      sourceUrl,
-    },
-    onProgress,
+  onProgress?.('extracting', 'Running extraction pipeline...')
+  const extractRes = await fetch('/api/ingest/extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+    body: JSON.stringify({
+      sourceId,
+      content: trimmedContent,
+      sourceContext: { sourceType, sourceUrl: sourceUrl ?? null, sourceLabel: trimmedTitle || null },
+      enableFuzzyDedup: true,
+      enableCrossConnections: true,
+    }),
   })
+  if (!extractRes.ok) {
+    const err = await extractRes.json().catch(() => ({ error: 'Unknown error' })) as { error?: string }
+    throw new Error(err.error ?? 'Extraction failed')
+  }
 
   // Step 3: Now that chunks exist, run skill backfill
   const backfillResult = await callSkillBackfill(accessToken, sourceId)

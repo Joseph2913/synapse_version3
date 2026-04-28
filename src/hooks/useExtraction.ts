@@ -5,26 +5,16 @@ import type {
   ReviewEntity,
   SourceMetadata,
   UseExtractionReturn,
+  ExtractedRelationship,
+  ExtractedEntity,
 } from '../types/extraction'
 import { useAuth } from './useAuth'
-import { composeExtractionPrompt } from '../utils/promptBuilder'
-import { fetchActiveSkillsForPrompt } from '../services/promptSkillsContext'
-import { chunkSourceContent, buildEmbeddingInput } from '../utils/chunking'
 import { resolveSummary } from '../utils/summarize'
-import { extractEntities, generateEmbeddings } from '../services/gemini'
 import {
   saveSource,
-  saveNodes,
-  saveEdges,
-  updateNodeEmbeddings,
-  saveChunks,
   saveExtractionSession,
 } from '../services/extractionPersistence'
 import { supabase } from '../services/supabase'
-import { checkDeduplication, savePotentialDuplicates } from '../services/deduplication'
-// discoverCrossConnections and saveCrossConnectionEdges are no longer called
-// directly from the browser. Cross-connection discovery runs server-side via
-// /api/cross-connect/run (fire-and-forget) so it never blocks the extraction UX.
 
 const INITIAL_STATE: PipelineState = {
   step: 'idle',
@@ -54,7 +44,6 @@ export function useExtraction(): UseExtractionReturn {
   const sourceIdRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<number>(0)
-  const promptVersionRef = useRef<string>('unknown')
 
   // Timer management
   const startTimer = useCallback(() => {
@@ -110,7 +99,7 @@ export function useExtraction(): UseExtractionReturn {
           const summaryResult = await resolveSummary(
             metadata.sourceType,
             content,
-            null // metadata from source row not available yet; extraction metadata is minimal
+            null
           )
           if (summaryResult) {
             await supabase
@@ -125,30 +114,58 @@ export function useExtraction(): UseExtractionReturn {
           console.warn('[useExtraction] Summary generation failed (non-blocking):', summaryErr)
         }
 
-        // Step 3: Compose prompt (Stage 4 — canonical, with active skills hints)
-        update({ step: 'composing_prompt', statusText: 'Composing extraction prompt...' })
-        const activeSkills = await fetchActiveSkillsForPrompt(userId)
-        const composed = composeExtractionPrompt({ ...config, activeSkills })
-        promptVersionRef.current = composed.version
-
-        // Step 3: Extract entities
+        // Step 3: Call extract-preview serverless endpoint
         update({ step: 'extracting', statusText: 'Waiting for Gemini extraction...' })
-        const result = await extractEntities(content, composed.prompt)
+
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        if (!currentSession?.access_token) {
+          throw new Error('No auth session available')
+        }
+
+        const previewRes = await fetch('/api/ingest/extract-preview', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${currentSession.access_token}`,
+          },
+          body: JSON.stringify({
+            content,
+            sourceId,
+            config: {
+              mode: config.mode,
+              anchorEmphasis: config.anchorEmphasis,
+              anchors: config.anchors,
+              userProfile: config.userProfile,
+              customGuidance: config.customGuidance,
+            },
+          }),
+        })
+
+        if (!previewRes.ok) {
+          const err = await previewRes.json().catch(() => ({ error: 'Extraction failed' })) as { error?: string }
+          throw new Error(err.error ?? 'Extraction failed')
+        }
+
+        const previewData = await previewRes.json() as {
+          entities: ExtractedEntity[]
+          relationships: ExtractedRelationship[]
+          stats?: unknown
+        }
 
         // Convert to ReviewEntity[]
-        const reviewEntities: ReviewEntity[] = result.entities.map(e => ({
+        const reviewEntities: ReviewEntity[] = previewData.entities.map(e => ({
           ...e,
           removed: false,
           edited: false,
         }))
 
-        const entityCount = result.entities.length
-        const relCount = result.relationships.length
+        const entityCount = previewData.entities.length
+        const relCount = previewData.relationships.length
 
         update({
           step: 'reviewing',
           entities: reviewEntities,
-          relationships: result.relationships,
+          relationships: previewData.relationships,
           statusText: `Found ${entityCount} entities and ${relCount} relationships`,
         })
 
@@ -166,7 +183,7 @@ export function useExtraction(): UseExtractionReturn {
     [user, startTimer, stopTimer, update]
   )
 
-  // --- approveAndSave: Steps 5-8 ---
+  // --- approveAndSave: Persist reviewed entities via serverless ---
   const approveAndSave = useCallback(
     async (reviewedEntities: ReviewEntity[]) => {
       if (!user?.id || !sourceIdRef.current) return
@@ -180,204 +197,99 @@ export function useExtraction(): UseExtractionReturn {
       update({ entities: reviewedEntities })
 
       try {
-        // Step 5: Save nodes + edges
         update({ step: 'saving_nodes', statusText: 'Saving entities to your knowledge graph...' })
 
         const included = reviewedEntities.filter(e => !e.removed)
-        const removedLabels = new Set(
-          reviewedEntities.filter(e => e.removed).map(e => e.label.toLowerCase())
-        )
 
-        // Step 1: Run deduplication check (exact match by label)
-        const entitiesForDedup = included.map(e => ({
-          label:       e.label,
-          entity_type: e.entity_type,
-        }))
-        const dedupResult = await checkDeduplication(userId, entitiesForDedup)
-
-        // Step 2: Save nodes (new + reuse existing for exact matches)
-        const sourceName = metadata?.title || deriveQuickTitle(content)
-        const saveResult = await saveNodes(userId, reviewedEntities, sourceId, {
-          sourceName,
-          sourceType: metadata?.sourceType || 'paste',
-          sourceUrl: metadata?.sourceUrl,
-        }, dedupResult.exactMatches)
-
-        const duplicatesSkipped = dedupResult.exactMatches.size
-
-        // Step 3: Save edges — use allNodes so reused nodes get their edges
-        const savedEdgeIds = await saveEdges(
-          userId,
-          state.relationships ?? [],
-          saveResult.allNodes,
-          removedLabels
-        )
-
-        const savedNodes = saveResult.newNodes
-        update({ savedNodes, savedEdgeIds, duplicatesSkipped })
-
-        // Step 6: Generate embeddings
-        update({ step: 'generating_embeddings', statusText: 'Generating embeddings...' })
-
-        if (savedNodes.length > 0) {
-          const texts = savedNodes.map(n => {
-            const entity = reviewedEntities.find(
-              e => e.label.toLowerCase() === n.label.toLowerCase()
-            )
-            // Include entity_type for richer semantic vectors (aligns with backend)
-            return `${entity?.entity_type ?? n.entity_type}: ${n.label} — ${entity?.description || ''}`
-          })
-
-          const embeddings = await generateEmbeddings(texts, 5, (completed, total) => {
-            update({
-              embeddingProgress: { completed, total },
-              statusText: `Generating embedding ${completed} of ${total}...`,
-            })
-          })
-
-          // Update nodes with embeddings (skip nulls) and store on savedNodes for near-dedup
-          const nodesToUpdate: Array<{ id: string; embedding: number[] }> = []
-          embeddings.forEach((emb, i) => {
-            const node = savedNodes[i]
-            if (emb && node) {
-              nodesToUpdate.push({ id: node.id, embedding: emb })
-              node.embedding = emb
-            } else if (!emb && node) {
-              console.warn(`[useExtraction] Embedding failed for: ${node.label}`)
-            }
-          })
-
-          if (nodesToUpdate.length > 0) {
-            await updateNodeEmbeddings(nodesToUpdate)
-          }
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        if (!currentSession?.access_token) {
+          throw new Error('No auth session available')
         }
 
-        // Step 6b: Near-duplicate check using embeddings (post-embedding generation)
-        if (savedNodes.length > 0) {
-          const newNodesWithEmbeddings = savedNodes
-            .map(n => ({
-              label:       n.label,
-              entity_type: n.entity_type,
-              embedding:   n.embedding,
-            }))
-            .filter((n): n is { label: string; entity_type: string; embedding: number[] } => !!n.embedding)
-
-          if (newNodesWithEmbeddings.length > 0) {
-            const nearDedupResult = await checkDeduplication(userId, newNodesWithEmbeddings)
-
-            // Save near matches to review queue (non-blocking)
-            const newNodeIdMap = new Map(
-              savedNodes.map(n => [n.label.toLowerCase(), n.id])
-            )
-            savePotentialDuplicates(userId, nearDedupResult.nearMatches, newNodeIdMap)
-              .catch(err => console.warn('[useExtraction] Failed to save potential duplicates:', err))
-
-            // Surface near matches in state for review UI
-            if (nearDedupResult.nearMatches.length > 0) {
-              update({ nearDuplicates: nearDedupResult.nearMatches })
-            }
-          }
-        }
-
-        // Step 7: Chunk source
-        update({
-          step: 'chunking_source',
-          statusText: 'Chunking source for RAG retrieval...',
-          embeddingProgress: null,
+        const persistRes = await fetch('/api/ingest/extract-persist', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${currentSession.access_token}`,
+          },
+          body: JSON.stringify({
+            sourceId,
+            content,
+            entities: included,
+            relationships: state.relationships ?? [],
+            sourceContext: {
+              sourceType: metadata?.sourceType ?? 'paste',
+              sourceUrl: metadata?.sourceUrl ?? null,
+              sourceLabel: metadata?.title ?? null,
+            },
+            enableFuzzyDedup: true,
+            enableCrossConnections: true,
+          }),
         })
 
-        let chunkCount = 0
-        let chunks: string[]
-        try {
-          chunks = chunkSourceContent(content)
-        } catch (chunkErr) {
-          await supabase
-            .from('knowledge_sources')
-            .update({ status: 'failed' })
-            .eq('id', sourceId)
-            .eq('user_id', userId)
-          throw chunkErr
+        if (!persistRes.ok) {
+          const err = await persistRes.json().catch(() => ({ error: 'Persistence failed' })) as { error?: string }
+          throw new Error(err.error ?? 'Persistence failed')
         }
 
-        if (chunks.length > 0) {
-          update({ statusText: `Embedding ${chunks.length} source chunks...` })
-          const sourceTitle = (metadataRef.current?.title ?? '').toString()
-          const inputs = chunks.map(c => buildEmbeddingInput(sourceTitle, c))
-          try {
-            const chunkEmbeddings = await generateEmbeddings(inputs, 5)
-            await saveChunks(userId, sourceId, chunks, chunkEmbeddings)
-            chunkCount = chunks.length
-          } catch (embErr) {
-            await supabase
-              .from('knowledge_sources')
-              .update({ status: 'degraded' })
-              .eq('id', sourceId)
-              .eq('user_id', userId)
-            throw embErr
-          }
+        const persistData = await persistRes.json() as {
+          sourceId: string
+          nodeIds: string[]
+          edgesCreated: number
+          chunkCount: number
+          crossConnectionCount: number
+          durationMs: number
+          mergedEntitiesLog: Array<{ canonical: string; merged: string[] }>
         }
 
-        // Record the extraction session before firing background jobs
+        const nodeIds = persistData.nodeIds
+        const edgesCreated = persistData.edgesCreated
+        const chunkCount = persistData.chunkCount
+        const crossConnectionCount = persistData.crossConnectionCount
+
+        // Record the extraction session
         stopTimer()
         const durationMs = Date.now() - startTimeRef.current
+        const sourceName = metadata?.title || deriveQuickTitle(content)
 
         await saveExtractionSession(userId, {
           sourceName,
-          sourceType: metadata?.sourceType || 'paste',
+          sourceType: metadata?.sourceType || 'Note',
           contentPreview: content,
           extractionMode: config?.mode || 'comprehensive',
           anchorEmphasis: config?.anchorEmphasis || 'standard',
           userGuidance: config?.customGuidance,
-          selectedAnchorIds: config?.anchors.map(() => ''), // simplified
-          extractedNodeIds: savedNodes.map(n => n.id),
-          extractedEdgeIds: savedEdgeIds,
-          entityCount: savedNodes.length,
-          relationshipCount: savedEdgeIds.length,
+          selectedAnchorIds: config?.anchors.map(() => ''),
+          extractedNodeIds: nodeIds,
+          extractedEdgeIds: [],
+          entityCount: nodeIds.length,
+          relationshipCount: edgesCreated,
           chunkCount,
-          crossConnectionCount: 0, // updated async by /api/cross-connect/run
+          crossConnectionCount,
           durationMs,
-          promptVersion: promptVersionRef.current,
         })
 
-        // Trigger anchor scoring and cross-connection discovery — fire-and-forget, never block the UI
-        if (savedNodes.length > 0) {
-          const { data: { session: currentSession } } = await supabase.auth.getSession()
-          if (currentSession?.access_token) {
-            fetch('/api/anchors/score-post-extraction', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentSession.access_token}`,
-              },
-              body: JSON.stringify({
-                userId:   userId,
-                sourceId: sourceId,
-                nodeIds:  savedNodes.map(n => n.id),
-              }),
-            }).catch(err => {
-              console.warn('[useExtraction] Anchor scoring trigger failed (non-fatal):', err)
-            })
-
-            // Stage 8: Cross-connection discovery — server-side, never blocks the UI
-            fetch('/api/cross-connect/run', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentSession.access_token}`,
-              },
-              body: JSON.stringify({
-                nodeIds:  savedNodes.map(n => n.id),
-                sourceId: sourceId ?? undefined,
-              }),
-            }).catch(err => {
-              console.warn('[useExtraction] Cross-connection trigger failed (non-fatal):', err)
-            })
-          }
+        // Trigger anchor scoring — fire-and-forget, never blocks the UI
+        if (nodeIds.length > 0 && sourceId) {
+          fetch('/api/anchors/score-post-extraction', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${currentSession.access_token}`,
+            },
+            body: JSON.stringify({
+              userId,
+              sourceId,
+              nodeIds,
+            }),
+          }).catch(err => {
+            console.warn('[useExtraction] Anchor scoring trigger failed (non-fatal):', err)
+          })
         }
 
         update({
           step: 'complete',
-          crossConnectionCount: 0,
+          crossConnectionCount,
           statusText: 'Extraction complete!',
           elapsedMs: durationMs,
         })
@@ -394,28 +306,55 @@ export function useExtraction(): UseExtractionReturn {
     [user, state.relationships, stopTimer, update]
   )
 
-  // --- reExtract: Restart from step 2 ---
+  // --- reExtract: Re-run extraction from server ---
   const reExtract = useCallback(async () => {
     if (!user?.id || !contentRef.current || !configRef.current) return
+    const config = configRef.current
 
     update({
-      step: 'composing_prompt',
+      step: 'extracting',
       entities: null,
       relationships: null,
       error: null,
-      statusText: 'Re-composing extraction prompt...',
+      statusText: 'Re-extracting with Gemini...',
     })
 
     try {
-      const userId = user?.id
-      const activeSkills = userId ? await fetchActiveSkillsForPrompt(userId) : []
-      const composed = composeExtractionPrompt({ ...configRef.current, activeSkills })
-      promptVersionRef.current = composed.version
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      if (!currentSession?.access_token) {
+        throw new Error('No auth session available')
+      }
 
-      update({ step: 'extracting', statusText: 'Re-extracting with Gemini...' })
-      const result = await extractEntities(contentRef.current, composed.prompt)
+      const previewRes = await fetch('/api/ingest/extract-preview', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${currentSession.access_token}`,
+        },
+        body: JSON.stringify({
+          content: contentRef.current,
+          sourceId: sourceIdRef.current,
+          config: {
+            mode: config.mode,
+            anchorEmphasis: config.anchorEmphasis,
+            anchors: config.anchors,
+            userProfile: config.userProfile,
+            customGuidance: config.customGuidance,
+          },
+        }),
+      })
 
-      const reviewEntities: ReviewEntity[] = result.entities.map(e => ({
+      if (!previewRes.ok) {
+        const err = await previewRes.json().catch(() => ({ error: 'Extraction failed' })) as { error?: string }
+        throw new Error(err.error ?? 'Extraction failed')
+      }
+
+      const previewData = await previewRes.json() as {
+        entities: ExtractedEntity[]
+        relationships: ExtractedRelationship[]
+      }
+
+      const reviewEntities: ReviewEntity[] = previewData.entities.map(e => ({
         ...e,
         removed: false,
         edited: false,
@@ -424,8 +363,8 @@ export function useExtraction(): UseExtractionReturn {
       update({
         step: 'reviewing',
         entities: reviewEntities,
-        relationships: result.relationships,
-        statusText: `Found ${result.entities.length} entities and ${result.relationships.length} relationships`,
+        relationships: previewData.relationships,
+        statusText: `Found ${previewData.entities.length} entities and ${previewData.relationships.length} relationships`,
       })
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))

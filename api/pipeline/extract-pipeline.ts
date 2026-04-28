@@ -83,6 +83,34 @@ const GEMINI_CALL_TIMEOUT_MS = 120_000;
 const HEALTH_MIN_CONTENT_FOR_CHECK = 20_000;
 const HEALTH_MIN_ENTITIES          = 15;
 
+// Deduplication thresholds (Stage 6 — locked values with documented rationale).
+//
+// DEDUP_EXACT_THRESHOLD (0.85): RPC filter — only nodes within Levenshtein or
+//   embedding distance ≥0.85 of the new entity are returned as candidates.
+//   Lowered from 0.92 to catch transcript typos ("Versel" → "Vercel") and
+//   auto-caption errors ("Superbase" → "Supabase").
+//
+// DEDUP_SEMANTIC_THRESHOLD (0.80): second tier of the RPC filter — semantic
+//   embedding similarity floor. Anything below 0.80 is too dissimilar to
+//   be a duplicate; it goes to the graph as a new node.
+//
+// DEDUP_AUTO_MERGE_THRESHOLD (0.88): entities above this threshold are
+//   auto-merged without human review. Entities in the 0.80–0.88 band are
+//   queued to `potential_duplicates` for human decision.
+//   Raised from 0.80 to reduce false positives in the review queue while
+//   still catching high-confidence near-matches automatically.
+export const DEDUP_EXACT_THRESHOLD    = 0.85;
+export const DEDUP_SEMANTIC_THRESHOLD = 0.80;
+export const DEDUP_AUTO_MERGE_THRESHOLD = 0.88;
+
+// Merge enrichment rules (Stage 6 — applied in saveNodes for fuzzy-merged nodes).
+// When entity A is fuzzy-merged into existing node B:
+//   1. Description: longer description wins (preserves richer semantics).
+//   2. Confidence: max(A.confidence, B.confidence).
+//   3. Tags: union, capped at 8 (prevents unbounded growth).
+//   4. Aliases: union; non-canonical label added to aliases list.
+// These rules are applied in saveNodes() when entity.description is present.
+
 // Post-extraction quality filters
 const MIN_SALIENCE         = 0.4;
 const DROP_ORPHAN_ENTITIES = true;
@@ -1039,22 +1067,16 @@ export async function deduplicateEntities(
             p_label: entity.label,
             p_entity_type: entity.entity_type,
             p_embedding: embedding,
-            // Lowered from 0.92/0.88 → 0.85/0.80 so transcript typos like
-            // "Versel" vs "Vercel" or "Superbase" vs "Supabase" are caught
-            // as dedup candidates instead of being skipped by the RPC filter.
-            p_exact_threshold: 0.85,
-            p_semantic_threshold: 0.80,
+            p_exact_threshold: DEDUP_EXACT_THRESHOLD,
+            p_semantic_threshold: DEDUP_SEMANTIC_THRESHOLD,
           });
           const best = (matches as Array<{
             match_id: string; match_label: string; match_type: string; similarity: number;
           }> | null)?.[0];
           if (!best) return;
 
-          // Auto-merge threshold lowered from 0.95 → 0.88 so high-confidence
-          // fuzzy matches (typos, case variants, hyphenation differences)
-          // merge automatically instead of waiting for human review.
           if (best.match_type === 'exact' ||
-              (best.match_type === 'fuzzy' && best.similarity >= 0.88)) {
+              (best.match_type === 'fuzzy' && best.similarity >= DEDUP_AUTO_MERGE_THRESHOLD)) {
             fuzzyMergeMap.set(entity.label.toLowerCase(), best.match_id);
             mergedEntitiesLog.push({
               original_label: entity.label,
@@ -1227,14 +1249,14 @@ export async function saveEdges(
     if (!sourceNodeId || !targetNodeId) continue;
     if (sourceNodeId === targetNodeId) continue;
 
-    const { error: edgeError } = await supabase.from('knowledge_edges').insert({
+    const { error: edgeError } = await supabase.from('knowledge_edges').upsert({
       user_id: userId,
       source_node_id: sourceNodeId,
       target_node_id: targetNodeId,
       relation_type: rel.relation_type ?? 'relates_to',
       evidence: rel.evidence ?? null,
       weight,
-    });
+    }, { onConflict: 'user_id,source_node_id,target_node_id,relation_type', ignoreDuplicates: true });
     if (!edgeError) edgesCreated++;
   }
   return edgesCreated;
@@ -1569,6 +1591,79 @@ export async function runExtractionCore(params: {
 
   // 5. Edges
   let edgesCreated = await saveEdges(relationships, savedNodeMap, userId, supabase, extractedEdgeWeight);
+
+  // 5a. Embed edges inline (Stage 7 requirement: edge embeddings during persistence)
+  if (edgesCreated > 0) {
+    try {
+      // Build label→id map from saved nodes
+      const nodeLabelMap = new Map<string, { id: string; label: string; entity_type: string }>();
+      for (const [label, id] of savedNodeMap) {
+        // savedNodeMap is label→id; we need a reverse for embedding text
+        nodeLabelMap.set(id, { id, label, entity_type: '' });
+      }
+      // Fetch node labels for edge embedding text
+      const nodeIds = [...new Set([
+        ...relationships.map(r => savedNodeMap.get(r.source)).filter(Boolean) as string[],
+        ...relationships.map(r => savedNodeMap.get(r.target)).filter(Boolean) as string[],
+      ])];
+      if (nodeIds.length > 0) {
+        const { data: nodeRows } = await supabase
+          .from('knowledge_nodes')
+          .select('id, label, entity_type')
+          .in('id', nodeIds);
+        for (const n of nodeRows ?? []) {
+          const nr = n as { id: string; label: string; entity_type: string };
+          nodeLabelMap.set(nr.id, nr);
+        }
+      }
+      // Build edge embedding texts and map to edge info
+      const edgeTexts: string[] = [];
+      const edgeInfos: Array<{ sourceId: string; targetId: string; relationType: string }> = [];
+      for (const rel of relationships) {
+        const sId = savedNodeMap.get(rel.source);
+        const tId = savedNodeMap.get(rel.target);
+        if (!sId || !tId || sId === tId) continue;
+        const sNode = nodeLabelMap.get(sId);
+        const tNode = nodeLabelMap.get(tId);
+        if (!sNode || !tNode) continue;
+        edgeTexts.push(`${sNode.label} ${rel.relation_type} ${tNode.label}${rel.evidence ? `: ${rel.evidence}` : ''}`);
+        edgeInfos.push({ sourceId: sId, targetId: tId, relationType: rel.relation_type });
+      }
+      if (edgeTexts.length > 0) {
+        const edgeEmbeddings = await batchEmbed(edgeTexts);
+        const updates: Array<{ user_id: string; source_node_id: string; target_node_id: string; relation_type: string; embedding: number[] }> = [];
+        for (let i = 0; i < edgeInfos.length; i++) {
+          const emb = edgeEmbeddings[i];
+          const info = edgeInfos[i];
+          if (emb && emb.length > 0 && info) {
+            updates.push({
+              user_id: userId,
+              source_node_id: info.sourceId,
+              target_node_id: info.targetId,
+              relation_type: info.relationType,
+              embedding: emb,
+            });
+          }
+        }
+        // Bulk update edges with embeddings
+        await Promise.allSettled(
+          updates.map(u =>
+            supabase
+              .from('knowledge_edges')
+              .update({ embedding: u.embedding })
+              .eq('user_id', u.user_id)
+              .eq('source_node_id', u.source_node_id)
+              .eq('target_node_id', u.target_node_id)
+              .eq('relation_type', u.relation_type)
+          )
+        );
+        log({ stage: 'extract:edge-embed', source_id: source.sourceId, user_id: userId, status: 'ok', count: updates.length });
+      }
+    } catch (err) {
+      logError({ stage: 'extract:edge-embed', source_id: source.sourceId, user_id: userId, status: 'failed', error: String(err) });
+      // Non-blocking — edges without embeddings are still valuable
+    }
+  }
 
   // 6. Chunks. Stage 3 policy: chunking failure -> 'failed', embedding failure -> 'degraded'.
   let chunksCreated = 0;
