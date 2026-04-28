@@ -1,9 +1,7 @@
 import { supabase, semanticSearchNodes } from './supabase'
-import { fetchWithRetry, GEMINI_CHAT_MODEL } from './gemini'
+import { callApi } from './apiClient'
 import type { DiscoveredEdge } from '../types/extraction'
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 const MAX_GEMINI_CALLS = 5
 const CANDIDATES_PER_NODE = 30
 const BATCH_SIZE = 25
@@ -221,8 +219,6 @@ async function inferRelationships(
   newNodes: NodeWithEmbedding[],
   candidates: CandidatePair[]
 ): Promise<DiscoveredEdge[]> {
-  if (!GEMINI_API_KEY) return []
-
   // Deduplicate by pair, keeping highest similarity score
   const pairMap = new Map<string, CandidatePair>()
   for (const c of candidates) {
@@ -269,66 +265,23 @@ async function inferBatch(
   // Gives Gemini topology context — it can see the cluster an existing entity belongs to.
   const edgeContext = await fetchEdgeContext([...existingEntitiesSet.keys()])
 
-  const newList = [...newEntitiesSet.values()].map(
-    n => `- [${n.entity_type}] ${n.label}: ${n.description || 'No description'}`
-  )
+  const newEntities = [...newEntitiesSet.values()].map(n => ({
+    entity_type: n.entity_type,
+    label: n.label,
+    description: n.description,
+  }))
 
-  const existingList = [...existingEntitiesSet.values()].map(n => {
-    const connections = edgeContext.get(n.id)?.slice(0, 3) ?? []
-    const ctx = connections.length > 0 ? `\n    Connected to: ${connections.join('; ')}` : ''
-    return `- [${n.entity_type}] ${n.label}: ${n.description || 'No description'}${ctx}`
+  const existingEntities = [...existingEntitiesSet.values()].map(n => ({
+    entity_type: n.entity_type,
+    label: n.label,
+    description: n.description,
+    connections: edgeContext.get(n.id)?.slice(0, 3) ?? [],
+  }))
+
+  const { text: rawText } = await callApi<{ text: string }>('/api/gemini/cross-connect', {
+    newEntities,
+    existingEntities,
   })
-
-  const prompt = `You are building a knowledge graph. Identify meaningful cross-source relationships between new and existing entities.
-
-New entities (just ingested from a new source):
-${newList.join('\n')}
-
-Existing entities (already in the user's knowledge graph, with their current connections):
-${existingList.join('\n')}
-
-Rules:
-- Determine the natural direction of each relationship. Default to the new entity as the subject (source), but REVERSE the direction when the relationship naturally flows from the existing entity to the new one (e.g., "Existing Entity leads_to New Entity" is valid if that is the true direction).
-- Use specific directional types: leads_to, enables, supports, blocks, part_of, contradicts.
-- Use relates_to ONLY when the relationship is genuinely bidirectional and no more specific type fits.
-- Do NOT connect entities simply because they share a label or topic — the relationship must add knowledge.
-- Use the "Connected to" context on existing entities to identify cluster membership and avoid redundant connections.
-- Skip connections between entities that appear to be the same concept described differently.
-
-Return JSON:
-{
-  "connections": [
-    {
-      "source_entity": "exact label of the relationship subject — can be from EITHER the new or existing list",
-      "target_entity": "exact label of the relationship object — can be from EITHER the new or existing list",
-      "relation_type": "one of: leads_to, supports, enables, blocks, contradicts, part_of, relates_to, mentions, associated_with",
-      "evidence": "one sentence explaining why this direction is correct and what knowledge the connection adds"
-    }
-  ]
-}
-
-Return an empty connections array if no genuine cross-source connections exist.`
-
-  const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: 'You are a knowledge graph relationship expert. Find non-obvious, cross-source connections between entities from different content sources. Prioritise directional, specific relationship types over generic ones.' }],
-        },
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      }),
-    }
-  )
-
-  const data = await response.json()
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text
   if (!rawText) return []
 
   let parsed: { connections?: Array<{ source_entity: string; target_entity: string; relation_type: string; evidence: string }> }
