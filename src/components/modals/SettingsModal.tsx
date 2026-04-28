@@ -557,11 +557,9 @@ function IntegrationsTab() {
       })
   }, [])
 
-  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined
-  const geminiConnected = Boolean(geminiKey)
-  const geminiDisplay = geminiKey
-    ? `${geminiKey.slice(0, 4)}...${geminiKey.slice(-4)}`
-    : 'Not configured'
+  // Gemini API key is server-side only (Stage S). The browser cannot read it.
+  const geminiConnected = true
+  const geminiDisplay = 'Server-managed'
 
   const integrations = [
     {
