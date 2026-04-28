@@ -15,6 +15,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+const INGEST_SECRET = process.env.INGEST_SECRET;
 
 if (!GEMINI_API_KEY) throw new Error('[retry-source] Missing GEMINI_API_KEY');
 
@@ -23,16 +24,19 @@ const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
 
-async function getUserId(req: VercelRequest): Promise<string | null> {
+// Returns userId from JWT auth, or null if ingest secret auth is used (userId resolved later from source row)
+async function resolveAuth(req: VercelRequest): Promise<{ userId: string | null; isIngestSecret: boolean }> {
+  const secret = req.headers['x-ingest-secret'] as string | undefined;
+  if (INGEST_SECRET && secret === INGEST_SECRET) return { userId: null, isIngestSecret: true };
   const auth = req.headers.authorization;
-  if (!auth?.startsWith('Bearer ')) return null;
+  if (!auth?.startsWith('Bearer ')) return { userId: null, isIngestSecret: false };
   const token = auth.slice(7);
   try {
     const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     const { data: { user } } = await anon.auth.getUser(token);
-    return user?.id ?? null;
+    return { userId: user?.id ?? null, isIngestSecret: false };
   } catch {
-    return null;
+    return { userId: null, isIngestSecret: false };
   }
 }
 
@@ -154,8 +158,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
 
-  const userId = await getUserId(req);
-  if (!userId) return res.status(401).json({ error: 'unauthenticated' });
+  const { userId: jwtUserId, isIngestSecret } = await resolveAuth(req);
+  if (!jwtUserId && !isIngestSecret) return res.status(401).json({ error: 'unauthenticated' });
 
   const { sourceId } = req.body ?? {};
   if (!sourceId || typeof sourceId !== 'string') {
@@ -163,14 +167,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const supabase = getSupabase();
-  const { data: source, error } = await supabase
+  const query = supabase
     .from('knowledge_sources')
     .select('id, user_id, title, content, source_type, source_url, metadata')
-    .eq('id', sourceId)
-    .eq('user_id', userId)
-    .maybeSingle();
+    .eq('id', sourceId);
 
-  if (error || !source) {
+  // JWT auth: enforce ownership. Ingest secret: trust the source row's user_id.
+  if (jwtUserId) query.eq('user_id', jwtUserId);
+
+  const { data: source, error } = await query.maybeSingle();
+  const userId = jwtUserId ?? (source?.user_id as string | null);
+
+  if (error || !source || !userId) {
     return res.status(404).json({ error: 'not_found' });
   }
 
