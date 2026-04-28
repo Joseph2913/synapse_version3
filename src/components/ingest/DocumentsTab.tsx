@@ -63,7 +63,7 @@ export function DocumentsTab() {
 
       await start(file.extractedText ?? '', config, {
         title: file.name,
-        sourceType: 'Document',
+        sourceType: 'file',
       })
 
       // Wait for review step — for documents, auto-approve to keep sequential flow

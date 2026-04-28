@@ -11,6 +11,29 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 // ─── HTML to text conversion ─────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function extractTitle(html: string): string | null {
   const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
   return match?.[1]?.trim() ?? null;

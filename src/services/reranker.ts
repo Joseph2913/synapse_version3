@@ -6,7 +6,7 @@
  * filtering out false positives from vector similarity search.
  */
 
-import { fetchWithRetry } from './gemini'
+import { fetchWithRetry, GEMINI_CHAT_MODEL } from './gemini'
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -135,7 +135,7 @@ ${candidateList}`
 
   try {
     const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

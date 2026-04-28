@@ -32,7 +32,7 @@ The primary entity table. Each row is a single extracted entity (person, concept
 | `tags` | TEXT[] | YES | — | AI-generated tags |
 | `user_tags` | TEXT[] | YES | — | User-defined project tags |
 | `quote` | TEXT | YES | — | Direct quote from source supporting this entity |
-| `embedding` | VECTOR(768) | YES | — | Gemini text-embedding-004 vector for semantic search |
+| `embedding` | VECTOR(3072) | YES | — | Gemini text-embedding-004 vector for semantic search |
 | `created_at` | TIMESTAMPTZ | YES | `NOW()` | Creation timestamp |
 
 **Key indexes:**
@@ -87,7 +87,7 @@ Content chunked for RAG retrieval. Each source is split into ~500-token passages
 | `source_id` | UUID | NO | — | FK to `knowledge_sources(id)`, ON DELETE CASCADE |
 | `chunk_index` | INTEGER | NO | — | Position within the source (0-based) |
 | `content` | TEXT | NO | — | The chunk text (~500 tokens) |
-| `embedding` | VECTOR(768) | YES | — | Gemini embedding for semantic search |
+| `embedding` | VECTOR(3072) | YES | — | Gemini embedding for semantic search |
 | `created_at` | TIMESTAMPTZ | YES | `NOW()` | Creation timestamp |
 
 **Key indexes:**

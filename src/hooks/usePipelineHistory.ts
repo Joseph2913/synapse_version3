@@ -43,8 +43,8 @@ function mapSessionToItem(s: PipelineSession): PipelineHistoryItem {
   return {
     id: s.id,
     title: s.source_name ?? 'Untitled',
-    sourceType: (s.source_type ?? 'Document') as PipelineHistoryItem['sourceType'],
-    provider: provider ?? (s.source_type === 'YouTube' ? 'youtube' : null),
+    sourceType: (s.source_type ?? 'file') as PipelineHistoryItem['sourceType'],
+    provider: provider ?? (s.source_type === 'youtube' ? 'youtube' : null),
     mode: (s.extraction_mode ?? 'comprehensive') as PipelineHistoryItem['mode'],
     emphasis: (s.anchor_emphasis ?? 'standard') as PipelineHistoryItem['emphasis'],
     status,
@@ -71,10 +71,10 @@ function mapSessionToItem(s: PipelineSession): PipelineHistoryItem {
 
 interface FilterCounts {
   all: number
-  YouTube: number
-  Meeting: number
-  Document: number
-  Note: number
+  youtube: number
+  meeting: number
+  file: number
+  paste: number
   queued: number
   inProgress: number
   completed: number
@@ -216,8 +216,8 @@ export function usePipelineHistory(
   const allItems = useMemo(() => {
     const mappedQueue = queueItems.map(mapSessionToItem)
     mappedQueue.sort((a, b) => {
-      if (a.sourceType === 'Meeting' && b.sourceType !== 'Meeting') return -1
-      if (a.sourceType !== 'Meeting' && b.sourceType === 'Meeting') return 1
+      if (a.sourceType === 'meeting' && b.sourceType !== 'meeting') return -1
+      if (a.sourceType !== 'meeting' && b.sourceType === 'meeting') return 1
       return 0
     })
     return [...mappedQueue, ...sessions.map(mapSessionToItem)]
@@ -225,12 +225,12 @@ export function usePipelineHistory(
 
   // Compute counts
   const counts = useMemo<FilterCounts>(() => {
-    const c: FilterCounts = { all: allItems.length, YouTube: 0, Meeting: 0, Document: 0, Note: 0, queued: 0, inProgress: 0, completed: 0, failed: 0 }
+    const c: FilterCounts = { all: allItems.length, youtube: 0, meeting: 0, file: 0, paste: 0, queued: 0, inProgress: 0, completed: 0, failed: 0 }
     for (const item of allItems) {
-      if (item.sourceType === 'YouTube') c.YouTube += 1
-      else if (item.sourceType === 'Meeting') c.Meeting += 1
-      else if (item.sourceType === 'Document') c.Document += 1
-      else if (item.sourceType === 'Note') c.Note += 1
+      if (item.sourceType === 'youtube') c.youtube += 1
+      else if (item.sourceType === 'meeting') c.meeting += 1
+      else if (item.sourceType === 'file') c.file += 1
+      else if (item.sourceType === 'paste') c.paste += 1
       if (item.status === 'pending') c.queued += 1
       else if (item.status === 'processing' || item.status === 'extracting') c.inProgress += 1
       else if (item.status === 'completed') c.completed += 1

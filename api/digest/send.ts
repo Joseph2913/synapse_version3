@@ -5,7 +5,43 @@ export const maxDuration = 30
 
 const SUPABASE_URL              = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const SUPABASE_ANON_KEY         = process.env.SUPABASE_ANON_KEY!
 const RESEND_API_KEY            = process.env.RESEND_API_KEY!
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY')
+}
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+function getServiceSupabase() {
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+}
+
+function getAnonSupabase() {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+}
 
 // ─── AUTH: verify Supabase JWT ──────────────────────────────────────────────
 
@@ -13,8 +49,7 @@ async function verifyUser(req: VercelRequest): Promise<string | null> {
   const auth = req.headers['authorization']
   if (!auth?.startsWith('Bearer ')) return null
   const token = auth.slice(7)
-  const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-  const { data } = await sb.auth.getUser(token)
+  const { data } = await getAnonSupabase().auth.getUser(token)
   return data.user?.id ?? null
 }
 

@@ -31,16 +31,16 @@ function getLinkLabel(
   try {
     const u = new URL(url)
     const hostname = u.hostname.replace(/^www\./, '')
-    if (sourceType === 'YouTube') return { label: 'Open on YouTube', hostname }
-    if (sourceType === 'GitHub') return { label: 'Open on GitHub', hostname }
-    if (sourceType === 'Meeting') {
+    if (sourceType === 'youtube') return { label: 'Open on YouTube', hostname }
+    if (sourceType === 'github') return { label: 'Open on GitHub', hostname }
+    if (sourceType === 'meeting') {
       if (provider) {
         const name = provider.charAt(0).toUpperCase() + provider.slice(1)
         return { label: `Open in ${name}`, hostname }
       }
       return { label: 'Open meeting', hostname }
     }
-    if (sourceType === 'Research') return { label: 'Open source', hostname }
+    if (sourceType === 'research') return { label: 'Open source', hostname }
     return { label: 'Open source', hostname }
   } catch {
     return null
@@ -95,7 +95,7 @@ export function SourceDetailPanel({
   }, [user, source.id])
 
   const linkLabel = link.sourceUrl ? getLinkLabel(source.sourceType, link.sourceUrl, link.provider) : null
-  const youtubeVideoId = source.sourceType === 'YouTube' && link.sourceUrl
+  const youtubeVideoId = source.sourceType === 'youtube' && link.sourceUrl
     ? extractYouTubeVideoId(link.sourceUrl)
     : null
   const thumbnailUrl = youtubeVideoId

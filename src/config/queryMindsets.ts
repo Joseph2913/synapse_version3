@@ -1,3 +1,5 @@
+import { GEMINI_CHAT_MODEL } from '../services/gemini'
+
 export interface QueryMindset {
   id: string
   label: string
@@ -103,7 +105,7 @@ export const MODEL_TIERS: ModelTier[] = [
     description: 'Quick responses, shorter context window',
     icon: 'Rabbit',
     generationConfig: {
-      model: 'gemini-2.5-flash',
+      model: GEMINI_CHAT_MODEL,
       maxOutputTokens: 8192,
       temperature: 0.2,
     },
@@ -114,7 +116,7 @@ export const MODEL_TIERS: ModelTier[] = [
     description: 'Deeper analysis, larger context window',
     icon: 'Brain',
     generationConfig: {
-      model: 'gemini-2.5-flash',
+      model: GEMINI_CHAT_MODEL,
       maxOutputTokens: 32768,
       temperature: 0.3,
     },

@@ -121,7 +121,7 @@ export async function fetchAutomationSources(): Promise<AutomationSource[]> {
     supabase
       .from('knowledge_sources')
       .select('id, title, created_at, metadata')
-      .eq('source_type', 'Meeting')
+      .eq('source_type', 'meeting')
       .limit(100),
   ])
 
@@ -451,7 +451,7 @@ export async function fetchIngestedContent(
       .from('knowledge_sources')
       .select('id, title, created_at')
       .eq('user_id', user.id)
-      .eq('source_type', 'Meeting')
+      .eq('source_type', 'meeting')
       .order('created_at', { ascending: false })
       .limit(50)
     return ((data ?? []) as Record<string, unknown>[]).map(s => ({

@@ -30,6 +30,29 @@ interface MeetingSource {
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
   if (!CRON_SECRET) return true;
@@ -103,7 +126,7 @@ async function processMeeting(
       promptConfig: { mode: extractionMode, anchorEmphasis, anchors, userProfile },
       source: {
         sourceId: meeting.id,
-        sourceType: 'Meeting',
+        sourceType: 'meeting',
         sourceUrl: null,
         sourceLabel: meeting.title ?? 'Meeting',
       },
@@ -210,7 +233,7 @@ async function processMeeting(
     await supabase.from('extraction_sessions').insert({
       user_id: meeting.user_id,
       source_name: meeting.title ?? 'Meeting',
-      source_type: 'Meeting',
+      source_type: 'meeting',
       source_content_preview: content.slice(0, 300),
       extraction_mode: extractionMode,
       anchor_emphasis: anchorEmphasis,
@@ -290,7 +313,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data: stuckCandidates } = await supabase
         .from('knowledge_sources')
         .select('id, metadata')
-        .eq('source_type', 'Meeting')
+        .eq('source_type', 'meeting')
         .contains('metadata', { extraction_status: 'processing' })
         .limit(20);
 
@@ -323,7 +346,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let query = supabase
       .from('knowledge_sources')
       .select('id, user_id, title, content, metadata')
-      .eq('source_type', 'Meeting')
+      .eq('source_type', 'meeting')
       .contains('metadata', { extraction_status: 'pending' })
       .order('created_at', { ascending: true })
       .limit(MAX_ITEMS_PER_BATCH);

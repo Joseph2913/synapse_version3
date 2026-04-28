@@ -101,7 +101,7 @@ synapse-v2/
 - **Use `.maybeSingle()`** instead of `.single()` for queries that might return zero rows
 - **Defensive INSERTs** — only include nullable fields when they have truthy values. Omit empty arrays for UUID[] columns
 - **Auth context** — wrap app in `AuthProvider` that exposes `user`, `session`, `signIn`, `signOut`
-- **Environment variables** use `VITE_` prefix for client-side access
+- **Environment variables** — see the **Secret Hygiene** section below for the rules on `VITE_` prefix usage. Not every credential can be safely browser-exposed.
 - **CRITICAL — Migration safety:** After ANY database table or column rename, `grep -r "old_name" --include="*.ts"` the entire codebase before deploying. Supabase PostgREST silently returns empty results (no error) when querying a non-existent table with RLS enabled — inserts vanish without a trace. The highest-risk files are `api/` serverless functions (independently bundled, no shared imports, stale references won't cause build errors) and `src/services/supabase.ts` (centralises most table references). Always verify the affected pipeline produces expected output after deploy — absence of errors does not mean success.
 
 ### Server-Side Computation (RPC Functions)
@@ -124,6 +124,29 @@ synapse-v2/
 - **Check Vercel runtime logs** (not frontend errors) to diagnose function crashes
 - **npm packages are fine** — only local file imports are problematic
 - **CRITICAL — Bulk writes, never loops:** When a serverless function needs to write data back to the database (e.g. saving computed positions for 5,000 nodes), NEVER loop through rows with individual UPDATE/INSERT calls. Use a Supabase RPC that accepts a JSON array and does a single bulk operation (e.g. `UPDATE ... FROM json_array_elements()`). Individual calls scale linearly and will timeout on Vercel's 60-second limit at ~500+ rows. A single bulk RPC handles 5,000+ rows in under a second. This applies to any serverless function that writes results back to the database — always ask: "what happens when this runs on 5,000 items?"
+
+### Secret Hygiene (CRITICAL — read before adding any env var)
+
+This section exists because of a 2026-04-28 incident where `VITE_GEMINI_API_KEY` was scraped from the production browser bundle, used to spin up unauthorised resources, and resulted in a £100 charge plus a GCP project suspension. **Do not repeat this pattern.** See Stage S in `docs/PIPELINE-IMPLEMENTATION-LOG.md` for the full root-cause analysis.
+
+- **`VITE_` is a publishing decision, not a naming convention.** Any env var prefixed with `VITE_` is inlined into the production JavaScript bundle in plain text. Every visitor to the deployed site can read it via DevTools or by fetching the bundle directly. Bots scrape public sites for these values 24/7. Treat `VITE_` as "publish to the world."
+- **Allowed in `VITE_*` (browser-safe by design):**
+  - `VITE_SUPABASE_URL` — public project URL
+  - `VITE_SUPABASE_ANON_KEY` — Supabase publishable/anon key. Safe **only because** RLS gates every table. Do NOT add `VITE_` keys to a project with RLS gaps.
+  - Non-credential config (e.g. `VITE_APP_VERSION`, public sidecar URLs)
+- **NEVER allowed in `VITE_*` (third-party credentials and capability tokens):**
+  - Gemini, OpenAI, Anthropic, or any other model provider key
+  - YouTube Data API key, Apify token, Resend key, or any other vendor key
+  - Supabase **service role** key (bypasses RLS — catastrophic if leaked)
+  - Webhook shared secrets, cron secrets, ingest secrets
+  - Anything labelled `*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_PRIVATE_*` should be assumed unsafe for `VITE_*` until proven otherwise
+- **Server-side credential pattern.** Third-party API calls happen in `api/` serverless functions. Each function reads the un-prefixed name (`GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `RESEND_API_KEY`, `APIFY_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`) via `process.env`. The browser invokes these via `fetch('/api/...')` — the credential never leaves the server.
+- **Defence in depth on every external key.** Even server-side keys should have:
+  - HTTP referrer or IP restrictions in the provider console where supported
+  - A monthly budget alert in the provider's billing console (cap exposure if a leak does occur)
+  - API restrictions limiting the key to a single service (e.g. Gemini key restricted to Generative Language API only, YouTube key restricted to YouTube Data API v3 only)
+- **CRITICAL — When adding a new third-party integration:** read this section first. The default placement is in `api/` with an un-prefixed env var. The default placement is NOT in `src/` with a `VITE_` env var, even if it makes the prototype faster. The cost of the wrong choice is a project suspension and a billing event.
+- **CRITICAL — When you see existing `VITE_*_API_KEY` or similar in the codebase:** flag it. Do not copy the pattern into new code. Migration of legacy `VITE_*` credential reads to server-side endpoints is tracked under Stage S in the implementation log.
 
 ### Gemini AI
 - Model: `gemini-2.0-flash` for extraction and Graph RAG
@@ -286,7 +309,8 @@ Neutral: part_of, relates_to, mentions, connected_to, owns, associated_with
 
 - Push to `main` triggers automatic Vercel deployment
 - Environment variables are set in Vercel dashboard (never committed to repo)
-- Required env vars: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_GEMINI_API_KEY`
+- **Browser-safe env vars (`VITE_*`):** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`. These are the ONLY credentials safe to ship in the browser bundle. `VITE_GEMINI_API_KEY` is **deprecated and must not exist** — see the Secret Hygiene section.
+- **Server-only env vars (no prefix, read by `api/` functions):** `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `RESEND_API_KEY`, `APIFY_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`, `CIRCLEBACK_WEBHOOK_SECRET` (optional).
 - Serverless functions under `api/` deploy as independent Vercel functions
 - Build command: `npm run build` (Vite)
 - Output directory: `dist`

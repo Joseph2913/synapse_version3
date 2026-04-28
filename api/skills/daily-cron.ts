@@ -19,10 +19,39 @@ export const maxDuration = 60;
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 const CRON_SECRET = process.env.CRON_SECRET;
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
 
 function getSupabase(): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -83,7 +112,7 @@ async function callGemini<T>(
   systemPrompt: string,
   userContent: string,
   temperature = 0.1,
-  model = 'gemini-2.5-flash'
+  model = GEMINI_MODEL
 ): Promise<T> {
   const response = await fetchWithRetry(
     `${GEMINI_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}`,
@@ -111,12 +140,12 @@ async function callGemini<T>(
 async function generateEmbedding(text: string): Promise<number[]> {
   try {
     const response = await fetch(
-      `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'models/gemini-embedding-001',
+          model: `models/${GEMINI_EMBEDDING_MODEL}`,
           content: { parts: [{ text }] },
         }),
         signal: AbortSignal.timeout(15000),
@@ -596,7 +625,7 @@ async function generateSkillContent(
   const userContent = `SOURCE: ${sourceTitle}\nDomain: ${assessment.proposedDomain}\nMethodology: ${assessment.extractableMethodology}\nMethods: ${assessment.transferableMethods.join(', ')}\n\nCONTENT:\n${content.slice(0, MAX_CONTENT_CHARS)}\n\nENTITIES:\n${entitySummary || '(none)'}`;
 
   return callGemini<{ description: string; content: string; tags: string[] }>(
-    systemPrompt, userContent, 0.2, 'gemini-2.5-flash'
+    systemPrompt, userContent, 0.2, GEMINI_MODEL
   );
 }
 

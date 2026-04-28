@@ -19,7 +19,12 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -78,6 +83,33 @@ interface SourceInfo {
 
 // ─── Supabase clients ────────────────────────────────────────────────────────
 
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY')
+}
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function getServiceSupabase(): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 }
@@ -115,12 +147,12 @@ async function verifyApiKey(req: VercelRequest): Promise<{ userId: string } | nu
 
 async function embedText(text: string): Promise<number[]> {
   const response = await fetch(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
+        model: `models/${GEMINI_EMBEDDING_MODEL}`,
         content: { parts: [{ text }] },
       }),
     }
@@ -1967,14 +1999,14 @@ async function handleGetMeetingBrief(
   const source = await findSource(sb, userId, {
     source_id: params.source_id,
     query: params.query,
-    source_type: 'Meeting',
+    source_type: 'meeting',
   })
 
   if (!source) {
     return {
       content: [{
         type: 'text',
-        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "Meeting" to find the correct title.`,
+        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "meeting" to find the correct title.`,
       }],
     }
   }
@@ -2139,14 +2171,14 @@ async function handleGetMeetingNotes(
   const source = await findSource(sb, userId, {
     source_id: params.source_id,
     query: params.query,
-    source_type: 'Meeting',
+    source_type: 'meeting',
   })
 
   if (!source) {
     return {
       content: [{
         type: 'text',
-        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "Meeting" to find the correct title.`,
+        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "meeting" to find the correct title.`,
       }],
     }
   }
@@ -2225,14 +2257,14 @@ async function handleGetMeetingTranscript(
   const source = await findSource(sb, userId, {
     source_id: params.source_id,
     query: params.query,
-    source_type: 'Meeting',
+    source_type: 'meeting',
   })
 
   if (!source) {
     return {
       content: [{
         type: 'text',
-        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "Meeting" to find the correct title.`,
+        text: `No meeting found matching "${params.source_id ?? params.query}". Try \`search_sources\` with source_type "meeting" to find the correct title.`,
       }],
     }
   }
@@ -2618,7 +2650,7 @@ async function geminiJson<T>(
 
   try {
     const response = await fetch(
-      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3060,7 +3092,7 @@ function logMcpQuery(
   resultCount: number,
   topRelevance: number | null
 ): void {
-  const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  const sb = getServiceSupabase()
   sb.from('mcp_query_log')
     .insert({ user_id: userId, tool_name: toolName, query_text: queryText, result_count: resultCount, top_relevance: topRelevance })
     .then(() => {})

@@ -289,7 +289,7 @@ export function PipelineView() {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       }
-      if (item.sourceType === 'Meeting') {
+      if (item.sourceType === 'meeting') {
         await fetch('/api/meetings/process', { method: 'POST', headers })
       } else {
         // YouTube: call decoupled endpoints sequentially
@@ -335,10 +335,10 @@ export function PipelineView() {
 
   const sourceOptions: DropdownOption<SourceTypeFilter>[] = [
     { value: 'all', label: 'All Sources' },
-    { value: 'YouTube', label: 'YouTube', count: counts.YouTube },
-    { value: 'Meeting', label: 'Meetings', count: counts.Meeting },
-    { value: 'Document', label: 'Documents', count: counts.Document },
-    { value: 'Note', label: 'Notes', count: counts.Note },
+    { value: 'youtube', label: 'YouTube', count: counts.youtube },
+    { value: 'meeting', label: 'Meetings', count: counts.meeting },
+    { value: 'file', label: 'Documents', count: counts.file },
+    { value: 'paste', label: 'Notes', count: counts.paste },
   ]
 
   const statusOptions: DropdownOption<StatusFilter>[] = [

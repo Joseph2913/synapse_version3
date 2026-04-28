@@ -9,7 +9,7 @@
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 export const maxDuration = 60
 
@@ -19,24 +19,64 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY')
+}
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+function getServiceSupabase(): SupabaseClient {
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+}
+
+function getAnonSupabase(): SupabaseClient {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+}
+
 async function getUser(req: VercelRequest): Promise<string | null> {
   const auth = req.headers.authorization
   if (!auth?.startsWith('Bearer ')) return null
   const token = auth.slice(7)
-  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   try {
-    const { data: { user } } = await sb.auth.getUser(token)
+    const { data: { user } } = await getAnonSupabase().auth.getUser(token)
     return user?.id ?? null
   } catch { return null }
 }
 
 async function embedText(text: string): Promise<number[]> {
   const resp = await fetch(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'models/gemini-embedding-001', content: { parts: [{ text }] } }),
+      body: JSON.stringify({ model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } }),
     }
   )
   const data = await resp.json()
@@ -54,7 +94,7 @@ async function geminiJson<T>(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const resp = await fetch(
-      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -99,7 +139,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!query?.trim()) return res.status(400).json({ error: 'Missing query' })
   if (!agent_ids?.length) return res.status(400).json({ error: 'Missing agent_ids' })
 
-  const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  const sb = getServiceSupabase()
 
   try {
     // Fetch selected agents

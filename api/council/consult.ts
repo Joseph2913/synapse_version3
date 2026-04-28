@@ -20,6 +20,12 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface CouncilAgent {
@@ -71,18 +77,49 @@ interface SynthesisResult {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY')
+}
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function getServiceSupabase(): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 }
 
+function getAnonSupabase(): SupabaseClient {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+}
+
 async function embedText(text: string): Promise<number[]> {
   const response = await fetch(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
+        model: `models/${GEMINI_EMBEDDING_MODEL}`,
         content: { parts: [{ text }] },
       }),
     }
@@ -103,7 +140,7 @@ async function geminiJson<T>(
 
   try {
     const response = await fetch(
-      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -144,7 +181,7 @@ async function authenticateUser(req: VercelRequest, sb: SupabaseClient): Promise
     return user?.id ?? null
   } catch {
     // Try as access token
-    const anonSb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    const anonSb = getAnonSupabase()
     try {
       const { data: { user } } = await anonSb.auth.getUser(token)
       return user?.id ?? null
@@ -171,7 +208,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let userId: string | null = null
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7)
-    const anonSb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    const anonSb = getAnonSupabase()
     try {
       const { data: { user } } = await anonSb.auth.getUser(token)
       userId = user?.id ?? null

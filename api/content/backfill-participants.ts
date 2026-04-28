@@ -9,6 +9,29 @@ const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ─── INLINE PARSER (cannot import from src/ in serverless functions) ─────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function toTitleCase(name: string): string {
   return name
     .trim()
@@ -65,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: meetings, error: fetchError } = await supabase
       .from('knowledge_sources')
       .select('id, content, metadata')
-      .eq('source_type', 'Meeting')
+      .eq('source_type', 'meeting')
       .is('participants', null);
 
     if (fetchError) {

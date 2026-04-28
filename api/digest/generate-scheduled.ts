@@ -7,12 +7,41 @@ export const maxDuration = 300
 const SUPABASE_URL              = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const GEMINI_API_KEY            = process.env.GEMINI_API_KEY!
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 const RESEND_API_KEY            = process.env.RESEND_API_KEY!
 const CRON_SECRET               = process.env.CRON_SECRET
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true
   if (!CRON_SECRET) return true
@@ -23,12 +52,12 @@ function verifyCronAuth(req: VercelRequest): boolean {
 // ─── GEMINI HELPERS (self-contained — serverless constraint) ──────────────────
 
 async function embedText(text: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'models/gemini-embedding-001',
+      model: `models/${GEMINI_EMBEDDING_MODEL}`,
       content: { parts: [{ text }] },
     }),
   })
@@ -38,7 +67,7 @@ async function embedText(text: string): Promise<number[]> {
 }
 
 async function generateWithGemini(systemPrompt: string, userPrompt: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

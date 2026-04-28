@@ -17,13 +17,108 @@ export const maxDuration = 300;
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 const INGEST_SECRET = process.env.INGEST_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const MAX_CONTENT_CHARS = 100_000;
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+// ─── Stage 2 — persistSource (GitHub session variant, inlined) ────────────────
+// MCP / Claude Code session captures are URL-less. Identity is the SHA-256
+// content_hash of the trimmed sliced content; the partial unique index
+// `(user_id, source_type, content_hash) WHERE content_hash IS NOT NULL
+// AND source_url IS NULL` catches concurrent inserts.
+
+async function gh_sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+interface GithubPersistResult {
+  sourceId: string;
+  status: 'inserted' | 'skipped-duplicate';
+}
+
+async function persistGithubSessionSource(
+  supabase: ReturnType<typeof getSupabase>,
+  userId: string,
+  insertRow: Record<string, unknown>,
+  content: string,
+): Promise<GithubPersistResult> {
+  const contentHash = await gh_sha256Hex(content.trim());
+
+  const { data: existing } = await supabase
+    .from('knowledge_sources')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('source_type', 'github')
+    .eq('content_hash', contentHash)
+    .maybeSingle();
+  if (existing) return { sourceId: existing.id as string, status: 'skipped-duplicate' };
+
+  const fullRow = {
+    ...insertRow,
+    user_id: userId,
+    source_type: 'github',
+    source_url: null,
+    content_hash: contentHash,
+    status: 'pending',
+  };
+  const { data: inserted, error } = await supabase
+    .from('knowledge_sources')
+    .insert(fullRow)
+    .select('id')
+    .single();
+  if (error) {
+    const isRace = error.code === '23505' || /duplicate key/i.test(error.message);
+    if (isRace) {
+      const { data: fallback } = await supabase
+        .from('knowledge_sources')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('source_type', 'github')
+        .eq('content_hash', contentHash)
+        .maybeSingle();
+      if (fallback) return { sourceId: fallback.id as string, status: 'skipped-duplicate' };
+    }
+    throw new Error(`Github session insert failed: ${error.message}`);
+  }
+  return { sourceId: inserted.id as string, status: 'inserted' };
+}
 
 function verifyIngestSecret(req: VercelRequest): boolean {
   if (!INGEST_SECRET) return false;
@@ -33,7 +128,7 @@ function verifyIngestSecret(req: VercelRequest): boolean {
 
 async function generateSummary(content: string): Promise<string> {
   const response = await fetchWithRetry(
-    `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -115,7 +210,7 @@ async function runExtractionPipeline(params: {
         // the knowledge_sources row (these are Claude Code sessions routed
         // through a GitHub-tagged endpoint). Mirror that on nodes so
         // source_type is consistent between source row and its nodes.
-        sourceType: 'GitHub',
+        sourceType: 'github',
         sourceUrl: (metadata['source_url'] as string | null) ?? null,
         sourceLabel: title,
       },
@@ -210,23 +305,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       session_date: new Date().toISOString(),
     };
 
-    const { data: sourceData, error: sourceError } = await supabase
-      .from('knowledge_sources')
-      .insert({
-        user_id: userId,
-        title,
-        source_type: 'GitHub',
-        content: content.slice(0, MAX_CONTENT_CHARS),
-        metadata,
-      })
-      .select('id')
-      .single();
-
-    if (sourceError) {
-      throw new Error(`Failed to save source: ${sourceError.message}`);
+    const slicedContent = content.slice(0, MAX_CONTENT_CHARS);
+    let persistResult: GithubPersistResult;
+    try {
+      persistResult = await persistGithubSessionSource(
+        supabase,
+        userId,
+        { title, content: slicedContent, metadata },
+        slicedContent,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to save source: ${msg}`);
     }
-
-    const sourceId = (sourceData as { id: string }).id;
+    const sourceId = persistResult.sourceId;
+    log({
+      stage: 'persist',
+      user_id: userId,
+      source_id: sourceId,
+      source_type: 'github',
+      result: persistResult.status,
+      status: persistResult.status === 'skipped-duplicate' ? 'skipped' : 'ok',
+    });
     console.log(`[ingest/session] Saved source "${title}" (${sourceId}) for user ${userId}, dispatching background pipeline`);
 
     // Fire extraction pipeline in background via waitUntil

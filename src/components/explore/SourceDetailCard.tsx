@@ -48,16 +48,16 @@ function getLinkLabel(
   try {
     const u = new URL(url)
     const hostname = u.hostname.replace(/^www\./, '')
-    if (sourceType === 'YouTube') return { label: 'Open on YouTube', hostname }
-    if (sourceType === 'GitHub') return { label: 'Open on GitHub', hostname }
-    if (sourceType === 'Meeting') {
+    if (sourceType === 'youtube') return { label: 'Open on YouTube', hostname }
+    if (sourceType === 'github') return { label: 'Open on GitHub', hostname }
+    if (sourceType === 'meeting') {
       if (provider) {
         const name = provider.charAt(0).toUpperCase() + provider.slice(1)
         return { label: `Open in ${name}`, hostname }
       }
       return { label: 'Open meeting', hostname }
     }
-    if (sourceType === 'Research') return { label: 'Open source', hostname }
+    if (sourceType === 'research') return { label: 'Open source', hostname }
     return { label: 'Open source', hostname }
   } catch {
     return null
@@ -207,7 +207,7 @@ function CardContent({
   const visibleRelated = showAllRelated ? detail.relatedSources : detail.relatedSources.slice(0, DEFAULT_VISIBLE)
 
   const linkLabel = detail.sourceUrl ? getLinkLabel(detail.sourceType, detail.sourceUrl, detail.provider) : null
-  const youtubeVideoId = detail.sourceType === 'YouTube' && detail.sourceUrl
+  const youtubeVideoId = detail.sourceType === 'youtube' && detail.sourceUrl
     ? extractYouTubeVideoId(detail.sourceUrl)
     : null
   // Start with maxresdefault (HD, 1280x720, 16:9). If the video has no HD thumb,
@@ -293,11 +293,11 @@ function CardContent({
           <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
             <span style={{
               width: 28, height: 28, borderRadius: 7,
-              background: detail.sourceType === 'YouTube' ? 'transparent' : `${cfg.color}14`,
+              background: detail.sourceType === 'youtube' ? 'transparent' : `${cfg.color}14`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 14, flexShrink: 0,
             }}>
-              {detail.sourceType === 'YouTube'
+              {detail.sourceType === 'youtube'
                 ? <img src="/logos/youtube.svg" alt="YouTube" style={{ width: 22, height: 'auto' }}/>
                 : cfg.icon}
             </span>

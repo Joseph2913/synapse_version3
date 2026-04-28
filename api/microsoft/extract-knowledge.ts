@@ -39,6 +39,97 @@ interface QueueItem {
 // for searchability. Kept inline because it's genuinely specific to this
 // integration's content format.
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+// ─── Stage 2 — persistSource (Microsoft variant, inlined) ────────────────────
+// Microsoft sources have no source_url (Outlook items, calendar events, and
+// SharePoint blobs use opaque resource ids). Identity is the SHA-256
+// content_hash of the trimmed slice we actually persist; the partial unique
+// index `(user_id, source_type, content_hash) WHERE content_hash IS NOT NULL
+// AND source_url IS NULL` catches concurrent inserts.
+
+async function ms_sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+interface MicrosoftPersistResult {
+  sourceId: string;
+  status: 'inserted' | 'skipped-duplicate';
+}
+
+async function persistMicrosoftSource(
+  supabase: ReturnType<typeof getSupabase>,
+  userId: string,
+  sourceType: 'meeting' | 'research',
+  insertRow: Record<string, unknown>,
+  content: string,
+): Promise<MicrosoftPersistResult> {
+  const contentHash = await ms_sha256Hex(content.trim());
+
+  const { data: existing } = await supabase
+    .from('knowledge_sources')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('source_type', sourceType)
+    .eq('content_hash', contentHash)
+    .maybeSingle();
+  if (existing) return { sourceId: existing.id as string, status: 'skipped-duplicate' };
+
+  const fullRow = {
+    ...insertRow,
+    user_id: userId,
+    source_type: sourceType,
+    source_url: null,
+    content_hash: contentHash,
+    status: 'pending',
+  };
+  const { data: inserted, error } = await supabase
+    .from('knowledge_sources')
+    .insert(fullRow)
+    .select('id')
+    .single();
+  if (error) {
+    const isRace = error.code === '23505' || /duplicate key/i.test(error.message);
+    if (isRace) {
+      const { data: fallback } = await supabase
+        .from('knowledge_sources')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('source_type', sourceType)
+        .eq('content_hash', contentHash)
+        .maybeSingle();
+      if (fallback) return { sourceId: fallback.id as string, status: 'skipped-duplicate' };
+    }
+    throw new Error(`Microsoft insert failed: ${error.message}`);
+  }
+  return { sourceId: inserted.id as string, status: 'inserted' };
+}
+
 function toTitleCase(name: string): string {
   return name.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
@@ -174,18 +265,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // ── Determine source shape ──
         const sourceType = item.resource_type === 'meeting_transcript' || item.resource_type === 'calendar_event'
-          ? 'Meeting' : 'Research';
+          ? 'meeting' : 'research';
 
-        const participants = sourceType === 'Meeting'
+        const participants = sourceType === 'meeting'
           ? parseMeetingParticipants(item.content, item.attendees)
           : null;
 
-        // ── Save the source row first (shared core needs sourceId) ──
+        // ── Save the source row first (Stage 2 persistSource, inlined) ──
+        const slicedContent = item.content.slice(0, MAX_CONTENT_CHARS);
         const insertRow: Record<string, unknown> = {
-          user_id: item.user_id,
           title: item.title || 'Microsoft 365 Import',
-          content: item.content.slice(0, MAX_CONTENT_CHARS),
-          source_type: sourceType,
+          content: slicedContent,
           metadata: {
             provider: 'microsoft',
             resource_type: item.resource_type,
@@ -197,13 +287,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         };
         if (participants) insertRow.participants = participants;
 
-        const { data: source, error: sourceErr } = await supabase
-          .from('knowledge_sources')
-          .insert(insertRow)
-          .select('id')
-          .single();
-        if (sourceErr || !source) throw new Error(`Failed to save source: ${sourceErr?.message}`);
-        const sourceId = (source as { id: string }).id;
+        const persistResult = await persistMicrosoftSource(
+          supabase,
+          item.user_id,
+          sourceType as 'meeting' | 'research',
+          insertRow,
+          slicedContent,
+        );
+        const sourceId = persistResult.sourceId;
+        log({
+          stage: 'persist',
+          user_id: item.user_id,
+          source_id: sourceId,
+          source_type: sourceType,
+          result: persistResult.status,
+          status: persistResult.status === 'skipped-duplicate' ? 'skipped' : 'ok',
+        });
 
         // ── Run the shared extraction pipeline ──
         const coreResult = await runExtractionCore({
@@ -240,7 +339,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Microsoft-specific: uses user_integrations.integration_slug='microsoft'
         // to find agents belonging to this integration path. Kept here because
         // no other pipeline uses microsoft_integrations as the routing key.
-        if (sourceType === 'Meeting') {
+        if (sourceType === 'meeting') {
           try {
             const agentIds = new Set<string>();
 

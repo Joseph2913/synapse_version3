@@ -9,15 +9,44 @@ export const maxDuration = 120;
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const MAX_CONTENT_CHARS = 30_000;
 const MIN_CONTENT_LENGTH = 500;
 
 // Tiered threshold: low-relevance sources need a higher bar to create a skill
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function getSkillReadinessThreshold(anchorRelevance: number): number {
   return anchorRelevance < 0.5 ? 0.65 : 0.55;
 }
@@ -140,7 +169,7 @@ async function callGeminiJSON<T>(
   systemPrompt: string,
   userContent: string,
   temperature: number = 0.1,
-  model: string = 'gemini-2.5-flash'
+  model: string = GEMINI_MODEL
 ): Promise<T> {
   const response = await fetchWithRetry(
     `${GEMINI_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}`,
@@ -174,12 +203,12 @@ async function callGeminiJSON<T>(
 async function generateEmbedding(text: string): Promise<number[]> {
   try {
     const response = await fetch(
-      `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'models/gemini-embedding-001',
+          model: `models/${GEMINI_EMBEDDING_MODEL}`,
           content: { parts: [{ text }] },
         }),
         signal: AbortSignal.timeout(15000),
@@ -392,7 +421,7 @@ ${content.slice(0, MAX_CONTENT_CHARS)}
 EXTRACTED ENTITIES:
 ${entitySummary || '(no entities)'}`;
 
-  return callGeminiJSON<GenerationResult>(systemPrompt, userContent, 0.2, 'gemini-2.5-flash');
+  return callGeminiJSON<GenerationResult>(systemPrompt, userContent, 0.2, GEMINI_MODEL);
 }
 
 async function generateUpdateContent(
@@ -430,7 +459,7 @@ NEW SOURCE:
 NEW SOURCE CONTENT (may be truncated):
 ${content.slice(0, MAX_CONTENT_CHARS)}`;
 
-  return callGeminiJSON<{ content: string; description: string }>(systemPrompt, userContent, 0.2, 'gemini-2.5-flash');
+  return callGeminiJSON<{ content: string; description: string }>(systemPrompt, userContent, 0.2, GEMINI_MODEL);
 }
 
 // ─── SOURCE MARKING ───────────────────────────────────────────────────────────

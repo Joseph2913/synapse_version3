@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { GEMINI_CHAT_MODEL } from './gemini'
 import type {
   SimulationJob, SimulationSeedGraph, SimulationBuilderState,
   SimulationStatus, SimulationReport, SimulationNode,
@@ -8,6 +9,7 @@ import type {
 } from '../types/simulate'
 
 const SIDECAR_URL = import.meta.env.VITE_SIMULATE_SIDECAR_URL ?? 'http://localhost:8000'
+
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY ?? ''
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
@@ -310,7 +312,7 @@ export async function checkSidecarHealth(): Promise<boolean> {
 // ─── PRD-Simulate-D: PERSONA GENERATION (client-side) ────────────────
 
 async function callGeminiForPersonas(prompt: string, temperature: number): Promise<string> {
-  const url = `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`
+  const url = `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

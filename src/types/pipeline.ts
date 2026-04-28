@@ -3,7 +3,7 @@
 export interface PipelineHistoryItem {
   id: string
   title: string
-  sourceType: 'YouTube' | 'Meeting' | 'Document' | 'Note' | 'Research'
+  sourceType: 'youtube' | 'meeting' | 'file' | 'paste' | 'url' | 'research' | 'github'
   mode: 'comprehensive' | 'strategic' | 'actionable' | 'relational'
   emphasis: 'passive' | 'standard' | 'aggressive'
   status: 'pending' | 'processing' | 'extracting' | 'completed' | 'failed'
@@ -62,6 +62,6 @@ export interface PipelineMetrics {
   activeProcessing: number
 }
 
-export type SourceTypeFilter = 'all' | 'YouTube' | 'Meeting' | 'Document' | 'Note'
+export type SourceTypeFilter = 'all' | 'youtube' | 'meeting' | 'file' | 'paste' | 'url'
 export type StatusFilter = 'all' | 'queued' | 'in_progress' | 'completed' | 'failed'
 export type SortOption = 'recent' | 'slowest' | 'entities' | 'confidence'

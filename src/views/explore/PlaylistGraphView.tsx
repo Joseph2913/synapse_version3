@@ -650,7 +650,7 @@ export function PlaylistGraphView({ showEdges = true, initialSourceId }: Playlis
 
         // 3. Group non-YouTube sources by type into virtual playlists
         const nonYouTubeSources = sourceData.sources.filter(
-          s => s.sourceType !== 'YouTube' && !playlistVideoIds.has(s.id)
+          s => s.sourceType !== 'youtube' && !playlistVideoIds.has(s.id)
         )
 
         const groupedByType = new Map<string, typeof nonYouTubeSources>()

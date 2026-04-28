@@ -35,6 +35,126 @@ export interface CirclebackPayload {
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 
+// ─── Stage 2 — persistSource (meeting variant, inlined) ────────────────────
+//
+// Vercel functions cannot share local imports, so the meeting-specific
+// persistence helper lives here. Identity rule for meetings is the
+// circleback_meeting_id; the partial unique index
+// `(user_id, circleback_meeting_id) WHERE circleback_meeting_id IS NOT NULL`
+// catches concurrent inserts. On re-delivery we compare a content-stable
+// payload signature stored in metadata.payload_signature: if it differs we
+// replace content/metadata/title and reset status to 'pending'; if it matches
+// we skip silently.
+
+type MeetingPersistStatus = 'inserted' | 'replaced' | 'skipped-duplicate';
+
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function meetingPayloadSignature(parts: {
+  transcriptSegmentCount: number;
+  actionItemCount: number;
+  contentLength: number;
+  content: string;
+}): Promise<string> {
+  const seed = `${parts.transcriptSegmentCount}|${parts.actionItemCount}|${parts.contentLength}|${parts.content.slice(0, 4096)}`;
+  return sha256Hex(seed);
+}
+
+interface PersistMeetingResult {
+  sourceId: string;
+  status: MeetingPersistStatus;
+}
+
+async function persistMeetingSource(
+  supabase: ReturnType<typeof getSupabase>,
+  userId: string,
+  captured: CapturedSource,
+  circlebackMeetingId: number | null,
+): Promise<PersistMeetingResult> {
+  const meta = captured.metadata as Record<string, unknown>;
+  const signature = await meetingPayloadSignature({
+    transcriptSegmentCount: Number(meta['transcript_segment_count'] ?? 0),
+    actionItemCount: Number(meta['action_item_count'] ?? 0),
+    contentLength: captured.content.length,
+    content: captured.content,
+  });
+  const enrichedMetadata = { ...meta, payload_signature: signature };
+
+  // ── 1. Lookup by circleback_meeting_id when present (decision A2 path).
+  if (circlebackMeetingId !== null) {
+    const { data: existing } = await supabase
+      .from('knowledge_sources')
+      .select('id, metadata')
+      .eq('user_id', userId)
+      .eq('circleback_meeting_id', circlebackMeetingId)
+      .maybeSingle();
+
+    if (existing) {
+      const storedSig = (existing.metadata as Record<string, unknown> | null)?.['payload_signature'] ?? null;
+      if (storedSig === signature) {
+        return { sourceId: existing.id as string, status: 'skipped-duplicate' };
+      }
+      // Replace: content / metadata / title; reset status so downstream re-runs.
+      const participants = meta['participants'] as string[] | null | undefined;
+      const updateRow: Record<string, unknown> = {
+        title: captured.title,
+        content: captured.content,
+        source_url: captured.source_url,
+        metadata: enrichedMetadata,
+        status: 'pending',
+      };
+      if (participants && participants.length > 0) updateRow.participants = participants;
+      const { error: updErr } = await supabase
+        .from('knowledge_sources')
+        .update(updateRow)
+        .eq('id', existing.id);
+      if (updErr) throw new Error(`Meeting replace failed: ${updErr.message}`);
+      return { sourceId: existing.id as string, status: 'replaced' };
+    }
+  }
+
+  // ── 2. Insert. Catch error 23505 race and re-fetch by circleback_meeting_id.
+  const participants = meta['participants'] as string[] | null | undefined;
+  const insertRow: Record<string, unknown> = {
+    user_id: userId,
+    title: captured.title,
+    content: captured.content,
+    source_type: 'meeting',
+    source_url: captured.source_url,
+    metadata: enrichedMetadata,
+    circleback_meeting_id: circlebackMeetingId,
+    status: 'pending',
+  };
+  if (participants && participants.length > 0) insertRow.participants = participants;
+
+  const { data: inserted, error } = await supabase
+    .from('knowledge_sources')
+    .insert(insertRow)
+    .select('id')
+    .single();
+
+  if (error) {
+    const isRace = error.code === '23505' || /duplicate key/i.test(error.message);
+    if (isRace && circlebackMeetingId !== null) {
+      const { data: existing } = await supabase
+        .from('knowledge_sources')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('circleback_meeting_id', circlebackMeetingId)
+        .maybeSingle();
+      if (existing) return { sourceId: existing.id as string, status: 'skipped-duplicate' };
+    }
+    throw new Error(`Meeting insert failed: ${error.message}`);
+  }
+  return { sourceId: inserted.id as string, status: 'inserted' };
+}
+
 // ─── Structured logging ─────────────────────────────────────────────────────
 
 type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
@@ -274,134 +394,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const meetingTitle = captured.title;
 
-    // ─── DEDUP GUARD (title + date) ──────────────────────────────────────────
-    // The Circleback-ID dedup is now handled at the database level via the
-    // unique index on (user_id, circleback_meeting_id) — see the upsert below.
-    // This title+date check remains as a safety net for V1-era rows that
-    // pre-date the circleback_meeting_id column.
-    if (payload.createdAt) {
-      const meetingDate = new Date(payload.createdAt).toISOString().split('T')[0];
-      const { data: titleMatch } = await supabase
-        .from('knowledge_sources')
-        .select('id')
-        .eq('user_id', uid)
-        .eq('source_type', 'Meeting')
-        .eq('title', meetingTitle)
-        .gte('created_at', meetingDate)
-        .lt('created_at', meetingDate + 'T23:59:59.999Z')
-        .maybeSingle();
-
-      if (titleMatch) {
-        log({ stage: 'capture:meeting:dedup', user_id: uid, source_id: titleMatch.id, status: 'skipped', reason: 'duplicate-title-date' });
-        return res.status(200).json({
-          success: true,
-          source_id: titleMatch.id,
-          title: meetingTitle,
-          duplicate: true,
-          message: 'Meeting already ingested (matched by title+date)',
-        });
-      }
+    // ─── Stage 2 — persistSource() (inlined). ────────────────────────────────
+    // Decision A2: meeting re-ingest replaces content only when the payload
+    // signature (transcript + action items shape) differs from the stored one.
+    // Otherwise skip silently. Webhook re-deliveries are now no-ops, and a
+    // genuine Circleback edit triggers a full re-run by resetting status to
+    // 'pending'.
+    let persistResult: PersistMeetingResult;
+    try {
+      persistResult = await persistMeetingSource(
+        supabase,
+        uid,
+        captured,
+        payload.id ?? null,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logError({ stage: 'persist', user_id: uid, status: 'failed', error: msg });
+      return res.status(500).json({ error: `Failed to save meeting: ${msg}` });
     }
 
-    // Stage 2 will absorb this once persistSource() lands. For now the existing
-    // inline write stays so behaviour is unchanged.
-    const captureMetadata = { ...captured.metadata, extraction_status: 'pending' };
-    const participants = captured.metadata.participants as string[] | null;
-
-    const insertRow: Record<string, unknown> = {
+    log({
+      stage: 'persist',
       user_id: uid,
-      title: meetingTitle,
-      source_type: 'Meeting',
-      source_url: captured.source_url,
-      content: captured.content,
-      metadata: captureMetadata,
+      source_id: persistResult.sourceId,
+      status: persistResult.status === 'skipped-duplicate' ? 'skipped' : 'ok',
+      source_type: 'meeting',
       circleback_meeting_id: payload.id ?? null,
-    };
-    if (participants && participants.length > 0) {
-      insertRow.participants = participants;
-    }
-
-    let sourceData: { id: string } | null = null;
-    let sourceError: { message: string; code?: string } | null = null;
-
-    if (payload.id) {
-      // Use upsert with ignoreDuplicates so a duplicate webhook returns the
-      // existing row instead of creating a second one.
-      const { data, error } = await supabase
-        .from('knowledge_sources')
-        .upsert(insertRow, {
-          onConflict: 'user_id,circleback_meeting_id',
-          ignoreDuplicates: true,
-        })
-        .select('id')
-        .maybeSingle();
-      sourceData = data;
-      sourceError = error;
-
-      // ignoreDuplicates returns null on conflict — fetch the existing row.
-      if (!sourceData && !sourceError) {
-        const { data: existing } = await supabase
-          .from('knowledge_sources')
-          .select('id')
-          .eq('user_id', uid)
-          .eq('circleback_meeting_id', payload.id)
-          .maybeSingle();
-        if (existing) {
-          log({
-            stage: 'capture:meeting:dedup',
-            user_id: uid,
-            source_id: existing.id,
-            status: 'skipped',
-            circleback_meeting_id: payload.id,
-          });
-          return res.status(200).json({
-            success: true,
-            source_id: existing.id,
-            title: meetingTitle,
-            duplicate: true,
-            message: 'Meeting already ingested',
-          });
-        }
-      }
-    } else {
-      // No Circleback ID — fall back to plain insert.
-      const { data, error } = await supabase
-        .from('knowledge_sources')
-        .insert(insertRow)
-        .select('id')
-        .single();
-      sourceData = data;
-      sourceError = error;
-    }
-
-    if (sourceError) {
-      logError({
-        stage: 'capture:meeting',
-        user_id: uid,
-        status: 'failed',
-        error: sourceError.message,
-      });
-      return res.status(500).json({ error: `Failed to save meeting: ${sourceError.message}` });
-    }
-    if (!sourceData) {
-      logError({
-        stage: 'capture:meeting',
-        user_id: uid,
-        status: 'failed',
-        error: 'No source row returned from upsert',
-      });
-      return res.status(500).json({ error: 'Failed to save meeting: no row returned' });
-    }
-
-    console.log(
-      `[meetings/webhook] Saved meeting "${meetingTitle}" (${(sourceData as { id: string }).id}) for user ${uid}`
-    );
+      result: persistResult.status,
+      duration_ms: Date.now() - startTime,
+    });
 
     return res.status(200).json({
       success: true,
-      source_id: (sourceData as { id: string }).id,
+      source_id: persistResult.sourceId,
       title: meetingTitle,
       content_length: captured.content.length,
+      duplicate: persistResult.status !== 'inserted',
+      persist_status: persistResult.status,
       duration_ms: Date.now() - startTime,
     });
   } catch (err) {

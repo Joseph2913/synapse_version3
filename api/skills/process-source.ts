@@ -19,6 +19,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? ''
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,29 @@ Respond ONLY with a JSON array. No preamble, no markdown, no explanation outside
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function getSupabase() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 }
@@ -140,11 +164,11 @@ async function callGemini(systemPrompt: string, userPrompt: string, maxTokens = 
 }
 
 async function generateEmbedding(text: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'models/text-embedding-004', content: { parts: [{ text }] } }),
+    body: JSON.stringify({ model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } }),
   })
   if (!res.ok) throw new Error(`Embedding ${res.status}`)
   const data = await res.json()
@@ -429,8 +453,8 @@ Return a JSON array with one object per candidate:
         const currentExposure = existingSkill.exposure_level as string
         const newEvidenceCount = (existingSkill.evidence_count as number) + 1
         let newExposure = currentExposure
-        if (source.source_type === 'Meeting' && currentExposure === 'developing') newExposure = 'proficient'
-        else if (source.source_type === 'Meeting' && currentExposure === 'novice') newExposure = 'developing'
+        if (source.source_type === 'meeting' && currentExposure === 'developing') newExposure = 'proficient'
+        else if (source.source_type === 'meeting' && currentExposure === 'novice') newExposure = 'developing'
         else if (newEvidenceCount >= 5 && currentExposure === 'developing') newExposure = 'proficient'
         else if (newEvidenceCount >= 8 && currentExposure === 'proficient') newExposure = 'advanced'
 
@@ -531,8 +555,8 @@ Return a JSON array with one object per candidate:
 
         // Derive exposure
         let exposureLevel: string = 'novice'
-        if (source.source_type === 'Meeting') exposureLevel = 'developing'
-        else if (source.source_type === 'Document' && relatedNodes.length > 5) exposureLevel = 'proficient'
+        if (source.source_type === 'meeting') exposureLevel = 'developing'
+        else if (source.source_type === 'file' && relatedNodes.length > 5) exposureLevel = 'proficient'
         else if (relatedNodes.length > 3) exposureLevel = 'developing'
 
         const status = finalConfidence >= 0.55 ? 'confirmed' : 'candidate'

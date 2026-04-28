@@ -16,6 +16,29 @@ const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
   if (!CRON_SECRET) return true;
@@ -46,25 +69,25 @@ const INTEGRATION_PROFILES: Record<string, { name: string; description: string; 
   circleback: {
     name: 'Work & Meetings',
     description: 'This advisor has deep contextual knowledge about your professional work, drawn from meeting transcripts. It tracks projects, decisions, commitments, feedback, and team dynamics. It functions as a career coach, project memory, and professional mentor.',
-    sourceTypes: ['Meeting'],
+    sourceTypes: ['meeting'],
     reasoning: 'Contextual and interpersonal — draws on professional relationships, project histories, and organisational dynamics.',
   },
   microsoft: {
     name: 'Work & Communications',
     description: 'This advisor understands your professional communications and schedule, drawn from emails, calendar events, and meeting transcripts via Microsoft 365. It tracks commitments, correspondence patterns, and organisational context.',
-    sourceTypes: ['Meeting', 'Research'],
+    sourceTypes: ['meeting', 'research'],
     reasoning: 'Structured and communication-focused — understands email threads, meeting outcomes, and professional correspondence patterns.',
   },
   granola: {
     name: 'Meeting Notes',
     description: 'This advisor specialises in meeting intelligence from Granola, capturing structured notes, key decisions, and action items from your meetings.',
-    sourceTypes: ['Meeting'],
+    sourceTypes: ['meeting'],
     reasoning: 'Structured note-taking perspective — focuses on decisions, action items, and meeting outcomes.',
   },
   read_ai: {
     name: 'Meeting Intelligence',
     description: 'This advisor provides deep meeting analysis from Read AI, including sentiment, engagement, and conversation dynamics alongside content.',
-    sourceTypes: ['Meeting'],
+    sourceTypes: ['meeting'],
     reasoning: 'Analytical — combines content understanding with engagement and communication pattern analysis.',
   },
 };
@@ -146,7 +169,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const profile = INTEGRATION_PROFILES[integration.integration_slug] || {
         name: `${integration.integration_slug} Agent`,
         description: `Domain expert built from ${integration.integration_slug} integration content.`,
-        sourceTypes: ['Meeting', 'Research', 'Document'],
+        sourceTypes: ['meeting', 'research', 'file'],
         reasoning: null,
       };
 
@@ -240,7 +263,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const int of integrations as Integration[]) {
         const profile = INTEGRATION_PROFILES[int.integration_slug];
         if (profile) profile.sourceTypes.forEach(t => allSourceTypes.add(t));
-        else ['Meeting', 'Research', 'Document'].forEach(t => allSourceTypes.add(t));
+        else ['meeting', 'research', 'file'].forEach(t => allSourceTypes.add(t));
       }
 
       const slugs = (integrations as Integration[]).map(i => i.integration_slug);
@@ -289,7 +312,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Link all integrations to this agent
     for (const int of integrations as Integration[]) {
       const profile = INTEGRATION_PROFILES[int.integration_slug];
-      const sourceTypes = profile?.sourceTypes || ['Meeting', 'Research', 'Document'];
+      const sourceTypes = profile?.sourceTypes || ['meeting', 'research', 'file'];
 
       await supabase.from('user_integrations').update({ domain_agent_id: agentId }).eq('id', int.id);
 
@@ -305,7 +328,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const allTypes = new Set<string>();
     for (const int of integrations as Integration[]) {
       const profile = INTEGRATION_PROFILES[int.integration_slug];
-      (profile?.sourceTypes || ['Meeting', 'Research', 'Document']).forEach(t => allTypes.add(t));
+      (profile?.sourceTypes || ['meeting', 'research', 'file']).forEach(t => allTypes.add(t));
     }
 
     const linked = await backfillSources(supabase, agentId, targetUserId, [...allTypes]);

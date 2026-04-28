@@ -2,7 +2,17 @@ import { useState } from 'react'
 import { AlignLeft, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useBackfillStatus } from '../../hooks/useBackfillStatus'
 
-const SOURCE_TYPES = ['Meeting', 'YouTube', 'Research', 'Note', 'Document', 'All']
+// Stage 2: filter values are lowercase canonical source_type strings.
+// 'all' is a sentinel handled by the backfill API.
+const SOURCE_TYPES: Array<{ label: string; value: string }> = [
+  { label: 'Meeting',   value: 'meeting' },
+  { label: 'YouTube',   value: 'youtube' },
+  { label: 'Research',  value: 'research' },
+  { label: 'Note',      value: 'paste' },
+  { label: 'Document',  value: 'file' },
+  { label: 'Web',       value: 'url' },
+  { label: 'All',       value: 'all' },
+]
 
 function formatRelativeTime(dateStr: string): string {
   const now = Date.now()
@@ -206,11 +216,11 @@ export function BackfillCard() {
                 minWidth: 120,
               }}
             >
-              {SOURCE_TYPES.map(type => (
+              {SOURCE_TYPES.map(({ label, value }) => (
                 <button
-                  key={type}
+                  key={value}
                   type="button"
-                  onClick={() => handleTypeSelect(type)}
+                  onClick={() => handleTypeSelect(value)}
                   className="font-body w-full text-left cursor-pointer"
                   style={{
                     fontSize: 12,
@@ -224,7 +234,7 @@ export function BackfillCard() {
                   onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-inset)' }}
                   onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
                 >
-                  {type}
+                  {label}
                 </button>
               ))}
             </div>

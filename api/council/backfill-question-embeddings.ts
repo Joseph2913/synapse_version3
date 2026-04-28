@@ -17,31 +17,100 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const BATCH_SIZE = 50
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY')
+}
+
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+function getServiceSupabase(): SupabaseClient {
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+}
+
+function getAnonSupabase(): SupabaseClient {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+}
 
 async function getUser(req: VercelRequest): Promise<string | null> {
   const auth = req.headers.authorization
   if (!auth?.startsWith('Bearer ')) return null
   const token = auth.slice(7)
-  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   try {
-    const { data: { user } } = await sb.auth.getUser(token)
+    const { data: { user } } = await getAnonSupabase().auth.getUser(token)
     return user?.id ?? null
   } catch { return null }
 }
 
 async function embedText(text: string): Promise<number[]> {
   const resp = await fetch(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'models/gemini-embedding-001', content: { parts: [{ text }] } }),
+      body: JSON.stringify({ model: `models/${GEMINI_EMBEDDING_MODEL}`, content: { parts: [{ text }] } }),
     }
   )
   const data = await resp.json()
   if (!data.embedding?.values) throw new Error('No embedding')
   return data.embedding.values as number[]
+}
+
+const EMBEDDING_BATCH_SIZE = 100
+
+async function embedTexts(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return []
+  const out: number[][] = []
+  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
+    const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE)
+    const resp = await fetch(
+      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requests: slice.map(text => ({
+            model: `models/${GEMINI_EMBEDDING_MODEL}`,
+            content: { parts: [{ text }] },
+          })),
+        }),
+      }
+    )
+    if (!resp.ok) throw new Error(`Batch embedding ${resp.status}: ${await resp.text().catch(() => '')}`)
+    const data = await resp.json() as { embeddings?: Array<{ values?: number[] }> }
+    const vectors = (data.embeddings ?? []).map(e => e.values ?? [])
+    if (vectors.length !== slice.length) throw new Error(`Batch embedding length mismatch: ${vectors.length} vs ${slice.length}`)
+    out.push(...vectors)
+  }
+  return out
 }
 
 interface QuestionRow {
@@ -55,9 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const userId = await getUser(req)
     if (!userId) return res.status(401).json({ error: 'unauthorized' })
 
-    const sb: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { persistSession: false },
-    })
+    const sb: SupabaseClient = getServiceSupabase()
 
     let totalUpdated = 0
 
@@ -73,15 +140,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       const batch = (rows ?? []) as QuestionRow[]
       if (batch.length === 0) break
 
-      // Sequential embedding calls inside a batch to avoid Gemini rate limits.
+      // Batch embedding: one network call per 100 questions instead of per question.
       const updates: Array<{ id: string; embedding: string }> = []
-      for (const row of batch) {
-        try {
-          const emb = await embedText(row.question)
-          updates.push({ id: row.id, embedding: JSON.stringify(emb) })
-        } catch (err) {
-          console.error('[backfill-question-embeddings] embed failed for', row.id, err instanceof Error ? err.message : err)
+      try {
+        const vectors = await embedTexts(batch.map(r => r.question))
+        for (let i = 0; i < batch.length; i++) {
+          const emb = vectors[i]
+          if (emb && emb.length > 0) {
+            updates.push({ id: batch[i]!.id, embedding: JSON.stringify(emb) })
+          }
         }
+      } catch (err) {
+        console.error('[backfill-question-embeddings] batch embed failed:', err instanceof Error ? err.message : err)
       }
 
       if (updates.length > 0) {

@@ -16,11 +16,17 @@ export const maxDuration = 600
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 const CRON_SECRET = process.env.CRON_SECRET
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
 interface ExpertiseIndex {
@@ -50,6 +56,29 @@ interface Agent {
 
 // ─── AUTH ────────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function authorised(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true
   if (!CRON_SECRET) return true
@@ -64,7 +93,7 @@ async function callGemini<T>(
   systemPrompt: string,
   userContent: string,
   timeoutMs = 90000,
-  model = 'gemini-2.5-flash',
+  model = GEMINI_MODEL,
 ): Promise<T> {
   const response = await fetch(
     `${GEMINI_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}`,
@@ -96,12 +125,12 @@ async function callGemini<T>(
 
 async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetch(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
+        model: `models/${GEMINI_EMBEDDING_MODEL}`,
         content: { parts: [{ text }] },
       }),
       signal: AbortSignal.timeout(15000),
@@ -110,6 +139,44 @@ async function generateEmbedding(text: string): Promise<number[]> {
   if (!response.ok) return []
   const data = (await response.json()) as { embedding?: { values?: number[] } }
   return data.embedding?.values ?? []
+}
+
+const EMBEDDING_BATCH_SIZE = 100
+
+async function generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return []
+  const out: number[][] = []
+  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
+    const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE)
+    const response = await fetch(
+      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requests: slice.map(text => ({
+            model: `models/${GEMINI_EMBEDDING_MODEL}`,
+            content: { parts: [{ text }] },
+          })),
+        }),
+        signal: AbortSignal.timeout(60000),
+      },
+    )
+    if (!response.ok) {
+      console.warn(`[rebuild-agent] batch embedding failed (${response.status}); falling back to empty vectors`)
+      out.push(...slice.map(() => [] as number[]))
+      continue
+    }
+    const data = (await response.json()) as { embeddings?: Array<{ values?: number[] }> }
+    const vectors = (data.embeddings ?? []).map(e => e.values ?? [])
+    if (vectors.length !== slice.length) {
+      console.warn(`[rebuild-agent] batch embedding length mismatch: ${vectors.length} vs ${slice.length}`)
+      out.push(...slice.map(() => [] as number[]))
+      continue
+    }
+    out.push(...vectors)
+  }
+  return out
 }
 
 // ─── STEP 1: expertise index + description + reasoning_style ────────────────
@@ -297,10 +364,12 @@ Generate 3-6 questions and 2-5 gaps. Be specific to the domain's current state.`
   }>(systemPrompt, userContent, 120000)
 
   if (result.standing_questions?.length > 0) {
-    const qRows: Array<Record<string, unknown>> = []
-    for (const q of result.standing_questions) {
-      const emb = await generateEmbedding(q.question)
-      qRows.push({
+    const embeddings = await generateEmbeddingsBatch(
+      result.standing_questions.map(q => q.question)
+    )
+    const qRows: Array<Record<string, unknown>> = result.standing_questions.map((q, i) => {
+      const emb = embeddings[i] ?? []
+      return {
         user_id: agent.user_id,
         agent_id: agent.id,
         question: q.question,
@@ -310,8 +379,8 @@ Generate 3-6 questions and 2-5 gaps. Be specific to the domain's current state.`
         status: 'open',
         generated_at: new Date().toISOString(),
         embedding: emb.length > 0 ? JSON.stringify(emb) : null,
-      })
-    }
+      }
+    })
     await supabase.from('agent_standing_questions').insert(qRows)
   }
 

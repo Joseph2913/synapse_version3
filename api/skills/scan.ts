@@ -19,6 +19,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? ''
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 
 // ─── SIGNAL WEIGHTS (named constants for easy tuning) ─────────────────────────
 
@@ -222,6 +223,29 @@ interface ConceptCluster {
 
 // ─── INLINE HELPERS ───────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function parseEmbedding(raw: unknown): number[] {
   if (Array.isArray(raw)) return raw as number[]
   if (typeof raw === 'string') return JSON.parse(raw) as number[]
@@ -288,12 +312,12 @@ async function callGemini(systemPrompt: string, userPrompt: string, maxTokens: n
 }
 
 async function generateEmbedding(text: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'models/text-embedding-004',
+      model: `models/${GEMINI_EMBEDDING_MODEL}`,
       content: { parts: [{ text }] },
     }),
   })
@@ -424,7 +448,7 @@ function deriveExposureLevel(
   s3Score: number,
 ): 'novice' | 'developing' | 'proficient' | 'advanced' {
   if (s1Score > 0.7 && s3Score > 0.6 && s2Score > 0.6) return 'advanced'
-  if (source.source_type === 'Meeting' && s2Score > 0.6) return 'proficient'
+  if (source.source_type === 'meeting' && s2Score > 0.6) return 'proficient'
   if (s2Score > 0.6) return 'proficient'
   if (s2Score >= 0.3 || s3Score >= 0.5) return 'developing'
   return 'novice'
@@ -536,7 +560,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startTime = Date.now()
 
   const body = (req.body ?? {}) as ScanRequest
-  const sourceTypes = body.source_types ?? ['YouTube', 'Meeting', 'Document', 'Research']
+  const sourceTypes = body.source_types ?? ['youtube', 'meeting', 'file', 'research']
   const minCriteriaPass = body.min_criteria_pass ?? 3
   const minRelevance = body.min_relevance ?? 0.20
   const limit = Math.min(body.limit ?? 60, 100)

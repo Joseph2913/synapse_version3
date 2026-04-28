@@ -22,8 +22,8 @@ export function ProviderIcon({
   const cfg = getSourceConfig(sourceType)
 
   // Resolve provider: YouTube/GitHub sources always use their provider logo
-  const effectiveProvider = sourceType === 'YouTube' ? 'youtube'
-    : sourceType === 'GitHub' ? 'github'
+  const effectiveProvider = sourceType === 'youtube' ? 'youtube'
+    : sourceType === 'github' ? 'github'
     : provider
   const providerCfg = getProviderConfig(effectiveProvider)
 

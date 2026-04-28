@@ -4,13 +4,23 @@ export interface SourceTypeConfig {
   label: string
 }
 
+// Canonical lowercase keys (Stage 2 rename, 2026-04-27). The set covers every
+// source_type value that can appear in `knowledge_sources`:
+//   - 'paste'    — text adapter (was 'Note')
+//   - 'url'      — URL adapter
+//   - 'file'     — file adapter (was 'Document')
+//   - 'youtube'  — YouTube adapter
+//   - 'meeting'  — Circleback / meeting adapters
+//   - 'research' — Microsoft non-meeting resources (Outlook, SharePoint)
+//   - 'github'   — MCP / Claude Code session ingestion
 export const SOURCE_TYPE_CONFIG: Record<string, SourceTypeConfig> = {
-  Meeting:  { color: '#3b82f6', icon: '🎙', label: 'Meeting' },
-  YouTube:  { color: '#ef4444', icon: '▶',  label: 'YouTube' },
-  Research: { color: '#8b5cf6', icon: '🔬', label: 'Research' },
-  Note:     { color: '#10b981', icon: '✏️', label: 'Note' },
-  Document: { color: '#f59e0b', icon: '📋', label: 'Document' },
-  GitHub:   { color: '#24292e', icon: '🔀', label: 'GitHub' },
+  meeting:  { color: '#3b82f6', icon: '🎙', label: 'Meeting' },
+  youtube:  { color: '#ef4444', icon: '▶',  label: 'YouTube' },
+  research: { color: '#8b5cf6', icon: '🔬', label: 'Research' },
+  paste:    { color: '#10b981', icon: '✏️', label: 'Note' },
+  file:     { color: '#f59e0b', icon: '📋', label: 'Document' },
+  url:      { color: '#0ea5e9', icon: '🔗', label: 'Web' },
+  github:   { color: '#24292e', icon: '🔀', label: 'GitHub' },
 }
 
 export const DEFAULT_SOURCE_CONFIG: SourceTypeConfig = {
@@ -19,9 +29,30 @@ export const DEFAULT_SOURCE_CONFIG: SourceTypeConfig = {
   label: 'Source',
 }
 
+// Legacy mixed-case → canonical lowercase translator. Defensive only — every
+// row in the database is lowercase post-migration. Kept for external callers
+// (e.g. embedded URLs from older shares, MCP traffic) that may still send
+// the old strings.
+const LEGACY_MAP: Record<string, string> = {
+  Note: 'paste',
+  Web: 'url',
+  Document: 'file',
+  YouTube: 'youtube',
+  Meeting: 'meeting',
+  Research: 'research',
+  GitHub: 'github',
+}
+
+export function normaliseSourceType(input: string | null | undefined): string | null {
+  if (!input) return null
+  if (SOURCE_TYPE_CONFIG[input]) return input
+  return LEGACY_MAP[input] ?? input
+}
+
 export function getSourceConfig(sourceType: string | null | undefined): SourceTypeConfig {
-  if (!sourceType) return DEFAULT_SOURCE_CONFIG
-  return SOURCE_TYPE_CONFIG[sourceType] ?? DEFAULT_SOURCE_CONFIG
+  const key = normaliseSourceType(sourceType)
+  if (!key) return DEFAULT_SOURCE_CONFIG
+  return SOURCE_TYPE_CONFIG[key] ?? DEFAULT_SOURCE_CONFIG
 }
 
 // ─── Provider Config (for provider-specific logos) ──────────────────────────

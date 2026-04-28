@@ -16,11 +16,17 @@ export const maxDuration = 300;
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
 const CRON_SECRET = process.env.CRON_SECRET;
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const MAX_ITEMS_PER_BATCH = 1;
 
 // ─── TYPES ─────────────────────────────────────────────────────────────────────
@@ -49,6 +55,29 @@ interface QueueItem {
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
   if (!CRON_SECRET) return true;
@@ -72,6 +101,122 @@ async function verifyUserAuth(
   }
 
   return { userId: null, isCron: false };
+}
+
+// ─── Stage 2 — persistSource (YouTube variant, inlined) ────────────────────
+//
+// Identity rule for YouTube sources is the canonical watch URL
+// `https://www.youtube.com/watch?v=<videoId>` written to source_url. The
+// existing partial unique index `(user_id, source_type, source_url) WHERE
+// source_url IS NOT NULL` is the safety net against concurrent inserts. The
+// cron's wipe-and-rerun semantics live in extractKnowledgeForItem() and are
+// kept outside persistSource() — Stage 2 only owns the row identity.
+
+const YT_VIDEO_ID = /^[a-zA-Z0-9_-]{11}$/;
+const YT_HOST_RE = /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/i;
+
+function extractYouTubeVideoId(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  if (YT_VIDEO_ID.test(trimmed)) return trimmed;
+  let url: URL;
+  try { url = new URL(trimmed); } catch { return null; }
+  if (!YT_HOST_RE.test(url.hostname)) return null;
+  const v = url.searchParams.get('v');
+  if (v && YT_VIDEO_ID.test(v)) return v;
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (url.hostname.replace(/^www\./, '') === 'youtu.be') {
+    const id = segments[0];
+    return id && YT_VIDEO_ID.test(id) ? id : null;
+  }
+  if (segments.length >= 2) {
+    const head = segments[0]?.toLowerCase();
+    const id = segments[1];
+    if ((head === 'embed' || head === 'shorts' || head === 'v') && id && YT_VIDEO_ID.test(id)) return id;
+  }
+  return null;
+}
+
+function canonicalYouTubeUrl(input: string): string {
+  const id = extractYouTubeVideoId(input);
+  return id ? `https://www.youtube.com/watch?v=${id}` : input.trim();
+}
+
+interface YoutubePersistResult {
+  sourceId: string;
+  status: 'inserted' | 'replaced' | 'skipped-duplicate';
+}
+
+async function persistYouTubeSource(
+  supabase: ReturnType<typeof getSupabase>,
+  userId: string,
+  sourcePayload: {
+    title: string;
+    source_url: string;
+    content: string;
+    metadata: Record<string, unknown>;
+  },
+): Promise<YoutubePersistResult> {
+  const canonicalUrl = canonicalYouTubeUrl(sourcePayload.source_url);
+
+  // ── 1. Lookup by canonical URL.
+  const { data: existing } = await supabase
+    .from('knowledge_sources')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('source_type', 'youtube')
+    .eq('source_url', canonicalUrl)
+    .maybeSingle();
+
+  if (existing) {
+    // Cron re-runs intentionally refresh the row + clear prior nodes/edges so
+    // re-extraction starts clean. status reset to 'pending' so downstream
+    // stages re-execute.
+    const { error: updErr } = await supabase
+      .from('knowledge_sources')
+      .update({
+        title: sourcePayload.title,
+        source_url: canonicalUrl,
+        content: sourcePayload.content,
+        metadata: sourcePayload.metadata,
+        status: 'pending',
+      })
+      .eq('id', existing.id);
+    if (updErr) throw new Error(`YouTube replace failed: ${updErr.message}`);
+    return { sourceId: existing.id as string, status: 'replaced' };
+  }
+
+  // ── 2. Insert. Catch error 23505 race and re-fetch.
+  const insertRow = {
+    user_id: userId,
+    title: sourcePayload.title,
+    source_type: 'youtube',
+    source_url: canonicalUrl,
+    content: sourcePayload.content,
+    metadata: sourcePayload.metadata,
+    status: 'pending',
+  };
+  const { data: inserted, error } = await supabase
+    .from('knowledge_sources')
+    .insert(insertRow)
+    .select('id')
+    .single();
+
+  if (error) {
+    const isRace = error.code === '23505' || /duplicate key/i.test(error.message);
+    if (isRace) {
+      const { data: fallback } = await supabase
+        .from('knowledge_sources')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('source_type', 'youtube')
+        .eq('source_url', canonicalUrl)
+        .maybeSingle();
+      if (fallback) return { sourceId: fallback.id as string, status: 'skipped-duplicate' };
+    }
+    throw new Error(`YouTube insert failed: ${error.message}`);
+  }
+  return { sourceId: inserted.id as string, status: 'inserted' };
 }
 
 // ─── EXTRACTION PIPELINE ───────────────────────────────────────────────────────
@@ -148,15 +293,12 @@ async function extractKnowledgeForItem(
     // claim RPC (claim_youtube_extraction_batch) does that in the same query
     // that returned this item, so no separate UPDATE is needed here.
 
-    // ── STEP 1: SAVE SOURCE ─────────────────────────────────────────────────────
-    // Check-then-insert-or-update. We cannot use Postgres ON CONFLICT because
-    // the uniqueness rule is a partial index (WHERE source_url IS NOT NULL),
-    // which ON CONFLICT won't match. The partial unique index remains as the
-    // final safety net against races.
-    const sourcePayload = {
-      user_id: item.user_id,
+    // ── STEP 1: SAVE SOURCE (Stage 2 persistSource) ─────────────────────────
+    // persistYouTubeSource() owns the canonical-URL identity and the partial
+    // unique index race fallback. On a re-run for the same video it returns
+    // status='replaced' and resets knowledge_sources.status to 'pending'.
+    const persistResult = await persistYouTubeSource(supabase, item.user_id, {
       title: item.video_title ?? `YouTube: ${item.video_id}`,
-      source_type: 'YouTube',
       source_url: item.video_url,
       content: transcript.slice(0, MAX_TRANSCRIPT_CHARS),
       metadata: {
@@ -165,26 +307,11 @@ async function extractKnowledgeForItem(
         published_at: item.published_at,
         transcript_source: 'decoupled_pipeline',
       },
-    };
+    });
+    const sourceId = persistResult.sourceId;
 
-    const { data: existingSource } = await supabase
-      .from('knowledge_sources')
-      .select('id')
-      .eq('user_id', item.user_id)
-      .eq('source_type', 'YouTube')
-      .eq('source_url', item.video_url)
-      .maybeSingle();
-
-    let sourceId: string;
-    if (existingSource?.id) {
-      sourceId = existingSource.id as string;
-      // Refresh the row with the latest transcript/metadata and clear any
-      // prior nodes/edges so this run's extraction replaces them cleanly.
-      await supabase
-        .from('knowledge_sources')
-        .update(sourcePayload)
-        .eq('id', sourceId);
-
+    // For replays, wipe prior nodes/edges so re-extraction starts clean.
+    if (persistResult.status === 'replaced') {
       const { data: priorNodes } = await supabase
         .from('knowledge_nodes')
         .select('id')
@@ -195,17 +322,15 @@ async function extractKnowledgeForItem(
           .or(`source_node_id.in.(${priorNodeIds.join(',')}),target_node_id.in.(${priorNodeIds.join(',')})`);
         await supabase.from('knowledge_nodes').delete().eq('source_id', sourceId);
       }
-    } else {
-      const { data: inserted, error: insertErr } = await supabase
-        .from('knowledge_sources')
-        .insert(sourcePayload)
-        .select('id')
-        .single();
-      if (insertErr || !inserted) {
-        throw new Error(`Failed to save source: ${insertErr?.message}`);
-      }
-      sourceId = inserted.id as string;
     }
+    log({
+      stage: 'persist',
+      user_id: item.user_id,
+      source_id: sourceId,
+      source_type: 'youtube',
+      result: persistResult.status,
+      status: persistResult.status === 'skipped-duplicate' ? 'skipped' : 'ok',
+    });
 
     await supabase
       .from('youtube_ingestion_queue')
@@ -246,7 +371,7 @@ async function extractKnowledgeForItem(
       },
       source: {
         sourceId,
-        sourceType: 'YouTube',
+        sourceType: 'youtube',
         sourceUrl: item.video_url,
         sourceLabel: item.video_title ?? item.video_id,
       },
@@ -272,7 +397,7 @@ async function extractKnowledgeForItem(
     await supabase.from('extraction_sessions').insert({
       user_id: item.user_id,
       source_name: item.video_title ?? item.video_id,
-      source_type: 'YouTube',
+      source_type: 'youtube',
       source_content_preview: transcript.slice(0, 300),
       extraction_mode: extractionMode,
       anchor_emphasis: anchorEmphasis,
@@ -285,7 +410,7 @@ async function extractKnowledgeForItem(
       extraction_duration_ms: Date.now() - itemStartTime,
     });
 
-    // Update daily counter
+    // Update daily counter (skip-with-telemetry — counter is non-essential)
     try {
       const { data: ys } = await supabase
         .from('youtube_settings')
@@ -298,7 +423,14 @@ async function extractKnowledgeForItem(
           .update({ videos_ingested_today: ((ys as { videos_ingested_today: number }).videos_ingested_today ?? 0) + 1 })
           .eq('user_id', item.user_id);
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      logError({
+        stage: 'capture:youtube:counter',
+        user_id: item.user_id,
+        status: 'skipped',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // ── TRIGGER ANCHOR SCORING (fire-and-forget) ────────────────────────────────
     // Non-fatal: if scoring fails, extraction is still considered successful.
@@ -536,7 +668,7 @@ Return ONLY valid JSON matching this schema:
 
   try {
     const geminiResponse = await fetch(
-      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,5 @@
 import { supabase, semanticSearchNodes } from './supabase'
-import { fetchWithRetry } from './gemini'
+import { fetchWithRetry, GEMINI_CHAT_MODEL } from './gemini'
 import type { DiscoveredEdge } from '../types/extraction'
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
@@ -310,7 +310,7 @@ Return JSON:
 Return an empty connections array if no genuine cross-source connections exist.`
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

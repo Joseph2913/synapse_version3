@@ -182,7 +182,7 @@ export function QuickCaptureTab() {
       customGuidance: customGuidance || undefined,
     }
 
-    await start(content, config, { sourceType: 'Note' })
+    await start(content, config, { sourceType: 'paste' })
   }, [content, mode, emphasis, anchors, selectedAnchorIds, profile, customGuidance, start])
 
   // Update entities during review

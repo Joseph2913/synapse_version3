@@ -1,5 +1,5 @@
 import type { SummaryResult } from '../types/summary'
-import { fetchWithRetry } from '../services/gemini'
+import { fetchWithRetry, GEMINI_CHAT_MODEL } from '../services/gemini'
 import { stripMarkdown } from './stripMarkdown'
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
@@ -25,7 +25,7 @@ export async function resolveSummary(
   }
 
   // Tier 2: Structured sources — attempt extraction
-  if (sourceType === 'Meeting') {
+  if (sourceType === 'meeting') {
     const extracted = extractStructuredSummary(content, metadata)
     if (extracted) {
       return { summary: extracted, source: 'extracted' }
@@ -114,7 +114,7 @@ export async function generateSummary(
 
   try {
     const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -33,6 +33,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+if (!GEMINI_API_KEY) {
+  throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
+}
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 export const MAX_TRANSCRIPT_CHARS = 100_000;
 export const EMBEDDING_BATCH_SIZE = 100;
 export const DEFAULT_TIME_BUDGET_MS = 50_000;
@@ -133,6 +139,29 @@ export interface ExtractionResult {
  * the parsed value has both `entities` and `relationships` as arrays.
  * No external libraries — keeps this function zero-cost and serverless-safe.
  */
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 export function isValidExtractionResult(result: unknown): result is ExtractionResult {
   return (
     result !== null &&
@@ -880,7 +909,7 @@ export async function extractEntities(
   }
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1033,13 +1062,13 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
   for (let start = 0; start < texts.length; start += EMBEDDING_BATCH_SIZE) {
     const slice = texts.slice(start, start + EMBEDDING_BATCH_SIZE);
     const response = await fetchWithRetry(
-      `${GEMINI_BASE}/gemini-embedding-001:batchEmbedContents?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:batchEmbedContents?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           requests: slice.map(text => ({
-            model: 'models/gemini-embedding-001',
+            model: `models/${GEMINI_EMBEDDING_MODEL}`,
             content: { parts: [{ text }] },
           })),
         }),
@@ -1069,12 +1098,12 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
 /** Single embedding — use batchEmbed() wherever possible instead. */
 export async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetchWithRetry(
-    `${GEMINI_BASE}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
+        model: `models/${GEMINI_EMBEDDING_MODEL}`,
         content: { parts: [{ text }] },
       }),
       signal: AbortSignal.timeout(15_000),
@@ -1628,7 +1657,7 @@ Return ONLY valid JSON:
 Return an empty array if no genuine cross-source connections exist.`;
 
     const crossResponse = await fetchWithRetry(
-      `${GEMINI_BASE}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

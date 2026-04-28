@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Synapse · Mobile preview (iPhone 14 Pro)</title>
+  <style>
+    :root {
+      --bg: #111; --ink: #f2f2f2; --muted: #888; --accent: #D63A00;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+    }
+    .page {
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 32px 16px 48px;
+      gap: 20px;
+    }
+    header { text-align: center; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+    header p  { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+    .controls {
+      display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+    }
+    .controls button, .controls a {
+      background: #1d1d1d; color: var(--ink); border: 1px solid #2a2a2a;
+      padding: 8px 14px; border-radius: 20px; font-size: 12px; cursor: pointer;
+      text-decoration: none; font-family: inherit;
+    }
+    .controls button.active, .controls a.active {
+      background: var(--accent); border-color: var(--accent); color: #fff;
+    }
+    /* iPhone 14 Pro: CSS viewport 393 x 852, Dynamic Island frame */
+    .device {
+      position: relative;
+      width: 420px;          /* frame width (includes bezels) */
+      height: 880px;
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 54px;
+      padding: 14px;
+      box-shadow:
+        0 40px 80px -30px rgba(0,0,0,0.8),
+        0 0 0 2px #000 inset,
+        0 0 0 4px #1a1a1a;
+    }
+    .device.android {
+      border-radius: 36px;
+    }
+    .device .notch {
+      position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+      width: 120px; height: 34px; background: #000; border-radius: 20px;
+      z-index: 2;
+    }
+    .device iframe {
+      width: 100%; height: 100%;
+      border: 0; border-radius: 40px;
+      background: #fff;
+      display: block;
+    }
+    .device.android iframe { border-radius: 24px; }
+
+    .hint { color: var(--muted); font-size: 11px; max-width: 420px; text-align: center; line-height: 1.5; }
+    .hint code { background: #1d1d1d; padding: 2px 6px; border-radius: 4px; color: #ddd; }
+
+    /* Smaller than the phone frame: let it scale down */
+    @media (max-width: 480px) {
+      .device { transform: scale(0.85); transform-origin: top center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Synapse · Mobile preview</h1>
+      <p>Landing page rendered inside a device frame. Scroll inside the phone.</p>
+    </header>
+
+    <div class="controls">
+      <button data-device="iphone14pro" data-w="393" data-h="852" class="active">iPhone 14 Pro (393×852)</button>
+      <button data-device="iphonese"    data-w="375" data-h="667">iPhone SE (375×667)</button>
+      <button data-device="pixel7"      data-w="412" data-h="915">Pixel 7 (412×915)</button>
+      <button data-device="small"       data-w="360" data-h="780">Small phone (360×780)</button>
+      <a href="/" target="_blank" rel="noopener">Open full site ↗</a>
+    </div>
+
+    <div class="device" id="device">
+      <div class="notch" id="notch"></div>
+      <iframe id="frame" src="/" title="Synapse landing — mobile preview"></iframe>
+    </div>
+
+    <p class="hint">
+      This is the same app as <code>/</code>, rendered inside an iframe sized to a phone viewport.
+      The page responds to the iframe width, so mobile styles are active.
+    </p>
+  </div>
+
+  <script>
+    const frame  = document.getElementById('frame');
+    const device = document.getElementById('device');
+    const notch  = document.getElementById('notch');
+    const buttons = document.querySelectorAll('.controls button');
+
+    function setDevice(btn) {
+      buttons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const w = parseInt(btn.dataset.w, 10);
+      const h = parseInt(btn.dataset.h, 10);
+      const kind = btn.dataset.device;
+
+      // Frame has 14px padding on each side → frame width = content + 28
+      device.style.width  = (w + 28) + 'px';
+      device.style.height = (h + 28) + 'px';
+
+      // Android = no notch, squarer corners
+      const isAndroid = kind === 'pixel7' || kind === 'small';
+      device.classList.toggle('android', isAndroid);
+      notch.style.display = isAndroid ? 'none' : 'block';
+    }
+
+    buttons.forEach(btn => btn.addEventListener('click', () => setDevice(btn)));
+  </script>
+</body>
+</html>

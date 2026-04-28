@@ -4,6 +4,10 @@ import type { RAGContext, RAGGenerationResult, InlineCitation } from '../types/r
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+// Single source of truth for model names. Change here = change everywhere in this file.
+export const GEMINI_CHAT_MODEL = (import.meta.env.VITE_GEMINI_MODEL as string | undefined) ?? 'gemini-2.5-flash'
+export const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
+
 const MAX_CONTENT_LENGTH = 100_000
 
 // --- Custom Error ---
@@ -141,7 +145,7 @@ export async function extractEntities(
   }
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -204,12 +208,12 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
+        model: `models/${GEMINI_EMBEDDING_MODEL}`,
         content: { parts: [{ text }] },
       }),
     }
@@ -553,7 +557,7 @@ export async function generateText(
   if (!GEMINI_API_KEY) throw new ExtractionError('VITE_GEMINI_API_KEY is not configured')
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -591,7 +595,7 @@ export async function decomposeQuery(question: string): Promise<string[]> {
 
   try {
     const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -678,7 +682,7 @@ export async function generateRAGResponse(
   }
 
   const response = await fetchWithRetry(
-    `${GEMINI_BASE_URL}/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -957,7 +957,7 @@ export function SignalsView() {
     input: {
       title?: string
       content: string
-      sourceType: 'Note' | 'Document' | 'Meeting' | 'YouTube'
+      sourceType: 'paste' | 'file' | 'meeting' | 'youtube' | 'url'
       sourceUrl?: string
       inputType: 'text' | 'url' | 'document' | 'transcript' | 'youtube'
     },

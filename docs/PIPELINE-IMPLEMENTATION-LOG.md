@@ -4,7 +4,7 @@
 
 **Owner:** Joseph Thomas
 **Started:** 2026-04-26
-**Last updated:** 2026-04-26
+**Last updated:** 2026-04-28
 
 ---
 
@@ -53,6 +53,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 | 11 | Council updates | Partial (Phase 0 shipped) | _pending_ | 2026-04-26 |
 | 12 | Extraction session audit | Not started | _pending_ | 2026-04-26 |
 | 13 | Surfacing (RAG, MCP, activity) | Not started | _pending_ | 2026-04-26 |
+| S | Secret hygiene + client-server boundary | Scoped (urgent — incident-driven) | _pending_ | 2026-04-28 |
 
 ---
 
@@ -255,6 +256,70 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 ---
 
+### Stage S — Secret hygiene + client-server boundary
+
+**Status:** Scoped. Urgent. Incident-driven (2026-04-28).
+
+**Owner doc:** _to be created at `docs/STAGE-S-SECRET-HYGIENE.md` after execution._
+
+**Why this stage exists.** On 2026-04-28 the Google Cloud project that held the Synapse Gemini API key (`gen-lang-client-0813591585`, "Reg Tracker") was suspended by Google's Trust & Safety team for "abusive activity consistent with hijacked resources." A third party scraped the `VITE_GEMINI_API_KEY` value from the production browser bundle at `connectsynapse.com` and used it to spin up unauthorised resources. The user was charged approximately £100 before the suspension cut it off. All seven Vercel-stored secrets (`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`, `YOUTUBE_API_KEY`, `APIFY_API_KEY`) were rotated as a precaution — the actual confirmed leak was the Gemini key only, but Vercel's secret-scanner had flagged all seven as "Needs Attention" and treating them as a unit was the safer call.
+
+**Root-cause summary (four layers).** Documented in full in the 2026-04-28 changelog entry. Briefly:
+
+1. **Proximate.** `VITE_GEMINI_API_KEY` was inlined into the production JS bundle by Vite, scraped by a bot.
+2. **Architectural.** Synapse v2 was originally a pure-frontend SPA; Gemini was called from `src/services/gemini.ts` by design. When `api/` serverless functions were added in mid-April 2026 (commits between `df3cdbc` on 15 April and `47a7314` on 27 April), the new code correctly used un-prefixed `GEMINI_API_KEY`, but the original `src/` code path was never migrated. Seven `src/` files still call Gemini directly from the browser: [src/services/gemini.ts](../src/services/gemini.ts), [src/services/crossConnections.ts](../src/services/crossConnections.ts), [src/services/queryClassifier.ts](../src/services/queryClassifier.ts), [src/services/reranker.ts](../src/services/reranker.ts), [src/services/simulate.ts](../src/services/simulate.ts), [src/utils/summarize.ts](../src/utils/summarize.ts), [src/components/modals/SettingsModal.tsx](../src/components/modals/SettingsModal.tsx). Each new browser-side feature copied the legacy pattern instead of routing through `api/`.
+3. **Documentation.** `CLAUDE.md` listed `VITE_GEMINI_API_KEY` as a required env var and described `VITE_` as a generic "client-side access" prefix without distinguishing browser-safe credentials (Supabase publishable) from browser-unsafe credentials (third-party API keys). Every agent reading the doc thus reinforced the unsafe pattern instead of catching it.
+4. **Process.** Zero defensive layers between dev and prod. No HTTP referrer restriction on the leaked key. No GCP budget alert. No CI check banning `VITE_*_API_KEY` for vendor services. No quarterly rotation cadence. No public-source secret scanning of deploys. Each of these alone would have caught it; none were in place.
+
+**Shipped (2026-04-28 — incident response):**
+
+- All seven Vercel secrets rotated. New values in Vercel dashboard and local `.env.local`.
+- New Supabase publishable + secret keys generated; legacy JWT-based keys retained for now (will be disabled after Stage S Phase 2 when no callers depend on them).
+- Compromised Gemini key deleted in AI Studio; new Gemini key created in a fresh GCP project (`synapse-prod`, project ID `gen-lang-client-0777924324`).
+- New Gemini key restricted: HTTP referrers limited to `https://connectsynapse.com/*`, `https://*.connectsynapse.com/*`, `http://localhost:5173/*`, `http://localhost:5174/*`. API restriction: Generative Language API only.
+- Monthly budget alert created on `synapse-prod`: £20 cap on Gemini API service, alerts at 50% / 90% / 100%, email to billing admins and project owners.
+- `VITE_GEMINI_API_KEY` removed from Vercel and `.env.local` entirely. Browser-side Gemini features (Ask chat, RAG, source summaries, cross-connections, query classifier, reranker, persona simulation) are temporarily broken pending Phase 2 of this stage.
+- Production redeploy verified: login works, Home loads with full data (19,745 nodes / 24,386 edges), Supabase rotation confirmed end-to-end.
+- Billing dispute filed with Google Cloud support requesting refund of the £100 unauthorised charges (case open at time of writing).
+- Project suspension appeal submitted on `gen-lang-client-0813591585` (no intent to use the project; submitted to keep the record consistent with the dispute).
+
+**Open (Phase 1 — defensive hardening, low effort):**
+
+- **Restrict the YouTube API key** the same way the new Gemini key was restricted: HTTP referrers + restrict to YouTube Data API v3 only.
+- **Set a budget alert on whichever GCP project holds the YouTube key.** £10/month cap is sensible; YouTube Data API v3 is mostly free quota and any non-trivial spend is anomalous.
+- **Set spend alerts in Resend, Apify, and any other paid third-party** that does not currently have one.
+- **Re-confirm Vercel "Needs Attention" state** on every env var post-rotation; expectation is all flags clear within a few hours of the rotation.
+
+**Open (Phase 2 — architectural refactor, real effort):**
+
+- **Move all Gemini calls server-side.** New endpoints under `api/gemini/` (suggested split: `chat`, `embed`, `classify-query`, `rerank`, `summarize`, `cross-connect`, `simulate-persona`). Each endpoint reads `GEMINI_API_KEY` server-side, validates the calling user's auth token, calls Gemini, returns the result. Update each of the seven `src/` files listed above to invoke the matching endpoint via `fetch('/api/gemini/...')` instead of `import.meta.env.VITE_GEMINI_API_KEY`. Restores Ask, RAG, summaries, cross-connections, query classifier, reranker, and persona simulation. Constraint: every endpoint must enforce per-user auth + RLS-equivalent access checks before calling Gemini, otherwise the endpoint itself becomes a quota-drain vector.
+- **Move all YouTube API calls server-side.** Two files: [src/services/youtube.ts](../src/services/youtube.ts) and [src/services/automationSources.ts](../src/services/automationSources.ts). New endpoint `api/youtube/lookup` (or similar) reads `YOUTUBE_API_KEY` server-side. Browser fetches metadata via the endpoint. Delete `VITE_YOUTUBE_API_KEY` from Vercel and `.env.local` once the refactor lands.
+- **Audit `import.meta.env.VITE_*` usage.** Confirm no other vendor credentials are being read in the browser. As of 2026-04-28 the only `VITE_*` reads beyond Supabase and Gemini and YouTube are `VITE_SIMULATE_SIDECAR_URL` (a URL, not a credential) and `VITE_GEMINI_MODEL` (model name, not a credential). Both safe.
+
+**Open (Phase 3 — process / defence in depth):**
+
+- **CI check.** Add a build-time scan that fails the build if any env var name accessed via `import.meta.env.VITE_*` matches a vendor-credential pattern (`*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_PRIVATE_*`). Allowlist exceptions explicitly (currently: `VITE_SUPABASE_ANON_KEY` only).
+- **Bundle scan.** Add a post-build CI step that scans `dist/` for substrings matching credential patterns (`AIza...`, `re_...`, `apify_api_...`, `eyJ...` JWTs that aren't the Supabase publishable). Fail the build on match. This catches accidental hard-coded secrets that slip past env var review.
+- **Public secret-scanning enrolment.** Vercel already runs a scanner (the source of the "Needs Attention" badges). Confirm GitHub's secret-scanning is enabled on the `synapse_version3` repo and is alerting to the right channel. Optional: add TruffleHog or GitGuardian as a pre-commit hook for an additional layer.
+- **Quarterly rotation cadence.** Calendar reminder, owner Joseph, every 90 days. Rotate all third-party keys (`GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `RESEND_API_KEY`, `APIFY_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `INGEST_SECRET`, `CRON_SECRET`). Set a 14-day grace period where both old and new are accepted (where the provider supports it) to allow for staged rollover without downtime.
+- **Disable Supabase legacy JWT-based API keys.** Once Phase 2 is shipped and no caller depends on the legacy `anon` / `service_role` JWTs, click "Disable JWT-based API keys" on the Supabase API page. This permanently revokes the leaked legacy keys and prevents fallback to them.
+- **Documentation gate.** `CLAUDE.md` updated 2026-04-28 with a new "Secret Hygiene" section listing what may and may not appear in `VITE_*`. New rule: any new third-party integration PR that adds a `VITE_*_API_KEY`-style env var must be rejected at review.
+
+**Validation gates (Stage S Done means all of these pass):**
+
+1. No `import.meta.env.VITE_*_API_KEY` or `import.meta.env.VITE_*_SECRET` or `import.meta.env.VITE_*_TOKEN` reference exists in any file under `src/` (excluding the documented allowlist).
+2. `grep -rn "import.meta.env.VITE_" src/ --include="*.ts" --include="*.tsx"` returns only Supabase keys, model name constants, and non-credential URLs.
+3. The production Vite bundle, when grep'd for known credential prefixes (`AIza`, `re_`, `apify_api`), returns zero matches.
+4. Every external API key in Vercel has a matching budget alert and (where supported) a referrer / IP / API restriction in the provider console.
+5. Every browser-side feature that previously called Gemini directly works via its new `api/` endpoint, with auth gating verified.
+6. CI check (Phase 3) blocks any future PR that re-introduces a `VITE_*_API_KEY`-style pattern.
+
+**Decisions:** see D-010.
+
+**Cross-stage impact.** This stage touches Stages 5 (entity extraction — server-side already, unaffected), 8 (cross-connection — currently browser-side, must move), and 13 (surfacing / RAG — currently browser-side, must move). Update each affected stage's open list when Phase 2 lands.
+
+---
+
 ## Decision Log
 
 Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
@@ -307,6 +372,12 @@ Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
 **Rationale:** Silent partial saves were the cause of the 58 missing-chunk sources and 20 null-embedding rows found in the Stage 3 audit. Surfacing failure in source state makes them retryable.
 **Status:** Active.
 
+### D-010 — Vendor credentials are server-side only; `VITE_*` is publishing
+**Date:** 2026-04-28
+**Decision:** Going forward, no third-party vendor credential (Gemini, YouTube, OpenAI, Anthropic, Apify, Resend, or any future provider) may be read via `import.meta.env.VITE_*` in browser code. Vendor credentials live exclusively in `process.env.<NAME>` and are read only by `api/` serverless functions. The browser invokes vendor capabilities via internal `/api/...` endpoints. The only `VITE_*` credentials permitted are the Supabase publishable key (`VITE_SUPABASE_ANON_KEY`) and the public project URL (`VITE_SUPABASE_URL`). All other `VITE_*` values must be non-credential config (URLs, model names, version strings).
+**Rationale:** Vite inlines every `VITE_*` value into the production JavaScript bundle in plain text. This is the documented Vite behaviour and is correct for genuinely public values like the Supabase publishable key, which is designed to be safe in the browser when RLS is enforced. It is catastrophic for vendor credentials, which carry billing capability and have no equivalent of RLS. The 2026-04-28 incident (Gemini key scraped from production bundle, project suspended, ~£100 in unauthorised charges) is the proof. The cost of restating this rule explicitly is zero; the cost of a repeat is another suspension.
+**Status:** Active.
+
 ### D-006 — Stage 1 ↔ Stage 2 boundary kept as scoped; cross-cutting work moved
 **Date:** 2026-04-26
 **Decision:** Stage 1 produces `CapturedSource`. The full "adapters never write to the DB directly" cutover lands in Stage 2 because Stage 2 owns persistence. The lowercase `source_type` rename across the database-facing code also lands in Stage 2. Stage 0 Item 2 (canonical Gemini wrapper) must complete before Adapter 3 (file upload). Stage 0 logging helper must complete before Stage 1 final sign-off; until then, Stage 1 adapters log via a structured `console.info` placeholder.
@@ -354,12 +425,18 @@ Themes that span multiple stages and should be tracked holistically.
 - **Browser vs serverless divergence.** Several stages (3, 5, 6, 7) implement the same logic in two places. The hardening goal is to consolidate to one path. Track this in each stage's open list.
 - **Idempotency across webhooks.** Affects Stage 1 (capture entry points) and Stage 2 (persistence). Resolved in Stage 2.
 - **Failure policy.** Affects every stage. Defined once in Stage 0 Item 5, applied per-stage.
+- **Secret hygiene + browser exposure.** Owned by Stage S. Affects any stage that calls a paid third-party API from the browser today (Stages 8 cross-connection, 13 surfacing/RAG, plus the `src/services/gemini.ts` callers in summarisation and reranking). Every new third-party integration must consult `CLAUDE.md` Secret Hygiene before adding env vars.
 
 ---
 
 ## Changelog
 
 Reverse chronological. Every meaningful update goes here.
+
+### 2026-04-28
+- **Stage S — Secret hygiene + client-server boundary. Created and partially shipped (incident response).** New cross-cutting hardening stage added in response to a confirmed credential leak on 2026-04-28: a third party scraped `VITE_GEMINI_API_KEY` from the production browser bundle at `connectsynapse.com`, used it to spin up unauthorised resources in the GCP project that backed Synapse's Gemini calls, generated approximately £100 in charges, and triggered a Google Trust & Safety suspension of the project (`gen-lang-client-0813591585`, "Reg Tracker"). Incident response shipped the same day: all seven Vercel-stored secrets rotated (`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`, `YOUTUBE_API_KEY`, `APIFY_API_KEY`); Supabase migrated to the new publishable + secret key system; new Gemini key created in a fresh `synapse-prod` GCP project with HTTP referrer restrictions, API restrictions, and a £20/month budget alert; `VITE_GEMINI_API_KEY` removed from Vercel and `.env.local`; production redeployed and verified. Phase 2 (move 7 `src/` files calling Gemini directly to new `api/gemini/*` endpoints; same for the 2 `src/` files calling YouTube directly) is open and is the actual architectural fix — until it lands, Ask chat / RAG / source summaries / cross-connections / query classifier / reranker / persona simulation are temporarily broken. Phase 3 (CI check banning `VITE_*_API_KEY`-style names, bundle scan, quarterly rotation cadence, disabling Supabase legacy JWT keys) tracked in the stage doc. Decision D-010 records the new rule: vendor credentials are server-side only. Billing dispute filed with Google Cloud requesting refund of the unauthorised charges.
+- **Root-cause analysis (four layers) recorded.** The leak was not a one-off mistake; it was the predictable outcome of an architectural drift between March 2026 (when v2 was a pure-frontend SPA and `VITE_GEMINI_API_KEY` was the correct pattern) and late April 2026 (when `api/` serverless functions had grown into the real backend but the original `src/` Gemini callers were never migrated). `CLAUDE.md` reinforced the unsafe pattern by listing `VITE_GEMINI_API_KEY` as a required env var. No defensive layers (HTTP referrer restriction, budget alert, CI bundle scan, secret rotation cadence) existed to catch the leak before exploitation. Stage S addresses all four layers explicitly so the same shape of incident does not recur with the next service.
+- **`CLAUDE.md` updated.** New "Secret Hygiene" section under Critical Rules enumerates exactly which credentials are safe in `VITE_*` (Supabase publishable + non-credential config) and which are not (any vendor API key, the Supabase service role key, any webhook / cron / ingest secret). Deployment section's required-env-vars list rewritten: `VITE_GEMINI_API_KEY` marked as deprecated and "must not exist"; full list of server-only env vars added (`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `RESEND_API_KEY`, `APIFY_API_KEY`, `INGEST_SECRET`, `CRON_SECRET`, `CIRCLEBACK_WEBHOOK_SECRET`). Old single-bullet "use `VITE_` prefix for client-side access" rule replaced with a pointer to the new Secret Hygiene section.
 
 ### 2026-04-27
 - **Stage 3 — Chunking + chunk embeddings. Done.** Canonical chunker landed at [src/utils/chunking.ts](../src/utils/chunking.ts) with paste-in copies in the two serverless paths. Structural-first split (Markdown → paragraphs → sentences → hard cap), 2000-char target, 100-char overlap, 3000-char ceiling. Embedding is now `${title}\n\n${chunk}`. Chunk write paths (`saveChunks`, `saveTranscriptChunks`) upsert with `ON CONFLICT DO NOTHING`. Chunking failure → source `failed`; embedding failure → source `degraded`. Schema migration `stage3_chunks_constraints_and_index` applied: unique constraint on `(source_id, chunk_index)`, `source_id NOT NULL`, dropped `token_count`, HNSW halfvec index. `match_source_chunks` RPC updated. Backfill ran against production: 62 sources processed, 1,360 chunks written, 0 failures. Replay run was a no-op. All five validation gates passed. Embedding-dimension fact corrected across docs (3072-dim, not 768). Decisions D-007 / D-008 / D-009 recorded.

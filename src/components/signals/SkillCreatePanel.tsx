@@ -28,7 +28,7 @@ type SkillInputMode = 'text' | 'url' | 'document' | 'transcript' | 'youtube'
 interface SkillCreateRequest {
   title?: string
   content: string
-  sourceType: 'Note' | 'Document' | 'Meeting' | 'YouTube'
+  sourceType: 'paste' | 'file' | 'meeting' | 'youtube' | 'url'
   sourceUrl?: string
   inputType: SkillInputMode
 }
@@ -146,7 +146,7 @@ export function SkillCreatePanel({
       return {
         title: textTitle.trim() || undefined,
         content: textContent.trim(),
-        sourceType: 'Note',
+        sourceType: 'paste',
         inputType: 'text',
       }
     }
@@ -178,7 +178,7 @@ export function SkillCreatePanel({
       return {
         title: urlTitle.trim() || body.title || undefined,
         content: body.content?.trim() ?? '',
-        sourceType: 'Document',
+        sourceType: 'url',
         sourceUrl: body.url,
         inputType: 'url',
       }
@@ -188,7 +188,7 @@ export function SkillCreatePanel({
       return {
         title: documentTitle.trim() || documentFile?.name || undefined,
         content: documentContent.trim(),
-        sourceType: 'Document',
+        sourceType: 'file',
         inputType: 'document',
       }
     }
@@ -197,7 +197,7 @@ export function SkillCreatePanel({
       return {
         title: transcriptTitle.trim() || undefined,
         content: transcriptContent.trim(),
-        sourceType: 'Meeting',
+        sourceType: 'meeting',
         inputType: 'transcript',
       }
     }
@@ -221,7 +221,7 @@ export function SkillCreatePanel({
     return {
       title: resolvedTitle || undefined,
       content: transcript.transcript.trim(),
-      sourceType: 'YouTube',
+      sourceType: 'youtube',
       sourceUrl: videoUrl,
       inputType: 'youtube',
     }

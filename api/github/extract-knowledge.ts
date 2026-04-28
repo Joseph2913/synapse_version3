@@ -46,6 +46,29 @@ interface QueueItem {
 
 // ─── AUTH ──────────────────────────────────────────────────────────────────────
 
+
+// ─── Structured logging ─────────────────────────────────────────────────────
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 function verifyCronAuth(req: VercelRequest): boolean {
   if (req.headers['x-vercel-signature']) return true;
   if (!CRON_SECRET) return true;
@@ -94,7 +117,7 @@ async function extractKnowledgeForItem(
       .insert({
         user_id: item.user_id,
         title: sourceTitle,
-        source_type: 'Document',
+        source_type: 'file',
         source_url: item.repo_url,
         content: digestContent.slice(0, MAX_CONTENT_CHARS),
         metadata: {
@@ -157,7 +180,7 @@ async function extractKnowledgeForItem(
       },
       source: {
         sourceId,
-        sourceType: 'Document',
+        sourceType: 'file',
         sourceUrl: item.repo_url,
         sourceLabel: sourceTitle,
       },
@@ -201,7 +224,7 @@ async function extractKnowledgeForItem(
     await supabase.from('extraction_sessions').insert({
       user_id: item.user_id,
       source_name: sourceTitle,
-      source_type: 'Document',
+      source_type: 'file',
       source_content_preview: digestContent.slice(0, 300),
       extraction_mode: extractionMode,
       anchor_emphasis: anchorEmphasis,

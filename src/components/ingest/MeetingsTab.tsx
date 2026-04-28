@@ -65,7 +65,7 @@ export function MeetingsTab() {
     supabase
       .from('knowledge_sources')
       .select('id', { count: 'exact', head: true })
-      .eq('source_type', 'Meeting')
+      .eq('source_type', 'meeting')
       .then(({ count }) => {
         setCirclebackConnected((count ?? 0) > 0)
       })
@@ -87,7 +87,7 @@ export function MeetingsTab() {
     async (meeting: MeetingSource, config: ExtractionConfig) => {
       await start(meeting.transcript, config, {
         title: meeting.title,
-        sourceType: 'Meeting',
+        sourceType: 'meeting',
       })
     },
     [start]

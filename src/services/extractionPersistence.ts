@@ -6,6 +6,9 @@ import type {
   ExtractedRelationship,
 } from '../types/extraction'
 import { parseParticipants } from '../utils/parseParticipants'
+import { persistSource } from './persistSource'
+import { normaliseSourceType } from '../config/sourceTypes'
+import type { CapturedSource, CaptureSourceType } from '../types/capture'
 
 // --- Custom Error ---
 
@@ -45,38 +48,56 @@ function deriveTitle(content: string): string {
 
 // --- Save Source ---
 
+const CAPTURE_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'paste', 'url', 'file', 'youtube', 'meeting',
+])
+
+/**
+ * Stage 2 — saveSource() now routes through persistSource().
+ *
+ * Callers still pass a SourceMetadata where `sourceType` may be in the legacy
+ * mixed-case form. We translate via normaliseSourceType() and only proceed if
+ * the result is one of the five Stage 1 capture types — anything else (e.g.
+ * 'research', 'github') has its own dedicated server-side write path and
+ * should not be coming through this browser helper.
+ */
 export async function saveSource(
   userId: string,
   content: string,
   metadata: SourceMetadata
 ): Promise<string> {
-  const row: Record<string, unknown> = {
-    user_id: userId,
-    title: metadata.title || deriveTitle(content),
+  const lowered = normaliseSourceType(metadata.sourceType)
+  if (!lowered || !CAPTURE_SOURCE_TYPES.has(lowered)) {
+    throw new PersistenceError(
+      `saveSource() does not support source_type='${metadata.sourceType}' from the browser`,
+      { received: metadata.sourceType, allowed: Array.from(CAPTURE_SOURCE_TYPES) },
+    )
+  }
+
+  const sourceType = lowered as CaptureSourceType
+  const title = metadata.title || deriveTitle(content)
+
+  // Build a CapturedSource-shaped object so persistSource() can apply the
+  // right dedup identity rule (canonical URL for url/youtube, content_hash
+  // for paste/file, circleback id for meeting).
+  const meetingMetadata = sourceType === 'meeting'
+    ? { participants: parseParticipants(content) ?? null, ingested_via: 'quick_capture' }
+    : { ingested_via: 'quick_capture' }
+
+  const captured: CapturedSource = {
     content,
-    source_type: metadata.sourceType,
-    source_url: metadata.sourceUrl || null,
-    metadata: {
-      ingested_via: 'quick_capture',
-    },
+    title,
+    source_type: sourceType,
+    source_url: metadata.sourceUrl ?? null,
+    metadata: meetingMetadata,
   }
 
-  // Parse participants for meeting sources
-  if (metadata.sourceType === 'Meeting') {
-    const participants = parseParticipants(content)
-    if (participants) {
-      row.participants = participants
-    }
+  try {
+    const result = await persistSource(captured, userId)
+    return result.sourceId
+  } catch (err) {
+    throw new PersistenceError('Failed to save source', err)
   }
-
-  const { data, error } = await supabase
-    .from('knowledge_sources')
-    .insert(row)
-    .select('id')
-    .single()
-
-  if (error) throw new PersistenceError('Failed to save source', error)
-  return data.id
 }
 
 // --- Save Nodes ---

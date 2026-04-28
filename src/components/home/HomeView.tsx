@@ -32,12 +32,14 @@ interface SourceBadgeInfo {
 }
 
 const SOURCE_BADGE_MAP: Record<string, SourceBadgeInfo> = {
-  YouTube:  { label: 'YouTube',   icon: <Youtube size={14} />,    logo: PROVIDER_CONFIG.youtube?.logo ?? null,  color: '#ef4444', bg: '#fef2f2' },
-  Document: { label: 'Documents', icon: <FileText size={14} />,   logo: null,                                   color: '#d97706', bg: '#fffbeb' },
-  Note:     { label: 'Notes',     icon: <StickyNote size={14} />, logo: null,                                   color: '#10b981', bg: '#f0fdf4' },
-  Research: { label: 'Research',  icon: <BookOpen size={14} />,   logo: null,                                   color: '#8b5cf6', bg: '#faf5ff' },
-  API:      { label: 'API',       icon: <Globe size={14} />,      logo: null,                                   color: '#6366f1', bg: '#eef2ff' },
-  Email:    { label: 'Email',     icon: <Mail size={14} />,       logo: PROVIDER_CONFIG.microsoft?.logo ?? null, color: '#0078d4', bg: '#eff6ff' },
+  youtube:  { label: 'YouTube',   icon: <Youtube size={14} />,    logo: PROVIDER_CONFIG.youtube?.logo ?? null,  color: '#ef4444', bg: '#fef2f2' },
+  file:     { label: 'Documents', icon: <FileText size={14} />,   logo: null,                                   color: '#d97706', bg: '#fffbeb' },
+  paste:    { label: 'Notes',     icon: <StickyNote size={14} />, logo: null,                                   color: '#10b981', bg: '#f0fdf4' },
+  url:      { label: 'Web',       icon: <Globe size={14} />,      logo: null,                                   color: '#0ea5e9', bg: '#eff6ff' },
+  research: { label: 'Research',  icon: <BookOpen size={14} />,   logo: null,                                   color: '#8b5cf6', bg: '#faf5ff' },
+  github:   { label: 'GitHub',    icon: <FileText size={14} />,   logo: PROVIDER_CONFIG.github?.logo ?? null,   color: '#24292f', bg: '#f6f8fa' },
+  api:      { label: 'API',       icon: <Globe size={14} />,      logo: null,                                   color: '#6366f1', bg: '#eef2ff' },
+  email:    { label: 'Email',     icon: <Mail size={14} />,       logo: PROVIDER_CONFIG.microsoft?.logo ?? null, color: '#0078d4', bg: '#eff6ff' },
 }
 
 function getSourceBadge(sourceType: string): SourceBadgeInfo {
@@ -70,7 +72,7 @@ function useMeetingProviders(): ResolvedSource[] {
       const { data } = await supabase
         .from('knowledge_sources')
         .select('metadata')
-        .eq('source_type', 'Meeting')
+        .eq('source_type', 'meeting')
 
       if (!data) return
 
@@ -279,7 +281,7 @@ export function HomeView() {
   const snapshot = dashboard.snapshot
 
   // Source badges (exclude Meeting — replaced by providers)
-  const activeSourceTypes = (snapshot?.sourceTypeCounts ?? []).filter(s => s.count > 0 && s.source_type !== 'Meeting')
+  const activeSourceTypes = (snapshot?.sourceTypeCounts ?? []).filter(s => s.count > 0 && s.source_type !== 'meeting')
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-content)' }}>

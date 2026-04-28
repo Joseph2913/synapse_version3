@@ -5,7 +5,13 @@ export type EntityType =
   | 'Lesson' | 'Document' | 'Event' | 'Location' | 'Technology'
   | 'Product' | 'Metric' | 'Hypothesis' | 'Anchor'
 
-export type SourceType = 'Meeting' | 'YouTube' | 'Research' | 'Note' | 'Document' | 'GitHub'
+// Canonical lowercase DB strings (Stage 2 rename, 2026-04-27).
+// 'paste' / 'url' / 'file' / 'youtube' / 'meeting' come from Stage 1 capture
+// adapters. 'research' is written by api/microsoft/extract-knowledge.ts for
+// non-meeting Microsoft resources. 'github' is written by api/ingest/session.ts
+// for MCP / Claude Code session ingestion. Both keep their own DB type until
+// a future stage gives them Stage 1 adapters.
+export type SourceType = 'paste' | 'url' | 'file' | 'youtube' | 'meeting' | 'research' | 'github'
 
 export type RelationType =
   | 'leads_to' | 'supports' | 'blocks' | 'depends_on' | 'part_of'

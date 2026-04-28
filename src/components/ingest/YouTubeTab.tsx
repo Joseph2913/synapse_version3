@@ -122,7 +122,7 @@ export function YouTubeTab() {
 
       await start(transcript, config, {
         title,
-        sourceType: 'YouTube',
+        sourceType: 'youtube',
         sourceUrl: videoUrl.trim(),
       })
     } catch (err) {

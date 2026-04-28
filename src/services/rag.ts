@@ -234,11 +234,11 @@ async function enrichChunks(chunks: SemanticChunkResult[]): Promise<EnrichedChun
         const t = source?.title?.trim()
         const isPlaceholder = !t || /^(untitled|untitled meeting|untitled document|transcript)$/i.test(t)
         if (!isPlaceholder) return t!
-        if (source?.source_type === 'Meeting') return 'Meeting Recording'
-        if (source?.source_type === 'YouTube') return 'YouTube Video'
+        if (source?.source_type === 'meeting') return 'Meeting Recording'
+        if (source?.source_type === 'youtube') return 'YouTube Video'
         return 'Unknown Source'
       })(),
-      sourceType: source?.source_type ?? 'Document',
+      sourceType: source?.source_type ?? 'file',
       sourceCreatedAt: source?.created_at ?? new Date().toISOString(),
       sourceSummary: source?.summary ?? null,
     }
