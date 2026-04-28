@@ -1,6 +1,5 @@
 import type { YouTubeVideo } from '../types/youtube'
-
-const YOUTUBE_API_KEY = import.meta.env.VITE_YOUTUBE_API_KEY as string | undefined
+import { callApi } from './apiClient'
 
 // --- URL Parsing ---
 
@@ -35,24 +34,12 @@ export function generateSynapseCode(): string {
 export async function fetchPlaylistMetadata(
   playlistId: string
 ): Promise<{ name: string; videoCount: number; thumbnailUrl?: string } | null> {
-  if (!YOUTUBE_API_KEY) return null
-
   try {
-    const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&id=${playlistId}&key=${YOUTUBE_API_KEY}`
+    const { result } = await callApi<{ result: { name: string; videoCount: number; thumbnailUrl?: string } | null }>(
+      '/api/youtube/lookup',
+      { kind: 'playlist-metadata', playlistId },
     )
-
-    if (!response.ok) return null
-
-    const data = await response.json()
-    const item = data.items?.[0]
-    if (!item) return null
-
-    return {
-      name: item.snippet.title,
-      videoCount: item.contentDetails.itemCount,
-      thumbnailUrl: item.snippet.thumbnails?.medium?.url,
-    }
+    return result
   } catch (err) {
     console.warn('[youtube] Failed to fetch playlist metadata:', err)
     return null
@@ -65,47 +52,27 @@ export async function fetchPlaylistVideos(
   playlistId: string,
   maxResults: number = 50
 ): Promise<YouTubeVideo[]> {
-  if (!YOUTUBE_API_KEY) return []
-
-  const videos: YouTubeVideo[] = []
-  let pageToken: string | undefined
-
   try {
-    do {
-      const url = new URL('https://www.googleapis.com/youtube/v3/playlistItems')
-      url.searchParams.set('part', 'snippet,contentDetails')
-      url.searchParams.set('playlistId', playlistId)
-      url.searchParams.set('maxResults', '50')
-      url.searchParams.set('key', YOUTUBE_API_KEY)
-      if (pageToken) url.searchParams.set('pageToken', pageToken)
-
-      const response = await fetch(url.toString())
-      if (!response.ok) break
-
-      const data = await response.json()
-      for (const item of data.items ?? []) {
-        videos.push({
-          video_id: item.contentDetails.videoId,
-          video_title: item.snippet.title,
-          video_url: `https://www.youtube.com/watch?v=${item.contentDetails.videoId}`,
-          thumbnail_url: item.snippet.thumbnails?.medium?.url ?? null,
-          published_at: item.contentDetails.videoPublishedAt ?? null,
-        })
-      }
-
-      pageToken = data.nextPageToken
-    } while (pageToken && videos.length < maxResults)
+    const { videos } = await callApi<{ videos: YouTubeVideo[] }>(
+      '/api/youtube/lookup',
+      { kind: 'playlist-videos', playlistId, maxResults },
+    )
+    return videos
   } catch (err) {
     console.warn('[youtube] Failed to fetch playlist videos:', err)
+    return []
   }
-
-  return videos.slice(0, maxResults)
 }
 
 // --- API Key Check ---
 
+/**
+ * Returns true. The YouTube API key now lives server-side; the browser
+ * cannot meaningfully check for its presence. Kept as an export so existing
+ * UI gating call sites do not need to change.
+ */
 export function hasYouTubeApiKey(): boolean {
-  return !!YOUTUBE_API_KEY
+  return true
 }
 
 // --- Video URL Parsing ---
@@ -130,14 +97,12 @@ export function parseVideoUrl(url: string): string | null {
 // --- Video Metadata ---
 
 export async function fetchVideoTitle(videoId: string): Promise<string | null> {
-  if (!YOUTUBE_API_KEY) return null
   try {
-    const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${YOUTUBE_API_KEY}`
+    const { title } = await callApi<{ title: string | null }>(
+      '/api/youtube/lookup',
+      { kind: 'video-title', videoId },
     )
-    if (!response.ok) return null
-    const data = await response.json()
-    return (data.items?.[0]?.snippet?.title as string | undefined) ?? null
+    return title
   } catch {
     return null
   }

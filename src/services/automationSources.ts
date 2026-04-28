@@ -365,47 +365,6 @@ export async function fetchQueueSummary(): Promise<QueueSummary> {
 
 // ─── Fetch Ingested Content ───────────────────────────────────────────────────
 
-// Calls YouTube Data API v3 from the browser with the user's own API key.
-async function fetchYTPlaylistVideoIds(ytPlaylistId: string, apiKey: string): Promise<string[]> {
-  const videoIds: string[] = []
-  let pageToken: string | undefined
-
-  for (let page = 0; page < 4; page++) {
-    const params = new URLSearchParams({
-      part: 'contentDetails',
-      playlistId: ytPlaylistId,
-      maxResults: '50',
-      key: apiKey,
-    })
-    if (pageToken) params.set('pageToken', pageToken)
-
-    try {
-      const res = await fetch(
-        `https://www.googleapis.com/youtube/v3/playlistItems?${params}`,
-        { signal: AbortSignal.timeout(10000) }
-      )
-      if (!res.ok) break
-
-      const data = await res.json() as {
-        items?: Array<{ contentDetails?: { videoId?: string } }>
-        nextPageToken?: string
-      }
-
-      for (const item of data.items ?? []) {
-        const videoId = item.contentDetails?.videoId
-        if (videoId) videoIds.push(videoId)
-      }
-
-      pageToken = data.nextPageToken
-      if (!pageToken) break
-    } catch {
-      break
-    }
-  }
-
-  return videoIds
-}
-
 function mapQueueRows(rows: Record<string, unknown>[]): IngestedItem[] {
   return rows.map(item => ({
     id: item.id as string,
@@ -463,53 +422,12 @@ export async function fetchIngestedContent(
 
   // ── YouTube playlists ────────────────────────────────────────────────────
   // Strategy:
-  //   Tier 1 – Client-side YouTube API via VITE_YOUTUBE_API_KEY env var.
-  //            Works in all environments (local Vite dev, production).
-  //            Also backfills playlist_id on historical queue rows.
-  //   Tier 2 – Server-side Vercel endpoint (YOUTUBE_API_KEY server env var).
-  //            Fallback for when no client-side key is configured.
-  //   Tier 3 – playlist_id column only (post-migration rows, no API needed).
+  //   Tier 1 – Server-side Vercel endpoint (YOUTUBE_API_KEY server env var).
+  //            Backfills playlist_id on historical queue rows and returns the
+  //            ingested list.
+  //   Tier 2 – playlist_id column only (post-migration rows, no API needed).
 
-  // Get the YouTube playlist ID from DB
-  const plRes = await supabase
-    .from('youtube_playlists')
-    .select('playlist_id')
-    .eq('id', sourceId)
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  const ytPlaylistId = (plRes.data as { playlist_id: string } | null)?.playlist_id
-
-  // Helper: backfill playlist_id on existing rows then return ingested list
-  const backfillAndFetch = async (videoIds: string[]): Promise<IngestedItem[]> => {
-    if (videoIds.length === 0) return []
-    await supabase
-      .from('youtube_ingestion_queue')
-      .update({ playlist_id: sourceId })
-      .eq('user_id', user.id)
-      .in('video_id', videoIds)
-      .is('playlist_id', null)
-    const { data } = await supabase
-      .from('youtube_ingestion_queue')
-      .select('id, video_title, created_at, nodes_created, edges_created')
-      .eq('user_id', user.id)
-      .in('video_id', videoIds)
-      .eq('status', 'completed')
-      .order('created_at', { ascending: false })
-      .limit(50)
-    return mapQueueRows((data ?? []) as Record<string, unknown>[])
-  }
-
-  // Tier 1: client-side YouTube API using VITE_YOUTUBE_API_KEY
-  const viteApiKey = (import.meta.env.VITE_YOUTUBE_API_KEY as string | undefined) ?? null
-  if (ytPlaylistId && viteApiKey) {
-    const videoIds = await fetchYTPlaylistVideoIds(ytPlaylistId, viteApiKey)
-    if (videoIds.length > 0) {
-      return backfillAndFetch(videoIds)
-    }
-  }
-
-  // Tier 2: server-side endpoint (Vercel deployment / vercel dev)
+  // Tier 1: server-side endpoint (Vercel deployment / vercel dev)
   try {
     const { data: { session } } = await supabase.auth.getSession()
     const authToken = session?.access_token
@@ -535,7 +453,7 @@ export async function fetchIngestedContent(
     }
   } catch { /* not available in local Vite dev — fall through */ }
 
-  // Tier 3: playlist_id column only (catches post-migration rows, no API needed)
+  // Tier 2: playlist_id column only (catches post-migration rows, no API needed)
   const { data: newRows } = await supabase
     .from('youtube_ingestion_queue')
     .select('id, video_title, created_at, nodes_created, edges_created')
