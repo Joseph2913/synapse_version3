@@ -59,7 +59,7 @@ export function SourceCard({ source, isSelected, onClick, index = 0 }: SourceCar
         {/* Left: icon + name */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <ProviderIcon
-            sourceType={source.category === 'microsoft' ? 'Research' : source.category === 'meeting' ? 'Meeting' : source.category === 'github' ? 'Research' : 'YouTube'}
+            sourceType={source.category === 'microsoft' ? 'research' : source.category === 'meeting' ? 'meeting' : source.category === 'github' ? 'github' : 'youtube'}
             provider={source.provider ?? (source.category === 'youtube-playlist' ? 'youtube' : source.category === 'microsoft' ? 'microsoft' : source.category === 'github' ? 'github' : undefined)}
             size={32}
           />

@@ -193,7 +193,7 @@ export function useExtraction(): UseExtractionReturn {
         const sourceName = metadata?.title || deriveQuickTitle(content)
         const saveResult = await saveNodes(userId, reviewedEntities, sourceId, {
           sourceName,
-          sourceType: metadata?.sourceType || 'Note',
+          sourceType: metadata?.sourceType || 'paste',
           sourceUrl: metadata?.sourceUrl,
         }, dedupResult.exactMatches)
 
@@ -342,7 +342,7 @@ export function useExtraction(): UseExtractionReturn {
 
         await saveExtractionSession(userId, {
           sourceName,
-          sourceType: metadata?.sourceType || 'Note',
+          sourceType: metadata?.sourceType || 'paste',
           contentPreview: content,
           extractionMode: config?.mode || 'comprehensive',
           anchorEmphasis: config?.anchorEmphasis || 'standard',

@@ -129,7 +129,7 @@ export async function runHeadlessExtraction(
   const sourceName = metadata.title || deriveQuickTitle(content)
   const saveResult = await saveNodes(userId, reviewEntities, sourceId, {
     sourceName,
-    sourceType: metadata.sourceType || 'Note',
+    sourceType: metadata.sourceType || 'paste',
     sourceUrl: metadata.sourceUrl,
   }, dedupResult.exactMatches)
 
@@ -336,7 +336,7 @@ export async function runHeadlessExtraction(
 
   saveExtractionSession(userId, {
     sourceName,
-    sourceType: metadata.sourceType || 'Note',
+    sourceType: metadata.sourceType || 'paste',
     contentPreview: content,
     extractionMode: config.mode,
     anchorEmphasis: config.anchorEmphasis,

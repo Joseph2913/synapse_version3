@@ -62,7 +62,7 @@ async function enrichChunksWithSources(chunks: SemanticChunkResult[]): Promise<E
       content: chunk.content,
       similarity: chunk.similarity,
       sourceTitle: source?.title?.trim() || 'Unknown Source',
-      sourceType: source?.source_type ?? 'Document',
+      sourceType: source?.source_type ?? 'file',
       sourceCreatedAt: source?.created_at ?? new Date().toISOString(),
       sourceSummary: source?.summary ?? null,
     }

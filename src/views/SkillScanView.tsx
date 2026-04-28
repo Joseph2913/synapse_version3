@@ -93,7 +93,7 @@ interface ScanConfig {
 }
 
 const DEFAULT_CONFIG: ScanConfig = {
-  source_types: ['YouTube', 'Meeting', 'Document', 'Research'],
+  source_types: ['youtube', 'meeting', 'file', 'research'],
   min_criteria_pass: 3,
   min_relevance: 0.20,
   limit: 60,
@@ -102,7 +102,7 @@ const DEFAULT_CONFIG: ScanConfig = {
 
 type ScanState = 'idle' | 'loading' | 'complete' | 'error'
 
-const SOURCE_TYPE_OPTIONS = ['YouTube', 'Meeting', 'Document', 'Research']
+const SOURCE_TYPE_OPTIONS = ['youtube', 'meeting', 'file', 'research']
 
 const LOADING_MESSAGES = [
   'Assembling your knowledge graph data...',

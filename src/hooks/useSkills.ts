@@ -165,7 +165,7 @@ export function useSkills(): UseSkillsReturn {
               return {
                 id: src.id,
                 title: src.title ?? 'Untitled',
-                source_type: src.source_type ?? 'Document',
+                source_type: src.source_type ?? 'file',
                 created_at: src.created_at,
                 contribution: ss.contribution as SkillWithSources['contributing_sources'][0]['contribution'],
               }

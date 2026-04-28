@@ -477,7 +477,7 @@ export function CaptureView() {
   // ── Extract triggers ──────────────────────────────────────────────────────
   const handleTextExtract = useCallback(async () => {
     if (!textContent.trim()) return
-    await start(textContent.trim(), buildConfig(), { title: textTitle.trim() || undefined, sourceType: 'Note' })
+    await start(textContent.trim(), buildConfig(), { title: textTitle.trim() || undefined, sourceType: 'paste' })
   }, [textContent, textTitle, buildConfig, start])
 
   const handleUrlExtract = useCallback(async () => {
@@ -504,7 +504,7 @@ export function CaptureView() {
       if (!data.content?.trim()) { setUrlError('No readable content found at this URL.'); setUrlFetching(false); return }
       const isYT = url.includes('youtube.com/watch') || url.includes('youtu.be/')
       const content = data.title ? `# ${data.title}\nSource: ${data.url}\n\n${data.content}` : `Source: ${data.url}\n\n${data.content}`
-      await start(content, buildConfig(), { title: data.title, sourceType: isYT ? 'YouTube' : 'Article', sourceUrl: data.url })
+      await start(content, buildConfig(), { title: data.title, sourceType: isYT ? 'youtube' : 'url', sourceUrl: data.url })
     } catch (err) {
       setUrlError(err instanceof Error ? err.message : 'Failed to fetch URL content')
     } finally {
@@ -525,12 +525,12 @@ export function CaptureView() {
 
   const handleDocExtract = useCallback(async () => {
     if (!docContent.trim()) return
-    await start(docContent.trim(), buildConfig(), { title: docFile?.name, sourceType: 'Document' })
+    await start(docContent.trim(), buildConfig(), { title: docFile?.name, sourceType: 'file' })
   }, [docContent, docFile, buildConfig, start])
 
   const handleTranscriptExtract = useCallback(async () => {
     if (!transcriptContent.trim()) return
-    await start(transcriptContent.trim(), buildConfig(), { title: meetingTitle.trim() || undefined, sourceType: 'Meeting' })
+    await start(transcriptContent.trim(), buildConfig(), { title: meetingTitle.trim() || undefined, sourceType: 'meeting' })
   }, [transcriptContent, meetingTitle, buildConfig, start])
 
   // ── Review ────────────────────────────────────────────────────────────────
@@ -595,10 +595,10 @@ export function CaptureView() {
               : captureMode === 'transcript' ? meetingTitle
               : captureMode === 'document' ? (docFile?.name ?? '')
               : ''
-            const sourceType = captureMode === 'text' ? 'Note'
-              : captureMode === 'url' ? 'Article'
-              : captureMode === 'document' ? 'Document'
-              : 'Meeting'
+            const sourceType = captureMode === 'text' ? 'paste'
+              : captureMode === 'url' ? 'url'
+              : captureMode === 'document' ? 'file'
+              : 'meeting'
             const ctx = buildPostExtractionContext({
               sourceId: state.sourceId!,
               sourceTitle: title || 'Untitled',

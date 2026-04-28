@@ -407,7 +407,7 @@ function EntityTablePanel({
                   {/* Source */}
                   {entity.sourceName && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3, fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--color-text-secondary)' }}>
-                      <span>{getSourceConfig(entity.sourceType ?? 'Note').icon}</span>
+                      <span>{getSourceConfig(entity.sourceType ?? 'paste').icon}</span>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entity.sourceName}</span>
                     </div>
                   )}

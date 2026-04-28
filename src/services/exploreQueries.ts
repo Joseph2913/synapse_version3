@@ -669,7 +669,7 @@ export async function fetchSourceCardDetail(
     return {
       sourceId: s.id,
       title: s.title || 'Untitled',
-      sourceType: s.source_type || 'Note',
+      sourceType: s.source_type || 'paste',
       summary,
       entities: [],
       connections: [],
@@ -826,7 +826,7 @@ export async function fetchSourceCardDetail(
       return {
         sourceId: rsId,
         title: meta?.title || 'Untitled',
-        sourceType: meta?.source_type || 'Note',
+        sourceType: meta?.source_type || 'paste',
         sharedEntityCount: data.count,
         crossConnections: data.connections,
       }
@@ -839,7 +839,7 @@ export async function fetchSourceCardDetail(
   return {
     sourceId: s.id,
     title: s.title || 'Untitled',
-    sourceType: s.source_type || 'Note',
+    sourceType: s.source_type || 'paste',
     summary,
     entities: entities.filter(e => !e.isAnchor),
     connections,

@@ -281,7 +281,7 @@ function enrichCitationsWithSnippets(
 function formatSourceContext(sources: KeywordSourceResult[]): string {
   if (sources.length === 0) return ''
   return sources
-    .map(s => `- "${s.title ?? 'Untitled'}" (${s.source_type ?? 'Document'}, ${new Date(s.created_at).toLocaleDateString()})`)
+    .map(s => `- "${s.title ?? 'Untitled'}" (${s.source_type ?? 'file'}, ${new Date(s.created_at).toLocaleDateString()})`)
     .join('\n')
 }
 
