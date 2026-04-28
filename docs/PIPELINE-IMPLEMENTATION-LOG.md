@@ -301,7 +301,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 > - [x] Step 3 — `src/services/reranker.ts` → `api/gemini/rerank.ts` (2026-04-28). Auth-gated, tsc clean.
 > - [x] Step 4 — `src/services/crossConnections.ts` → `api/gemini/cross-connect.ts` (2026-04-28). Auth-gated, tsc clean.
 > - [x] Step 5 — `src/services/simulate.ts` → `api/gemini/simulate.ts` (2026-04-28). Auth-gated, tsc clean. Endpoint accepts discriminated `kind: 'evidence' | 'synthesis'` payloads — prompts built server-side.
-> - [ ] Step 6 — `src/services/gemini.ts`
+> - [x] Step 6 — `src/services/gemini.ts` → 5 new endpoints (`embed`, `extract`, `generate-text`, `decompose-query`, `rag`) (2026-04-28). Auth-gated, tsc clean. Public API of `gemini.ts` preserved so all callers (rag, ragRouter, extractionPipeline, edgeEmbedding, useExtraction, digestEngine, manualSignals) keep working with no changes. RAG system-prompt construction moved server-side.
 > - [ ] Step 7 — `src/services/youtube.ts`
 > - [ ] Step 8 — `src/services/automationSources.ts`
 > - [ ] Step 9 — `src/components/modals/SettingsModal.tsx` (cosmetic)
