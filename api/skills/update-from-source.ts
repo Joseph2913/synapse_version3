@@ -376,7 +376,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('knowledge_nodes')
       .select('label, entity_type, description')
       .eq('user_id', userId)
-      .eq('entity_type', 'Anchor');
+      .eq('is_anchor', true);
 
     const anchors = (anchorNodes ?? []) as Array<{ label: string; entity_type: string; description: string | null }>;
 

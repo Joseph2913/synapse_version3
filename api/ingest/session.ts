@@ -314,6 +314,16 @@ async function runExtractionPipeline(params: {
       });
     }
 
+    // ── STEP 10: TRIGGER SKILLS DETECTION (fire-and-forget) ─────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/skills/process-source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.INGEST_SECRET ?? ''}` },
+        body: JSON.stringify({ user_id: userId, source_id: sourceId }),
+      }).catch(err => { console.warn('[ingest/session] Skills detection trigger failed (non-fatal):', err); });
+    }
+
     // ── COMPLETE ────────────────────────────────────────────────────────────
     await updateStatus('completed', {
       processing_completed_at: new Date().toISOString(),

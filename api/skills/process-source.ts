@@ -15,9 +15,10 @@ export const maxDuration = 60
 
 // ─── ENVIRONMENT ──────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? ''
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? ''
+const SUPABASE_URL = process.env.SUPABASE_URL!
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
+const INGEST_SECRET = process.env.INGEST_SECRET
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -34,21 +35,23 @@ const SIGNAL_WEIGHTS = {
 } as const
 
 const SOURCE_TYPE_CONFIDENCE: Record<string, number> = {
-  YouTube:  0.35,
-  Meeting:  0.65,
-  Document: 0.55,
-  Research: 0.40,
-  Note:     0.25,
-  Web:      0.30,
+  youtube:  0.35,
+  meeting:  0.65,
+  file:     0.55,
+  research: 0.40,
+  paste:    0.25,
+  url:      0.30,
+  github:   0.35,
 }
 
 const REINFORCEMENT_DELTAS: Record<string, number> = {
-  YouTube:  0.10,
-  Meeting:  0.20,
-  Document: 0.15,
-  Research: 0.10,
-  Note:     0.05,
-  Web:      0.08,
+  youtube:  0.10,
+  meeting:  0.20,
+  file:     0.15,
+  research: 0.10,
+  paste:    0.05,
+  url:      0.08,
+  github:   0.10,
 }
 
 const CURRENT_SCAN_VERSION = '1.0'
@@ -288,7 +291,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: 'Supabase not configured' })
   if (!GEMINI_API_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' })
 
-  const userId = await getUserFromToken(req)
+  // Accept user JWT or INGEST_SECRET (pipeline fire-and-forget)
+  let userId: string | null = null
+  const authHeader = (req.headers['authorization'] as string | undefined) ?? ''
+  if (INGEST_SECRET && authHeader === `Bearer ${INGEST_SECRET}`) {
+    userId = (req.body as Record<string, unknown>)?.user_id as string | null ?? null
+  } else {
+    userId = await getUserFromToken(req)
+  }
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
   const { source_id: sourceId } = req.body ?? {}
@@ -395,7 +405,7 @@ Return a JSON array with one object per candidate:
       const raw = await callGemini(EVAL_SYSTEM_PROMPT, userPrompt)
       evaluations = parseJSON<GeminiEvaluation[]>(raw) ?? []
     } catch (err) {
-      console.error('[process-source] Gemini eval failed:', err)
+      logError({ stage: 'skills:process-source', source_id: sourceId, user_id: userId, error: err instanceof Error ? err.message : String(err), reason: 'gemini_eval_failed' })
       return res.status(200).json({ source_id: sourceId, skills_created: 0, skills_reinforced: 0, clusters_evaluated: cappedClusters.length, clusters_passed_universal: 0, duration_ms: Date.now() - startTime, created: [], reinforced: [] })
     }
 
@@ -417,14 +427,14 @@ Return a JSON array with one object per candidate:
     // Collect all skill labels for batch processing
     const skillLabels = passing.map(p => p.eval.suggestedSkillLabel || p.cluster.label)
 
-    // Pass 1: Exact label match
+    // Pass 1: Exact title match
     const { data: existingSkills } = await supabase.from('knowledge_skills')
-      .select('id, label, confidence, status, exposure_level, evidence_count, related_anchor_ids')
+      .select('id, name, title, confidence, status, exposure_level, evidence_count, related_anchor_ids, source_ids')
       .eq('user_id', userId)
 
     const existingByLabel = new Map<string, typeof existingSkills extends Array<infer T> ? T : never>()
     for (const s of existingSkills ?? []) {
-      existingByLabel.set((s.label as string).toLowerCase(), s)
+      existingByLabel.set((s.title as string).toLowerCase(), s)
     }
 
     // Pass 2: Batch generate embeddings for semantic dedup
@@ -485,11 +495,8 @@ Return a JSON array with one object per candidate:
       // Check semantic match if no exact match
       if (!existingSkill && embedding) {
         for (const s of existingSkills ?? []) {
-          // Generate embedding for existing skill to compare (expensive — but needed for dedup)
-          // Instead, check if any existing label is very similar textually first
-          const simLabel = (s.label as string).toLowerCase()
-          if (simLabel.includes(skillLabel.toLowerCase().slice(0, 15)) || skillLabel.toLowerCase().includes(simLabel.slice(0, 15))) {
-            // Rough text match — skip expensive embedding comparison
+          const simTitle = (s.title as string).toLowerCase()
+          if (simTitle.includes(skillLabel.toLowerCase().slice(0, 15)) || skillLabel.toLowerCase().includes(simTitle.slice(0, 15))) {
             existingSkill = s
             break
           }
@@ -541,9 +548,16 @@ Return a JSON array with one object per candidate:
           confidence_delta: newConfidence - existingConf,
         })
 
-        reinforced.push({ label: existingSkill.label as string, confidence_before: existingConf, confidence_after: newConfidence })
-        // Fix 5 — Signal diagnostic log (reinforcement path — no per-signal breakdown available here)
-        console.log(JSON.stringify({ sourceTitle: source.title, skillLabel: existingSkill.label, action: 'reinforced', confidence_before: existingConf, confidence_after: newConfidence }))
+        // 6f: Sync source_ids array (denormalized cache for backfill idempotency)
+        const currentSourceIds = (existingSkill.source_ids as string[] | null) ?? []
+        if (!currentSourceIds.includes(sourceId)) {
+          await supabase.from('knowledge_skills')
+            .update({ source_ids: [...currentSourceIds, sourceId] })
+            .eq('id', existingSkill.id as string)
+        }
+
+        reinforced.push({ label: existingSkill.title as string, confidence_before: existingConf, confidence_after: newConfidence })
+        log({ stage: 'skills:process-source', source_id: sourceId, user_id: userId, status: 'ok', action: 'reinforced', skill: existingSkill.title as string, confidence_before: existingConf, confidence_after: newConfidence })
       } else {
         // ─── Step 5: Creation ──────────────────────────────────────────
 
@@ -631,17 +645,20 @@ Return a JSON array with one object per candidate:
           graphProximity: s4, profileContext: s5, velocity: s6,
         }
 
+        const skillName = skillLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
         const { data: newSkill } = await supabase.from('knowledge_skills').insert({
           user_id: userId,
-          label: skillLabel,
+          name: skillName,
+          title: skillLabel,
+          description: `${skillLabel} — detected from ${source.title ?? 'untitled source'}`,
+          content: chunkContext.slice(0, 2000),
           domain: ev.domain || 'domain_specific',
           confidence: finalConfidence,
           exposure_level: exposureLevel,
           status,
-          last_relevance_score: relevanceScore,
           signal_breakdown: signalBreakdown,
           related_anchor_ids: relatedAnchorIds,
-          first_detected_at: new Date().toISOString(),
+          source_ids: [sourceId],
           last_reinforced_at: new Date().toISOString(),
         }).select('id').single()
 
@@ -657,13 +674,12 @@ Return a JSON array with one object per candidate:
         }
 
         created.push({ label: skillLabel, confidence: finalConfidence, status })
-        // Fix 5 — Signal diagnostic log
-        console.log(JSON.stringify({ sourceTitle: source.title, skillLabel, s1, s2, s3, s4, s5, s6, relevanceScore, action: 'created' }))
+        log({ stage: 'skills:process-source', source_id: sourceId, user_id: userId, status: 'ok', action: 'created', skill: skillLabel, skill_name: skillName, confidence: finalConfidence, s1, s2, s3, s4, s5, s6, relevance_score: relevanceScore })
       }
     }
 
     // 5d: Update skill_scan_state
-    const { data: confirmedCount } = await supabase.from('knowledge_skills')
+    const { count: confirmedCount } = await supabase.from('knowledge_skills')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId).eq('status', 'confirmed')
 
@@ -685,7 +701,7 @@ Return a JSON array with one object per candidate:
       reinforced,
     })
   } catch (err) {
-    console.error('[process-source] Fatal:', err)
+    logError({ stage: 'skills:process-source', source_id: sourceId ?? 'unknown', user_id: userId ?? 'unknown', error: err instanceof Error ? err.message : String(err) })
     return res.status(500).json({ error: 'Processing failed', detail: err instanceof Error ? err.message : 'Unknown' })
   }
 }

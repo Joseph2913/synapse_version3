@@ -12,7 +12,7 @@ import { createClient } from '@supabase/supabase-js'
 
 export const maxDuration = 10
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? ''
+const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 
 
@@ -70,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let query = supabase
       .from('knowledge_skills')
-      .select('id, label, domain, exposure_level, confidence, status, evidence_count, when_to_apply, how_to_apply, related_anchor_ids, last_reinforced_at, signal_breakdown, description')
+      .select('id, name, title, domain, exposure_level, confidence, status, evidence_count, when_to_apply, how_to_apply, related_anchor_ids, last_reinforced_at, signal_breakdown, description')
       .eq('user_id', userId)
       .eq('status', status)
       .gte('confidence', minConfidence)

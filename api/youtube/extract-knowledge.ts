@@ -529,6 +529,16 @@ async function extractKnowledgeForItem(
       });
     }
 
+    // ── TRIGGER SKILLS DETECTION (fire-and-forget) ─────────────────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/skills/process-source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.INGEST_SECRET ?? ''}` },
+        body: JSON.stringify({ user_id: item.user_id, source_id: sourceId }),
+      }).catch(err => { console.warn('[extract-knowledge] Skills detection trigger failed (non-fatal):', err); });
+    }
+
     // ── ADVISORY COUNCIL HOOK (fire-and-forget, non-fatal) ─────────────────────
     try {
       await runAdvisoryCouncilHook(item, sourceId, supabase);

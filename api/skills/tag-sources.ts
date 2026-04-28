@@ -15,7 +15,7 @@ export const maxDuration = 60
 
 // ─── ENVIRONMENT ──────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? ''
+const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 
 // ─── CANDIDACY GATE (inline — no local imports) ──────────────────────────────

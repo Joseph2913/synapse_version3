@@ -141,6 +141,16 @@ async function runRetryPipeline(
       }).catch(() => {});
     }
 
+    // ── TRIGGER SKILLS DETECTION (fire-and-forget) ───────────────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/skills/process-source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.INGEST_SECRET ?? ''}` },
+        body: JSON.stringify({ user_id: userId, source_id: sourceId }),
+      }).catch(() => {});
+    }
+
     await setStatus('completed', 'complete');
     console.log(`[ingest/retry-source] Done: ${coreResult.nodesCreated} nodes, ${coreResult.edgesCreated} edges, ${coreResult.chunksCreated} chunks in ${Date.now() - startTime}ms`);
   } catch (err) {

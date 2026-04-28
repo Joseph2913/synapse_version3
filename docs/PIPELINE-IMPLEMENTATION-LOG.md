@@ -4,7 +4,7 @@
 
 **Owner:** Joseph Thomas
 **Started:** 2026-04-26
-**Last updated:** 2026-04-28
+**Last updated:** 2026-04-28 (Block 3)
 
 ---
 
@@ -44,12 +44,12 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 | 2 | Source persistence + dedup | Done | [STAGE-2-PERSISTENCE.md](STAGE-2-PERSISTENCE.md) | 2026-04-28 |
 | 3 | Chunking + chunk embeddings | Done | [STAGE-3-CHUNKING.md](STAGE-3-CHUNKING.md) | 2026-04-27 |
 | 4 | Prompt composition | Done | [STAGE-4-PROMPT.md](STAGE-4-PROMPT.md) | 2026-04-28 |
-| 5 | Entity extraction | Partial (v2 pipeline shipped) | _pending_ | 2026-04-26 |
-| 6 | Deduplication + merge | Not started | _pending_ | 2026-04-26 |
-| 7 | Knowledge persistence | Not started | _pending_ | 2026-04-26 |
+| 5 | Entity extraction | Done | [STAGE-5-EXTRACTION.md](STAGE-5-EXTRACTION.md) | 2026-04-28 |
+| 6 | Deduplication + merge | Done | [STAGE-6-DEDUP.md](STAGE-6-DEDUP.md) | 2026-04-28 |
+| 7 | Knowledge persistence | Done | [STAGE-7-PERSISTENCE.md](STAGE-7-PERSISTENCE.md) | 2026-04-28 |
 | 8 | Cross-connection discovery | Done | [STAGE-8-CROSS-CONNECT.md](STAGE-8-CROSS-CONNECT.md) | 2026-04-28 |
-| 9 | Anchor scoring | Not started | _pending_ | 2026-04-26 |
-| 10 | Skills detection + scoring | Not started | _pending_ | 2026-04-26 |
+| 9 | Anchor scoring | Done | [STAGE-9-ANCHOR-SCORING.md](STAGE-9-ANCHOR-SCORING.md) | 2026-04-28 |
+| 10 | Skills detection + scoring | Done | _inline_ | 2026-04-28 |
 | 11 | Council updates | Partial (Phase 0 shipped) | _pending_ | 2026-04-26 |
 | 12 | Extraction session audit | Not started | _pending_ | 2026-04-26 |
 | 13 | Surfacing (RAG, MCP, activity) | Not started | _pending_ | 2026-04-26 |
@@ -239,9 +239,44 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 ### Stage 10 — Skills detection + scoring
 
-**Status:** Not started. Known broken from prior audit.
+**Status:** Done (2026-04-28).
 
-**Open:** confirm six-fix prompt was applied, wire skills detection into extraction pipeline (currently only runs on-demand or via cron), document signals S1–S6, reconcile `skill_sources` table vs `source_ids` array on `knowledge_skills`, resumable backfill job.
+**What shipped:**
+
+`api/skills/process-source.ts` — complete fix of the broken per-source skill creation/reinforcement path:
+- Fixed INSERT: removed nonexistent columns `label`, `last_relevance_score`, `first_detected_at`; added required NOT NULL fields `name` (kebab-case), `title`, `description`, `content`; added `source_ids: [sourceId]` on creation.
+- Fixed stale source type keys in `SOURCE_TYPE_CONFIDENCE` and `REINFORCEMENT_DELTAS`: capitalized (`YouTube`, `Meeting`, `Document`) → lowercase (`youtube`, `meeting`, `file`, `paste`, `url`, `github`, `research`).
+- Fixed existingSkills select: `label` → `name, title, source_ids`.
+- Added `source_ids` array sync on reinforcement path (was writing to `skill_sources` join table but never updating the denormalized array read by daily-cron backfill idempotency check).
+- Removed `VITE_SUPABASE_URL` and `VITE_GEMINI_API_KEY` fallbacks (Stage S compliance).
+- Added `INGEST_SECRET` auth path so pipeline fire-and-forget calls work without a user JWT.
+- Fixed `confirmedCount` query: was reading `.data` from a `head:true` query; changed to `.count`.
+- Migrated key events to `log()`/`logError()` with `stage: 'skills:process-source'`.
+
+Other files fixed:
+- `get.ts`: `label` → `name, title` in select; removed `VITE_SUPABASE_URL` fallback.
+- `scan.ts`: removed `VITE_SUPABASE_URL` and `VITE_GEMINI_API_KEY` fallbacks.
+- `tag-source.ts`, `tag-sources.ts`: removed `VITE_SUPABASE_URL` fallback.
+- `update-from-source.ts`: anchor predicate `entity_type = 'Anchor'` → `is_anchor = true`.
+
+Pipeline wiring — fire-and-forget POST to `/api/skills/process-source` added after anchor scoring in:
+- `api/ingest/session.ts`, `api/ingest/retry-source.ts`
+- `api/meetings/process.ts`, `api/youtube/extract-knowledge.ts`
+- `api/github/extract-knowledge.ts`, `api/microsoft/extract-knowledge.ts`
+
+**Schema reconciliation:** Both `source_ids` UUID[] array and `skill_sources` join table are kept in sync. `skill_sources` is authoritative for contribution metadata. `source_ids` is a denormalized cache used by `daily-cron.ts` phase 1 for backfill idempotency. `process-source.ts` now writes both on create and on reinforcement.
+
+**Signal definitions (S1–S6, weights in `SIGNAL_WEIGHTS`):**
+- S1 `anchorAlignment` (0.25): cosine similarity between skill embedding and anchor embeddings. Added to `related_anchor_ids` if similarity > 0.3.
+- S2 `nodeDensity` (0.20): fraction of user's node count matching skill keywords or same source.
+- S3 `sourceHistory` (0.20): distinct sources whose nodes match the skill, normalized to 3.
+- S4 `graphProximity` (0.15): BFS hops from primary cluster node to nearest anchor (0–1 hops = 1.0, 2 = 0.6, 3 = 0.3, unreachable = 0).
+- S5 `profileContext` (0.10): domain match vs. user professional context (match = 1.4×, adjacent = 1.1×, mismatch = 0.8×).
+- S6 `velocity` (0.10): matching sources ingested in last 14 days (0 = 0, 1 = 0.5, 2+ = 1.0).
+
+**Resumable backfill:** `api/skills/backfill.ts` was already correct — uses `metadata.skill_backfill_status` for idempotency and page-based pagination. No changes required.
+
+**`tsc -b --force`:** zero errors.
 
 ---
 
@@ -521,6 +556,9 @@ Themes that span multiple stages and should be tracked holistically.
 ## Changelog
 
 Reverse chronological. Every meaningful update goes here.
+
+### 2026-04-28 (Stage 10)
+- **Stage 10 — Skills detection + scoring. Done.** Fixed five critical bugs that caused all skill creation in `process-source.ts` to silently fail: (1) INSERT used nonexistent `label` column and omitted required NOT NULL fields `name`, `title`, `description`, `content`; (2) `SOURCE_TYPE_CONFIDENCE` and `REINFORCEMENT_DELTAS` used pre-Stage-2 capitalized type keys (`YouTube`, `Meeting`) so all lookups fell back to defaults; (3) existingSkills dedup queried `label` instead of `name, title`; (4) `skill_sources` join table was written on reinforcement but `source_ids` array was never updated, causing daily-cron to re-process every source; (5) `confirmedCount` read `.data` on a `head:true` query instead of `.count`. Also: removed `VITE_` fallbacks from `process-source.ts`, `get.ts`, `scan.ts`, `tag-source.ts`, `tag-sources.ts`; added `INGEST_SECRET` auth path to `process-source.ts` so pipeline calls work without a user JWT; fixed anchor predicate in `update-from-source.ts` (`entity_type = 'Anchor'` → `is_anchor = true`); migrated key events to `log()`/`logError()`. Wired Stage 10 as fire-and-forget POST to `/api/skills/process-source` at extraction completion in all 6 pipeline routes. `tsc -b --force` clean.
 
 ### 2026-04-28 (Stage 8)
 - **Stage 8 — Cross-connection discovery. Done.** New standalone endpoint `api/cross-connect/run.ts` runs the full orchestration server-side: auth-gated POST, one `match_knowledge_nodes` RPC per new node (HNSW halfvec index, threshold 0.55), dedup candidates by highest similarity, single Gemini batch call for up to 20 candidates, bulk-insert confirmed edges. `useExtraction.ts` and `extractionPipeline.ts` now fire-and-forget to `/api/cross-connect/run` (never block the extraction UX). `api/pipeline/extract-pipeline.ts:discoverCrossConnections` retains its inline call for serverless pipelines but now uses bulk INSERT (was one INSERT per edge in a loop), structured `log()`/`logError()` with `stage:'cross-connect'`, and stops candidate collection early on time budget. Migration `20260428_knowledge_nodes_halfvec_index.sql` applied: drops `idx_knowledge_nodes_embedding_hnsw` (wrong `vector_cosine_ops` op class for 3072-dim), creates `idx_knowledge_nodes_embedding_hnsw_halfvec` with `halfvec_cosine_ops`, rewrites `match_knowledge_nodes` RPC to cast both sides to `halfvec(3072)` so the index is hit (fixes silent sequential scan). `src/services/crossConnections.ts` logging migrated to structured `log()`/`logError()` with `stage:'cross-connect'`. `tsc -b --force` clean. Decisions D-S8-01, D-S8-02, D-S8-03 recorded. Owner doc: [STAGE-8-CROSS-CONNECT.md](STAGE-8-CROSS-CONNECT.md).

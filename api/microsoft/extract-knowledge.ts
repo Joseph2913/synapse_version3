@@ -345,6 +345,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           updated_at: new Date().toISOString(),
         }).eq('id', item.id);
 
+        // ── TRIGGER SKILLS DETECTION (fire-and-forget) ──────────────────
+        {
+          const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+          fetch(`${appUrl}/api/skills/process-source`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.INGEST_SECRET ?? ''}` },
+            body: JSON.stringify({ user_id: item.user_id, source_id: sourceId }),
+          }).catch(err => { console.warn('[microsoft/extract] Skills detection trigger failed (non-fatal):', err); });
+        }
+
         // ── Link meeting sources to Microsoft-associated domain agents ──
         // Microsoft-specific: uses user_integrations.integration_slug='microsoft'
         // to find agents belonging to this integration path. Kept here because

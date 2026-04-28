@@ -15,9 +15,9 @@ export const maxDuration = 60
 
 // ─── ENVIRONMENT ──────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? ''
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? ''
+const SUPABASE_URL = process.env.SUPABASE_URL!
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'

@@ -172,6 +172,16 @@ async function processMeeting(
       });
     }
 
+    // ── TRIGGER SKILLS DETECTION (fire-and-forget) ───────────────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/skills/process-source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.INGEST_SECRET ?? ''}` },
+        body: JSON.stringify({ user_id: meeting.user_id, source_id: meeting.id }),
+      }).catch(err => { console.warn('[meetings/process] Skills detection trigger failed (non-fatal):', err); });
+    }
+
     // ── LINK TO MEETING DOMAIN AGENT (fire-and-forget) ───────────────────────
     // Resolve meeting agent(s) via:
     // 1. Integration ID → agent_integration_links (supports multi-integration agents)
