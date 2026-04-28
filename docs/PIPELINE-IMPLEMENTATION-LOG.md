@@ -50,7 +50,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 | 8 | Cross-connection discovery | Done | [STAGE-8-CROSS-CONNECT.md](STAGE-8-CROSS-CONNECT.md) | 2026-04-28 |
 | 9 | Anchor scoring | Done | [STAGE-9-ANCHOR-SCORING.md](STAGE-9-ANCHOR-SCORING.md) | 2026-04-28 |
 | 10 | Skills detection + scoring | Done | _inline_ | 2026-04-28 |
-| 11 | Council updates | Partial (Phase 0 shipped) | _pending_ | 2026-04-26 |
+| 11 | Council updates | Done | _inline_ | 2026-04-28 |
 | 12 | Extraction session audit | Not started | _pending_ | 2026-04-26 |
 | 13 | Surfacing (RAG, MCP, activity) | Not started | _pending_ | 2026-04-26 |
 | S | Secret hygiene + client-server boundary | Scoped (urgent — incident-driven) | _pending_ | 2026-04-28 |
@@ -320,20 +320,44 @@ Pipeline wiring — fire-and-forget POST to `/api/skills/process-source` added a
 
 ### Stage 11 — Council updates
 
-**Status:** Partial. Phase 0 shipped 2026-04-24 across many commits.
+**Status:** Done. Phase 0 shipped 2026-04-24; remaining open items closed 2026-04-28.
 
-**Shipped:**
-- Phase 0 tension-on-contradiction detection (`52c73b6`).
-- Phase 0 answer-check and novel-connection writer (`c9b6f85`).
+**Shipped (Phase 0 — prior):**
+- Tension-on-contradiction detection (`52c73b6`).
+- Answer-check and novel-connection writer (`c9b6f85`).
 - Standing questions embedded at generation time in Phase 3 (`857431f`).
 - Backfill handler for `agent_standing_questions` embeddings (`9c68cd0`).
-- Phase 0 RPCs for pull candidates and bulk addressing (`77ae76c`).
+- RPCs for pull candidates and bulk addressing (`77ae76c`).
 - `council_cron_runs` telemetry table (`6bd7109`).
 - Auto-create domain expert when YouTube playlist added (`59ce1c6`).
 - Scoped single-agent rebuild endpoint (`5a4f9c1`).
-- `agent_signals` system retired (`bf58a57`). **This was the schema drift flagged in the audit. Confirmed intentional.**
+- `agent_signals` system retired (`bf58a57`). Confirmed intentional — Decision D-005.
 
-**Open:** wire agent updates into extraction flow (currently only triggered by cron and manual rebuild), expertise index recomputation rules, standing question decay rules.
+**Shipped (Phase 1 — 2026-04-28):**
+
+**Item 1 — Wire agent updates into extraction flow.** After each extraction endpoint sets `index_stale: true` on an affected `domain_agent`, the endpoint now fires a post-extraction async rebuild. Three endpoints updated:
+- `api/youtube/extract-knowledge.ts`: fire-and-forget POST to `/api/council/rebuild-agent?next_stale=true` appended after the batch processing loop, conditional on at least one item successfully processed (`processed > 0`).
+- `api/meetings/process.ts`: fire-and-forget trigger appended inside the agent-linking try block, conditional on `agentIds.size > 0`, immediately after setting `index_stale: true`.
+- `api/microsoft/extract-knowledge.ts`: fire-and-forget trigger appended before `return res.status(200).json({ processed })`, conditional on `processed > 0`.
+All three use `Authorization: Bearer ${CRON_SECRET}` and are genuine fire-and-forget (`fetch(...).catch(() => {})`). The rebuild endpoint handles the zero-stale case cleanly. This does NOT block extraction response time. Pattern matches Stage 8 (cross-connect) and Stage 10 (skills) fire-and-forget wiring.
+
+**Item 2 — Expertise index recomputation rule (documented).** Rule: when a new source is linked to a `domain_agent` via `domain_agent_sources`, the extraction endpoint sets `index_stale = true` and `last_ingestion_at = now()` on the agent. The `rebuild-agent` endpoint (now triggered immediately post-extraction) rebuilds the expertise index by: (1) fetching all `source_ids` from `domain_agent_sources` for the agent, (2) fetching up to 200 nodes by confidence from those sources, (3) fetching source metadata and representative chunks, (4) calling Gemini with that context to regenerate the structured expertise JSON. The nightly cron (Phase 2) serves as a safety net for agents missed by the immediate trigger. Rule is implemented in `api/council/rebuild-agent.ts:rebuildExpertise()`.
+
+**Item 3 — Standing question decay rules (implemented).** New `phase1_decayStaleQuestions()` function added to `api/council/cron.ts`, inserted as Phase 1 of the nightly cron run. Decay rule:
+- `gap_driven` / `frontier` questions with `status = 'open'` and `generated_at` older than **30 days** (`OPEN_QUESTION_DECAY_DAYS`) → `dismissed`.
+- Any non-`user_defined` question with `status = 'partially_addressed'` and `generated_at` older than **60 days** (`PARTIAL_QUESTION_DECAY_DAYS`) → `dismissed`.
+- `user_defined` questions are never decayed (user explicitly created them).
+- `answered` questions are never decayed (they represent resolved knowledge gaps).
+- Phase 2 (expertise rebuild) continues to archive `open` gap_driven/frontier questions synchronously on rebuild. Decay is the backstop for agents that receive no new sources and would otherwise accumulate stale questions indefinitely.
+
+**Item 4 — Structured logging.** All `console.log` / `console.warn` / `console.error` calls in all 12 files under `api/council/` replaced with `log()` / `logError()` using `stage: 'council:*'` prefixes. Files migrated: `cron.ts`, `route.ts`, `analyse.ts`, `synthesise.ts`, `consult.ts`, `rebuild-agent.ts`, `backfill-question-embeddings.ts`, `propose-agents.ts`, `detect-demand-gaps.ts`, `assign-skills.ts`, `create-meeting-agent.ts`. The `geminiFetch` token-usage telemetry lines (`console.log(JSON.stringify({...}))`) are the one accepted exception — they are already structured JSON and use the Stage 0 token-telemetry format, not free-text.
+
+**`tsc -b --force`:** zero errors. Zero new errors introduced.
+
+**Open follow-ups (non-blocking):**
+- None. All three open items are closed.
+
+**Decisions:** D-S11-01, D-S11-02 (see Decision Log below).
 
 ---
 
@@ -612,6 +636,18 @@ Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
 
 ---
 
+### D-S11-01 — Council agent rebuild triggered immediately post-extraction, not only on nightly cron
+**Date:** 2026-04-28
+**Decision:** Each extraction endpoint that sets `domain_agents.index_stale = true` now immediately fires a non-awaited POST to `/api/council/rebuild-agent` with `{ next_stale: true }` and `Authorization: Bearer ${CRON_SECRET}`. This runs in a background Vercel function and does not add latency to the extraction response.
+**Rationale:** Before this change, the expertise index only updated at 2:00 AM UTC via the nightly cron. New knowledge ingested at 9 AM would not surface in Council queries until the next morning. The fire-and-forget pattern — already established for cross-connect (D-S8-01) and anchor scoring (D-S9-01) — is the correct architectural fit: Council updates are enrichment, never Fatal, and must not block the extraction UX. The `rebuild-agent` endpoint with `next_stale: true` handles the case where no agent is stale (returns immediately). Calling it redundantly (e.g., multiple videos in one YouTube batch, all for the same agent) is idempotent and cheap.
+**Status:** Active.
+
+### D-S11-02 — Standing question decay: 30-day open, 60-day partial; user_defined exempt
+**Date:** 2026-04-28
+**Decision:** Questions with `question_type IN ('gap_driven', 'frontier')` and `status = 'open'` are auto-dismissed after 30 days. Questions with `status = 'partially_addressed'` (except `user_defined`) are auto-dismissed after 60 days. `answered` questions are never decayed. `user_defined` questions are never decayed. Decay runs as Phase 1 of the nightly cron (`api/council/cron.ts:phase1_decayStaleQuestions()`), immediately before Phase 2 (expertise rebuild). Constants: `OPEN_QUESTION_DECAY_DAYS = 30`, `PARTIAL_QUESTION_DECAY_DAYS = 60`.
+**Rationale:** Without decay, unanswered questions from expertise rebuilds accumulate indefinitely. Phase 2 (expertise rebuild) already dismisses open gap_driven/frontier questions when it regenerates them — but only if the agent receives new sources that trigger a rebuild. Agents with no new sources since their last rebuild would never have old questions cleared. Decay is the safety net. 30 days is long enough to be useful but short enough to prevent stale questions distorting Phase 0 pull-candidate matching. 60 days for partial gives time for follow-up sources to arrive. User-defined questions are explicitly owned by the user and must survive forever; answered questions represent closed knowledge gaps and are historically valuable.
+**Status:** Active.
+
 ### D-006 — Stage 1 ↔ Stage 2 boundary kept as scoped; cross-cutting work moved
 **Date:** 2026-04-26
 **Decision:** Stage 1 produces `CapturedSource`. The full "adapters never write to the DB directly" cutover lands in Stage 2 because Stage 2 owns persistence. The lowercase `source_type` rename across the database-facing code also lands in Stage 2. Stage 0 Item 2 (canonical Gemini wrapper) must complete before Adapter 3 (file upload). Stage 0 logging helper must complete before Stage 1 final sign-off; until then, Stage 1 adapters log via a structured `console.info` placeholder.
@@ -661,6 +697,9 @@ Themes that span multiple stages and should be tracked holistically.
 ## Changelog
 
 Reverse chronological. Every meaningful update goes here.
+
+### 2026-04-28 (Stage 11)
+- **Stage 11 — Council updates. Done.** Three open items closed: (1) Wire agent updates into extraction flow: fire-and-forget POST to `/api/council/rebuild-agent` with `{ next_stale: true }` added at extraction completion in `api/youtube/extract-knowledge.ts`, `api/meetings/process.ts`, `api/microsoft/extract-knowledge.ts`. Council agents now rebuild within minutes of new knowledge landing, not just at 2 AM. Decision D-S11-01. (2) Expertise index recomputation rule documented: rule is implemented in `api/council/rebuild-agent.ts:rebuildExpertise()` — fetch all linked source IDs from `domain_agent_sources`, fetch nodes+chunks, call Gemini to regenerate the structured expertise JSON, update `domain_agents` with `index_stale=false`. (3) Standing question decay: new `phase1_decayStaleQuestions()` added as Phase 1 of the nightly cron. Decay rule: gap_driven/frontier open questions >30 days → dismissed; non-user_defined partially_addressed questions >60 days → dismissed. user_defined and answered questions are never decayed. Decision D-S11-02. (4) Structured logging: all 12 files under `api/council/` fully migrated — every `console.log`/`warn`/`error` replaced with `log()`/`logError()` using `stage: 'council:*'` prefix. `tsc -b --force` clean. Zero new errors introduced.
 
 ### 2026-04-28 (Block 2 — Stages 5, 6, 7)
 - **Stages 5, 6, 7 — Entity extraction, Deduplication, Knowledge persistence. Done.** Browser-side extraction path eliminated: `src/services/extractionPipeline.ts`, `src/services/crossConnections.ts`, `src/services/edgeEmbedding.ts` deleted. `extractEntities` removed from `src/services/gemini.ts`. `checkDeduplication` removed from `src/services/deduplication.ts`. `saveNodes`, `saveEdges`, `updateNodeEmbeddings`, `updateEdgeEmbeddings` removed from `src/services/extractionPersistence.ts`. Three new serverless endpoints: `api/ingest/extract-preview` (Gemini extraction → entities for review), `api/ingest/extract-persist` (saves approved entities, dedup, embeddings, cross-connections), `api/ingest/extract.ts` (headless auto-approve for background automation). `useExtraction.ts` rewritten to call these endpoints — no direct AI or graph-write imports remain. Hardening applied: named dedup constants (`DEDUP_EXACT_THRESHOLD=0.85`, `DEDUP_SEMANTIC_THRESHOLD=0.80`, `DEDUP_AUTO_MERGE_THRESHOLD=0.88`); `saveEdges` upsert with ON CONFLICT; edge embeddings computed inline in `runExtractionCore` (non-blocking); `extract-preview` retry bug fixed (`let raw`, reassign on valid retry). Migration `20260428_edge_dedup_constraint.sql` applied: deduplicates existing duplicate edge groups, adds `knowledge_edges_dedup_uniq` UNIQUE INDEX on `(user_id, source_node_id, target_node_id, relation_type)`. TypeScript clean. Squash-merged to `main` (commit `b8a8d16`). Decisions D-B2-01 through D-B2-04 recorded. Owner docs: [STAGE-5-EXTRACTION.md](STAGE-5-EXTRACTION.md), [STAGE-6-DEDUP.md](STAGE-6-DEDUP.md), [STAGE-7-PERSISTENCE.md](STAGE-7-PERSISTENCE.md).

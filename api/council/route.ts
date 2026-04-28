@@ -257,7 +257,7 @@ Respond with JSON matching this schema:
       })),
     })
   } catch (err) {
-    console.error('Council route error:', err)
+    logError({ stage: 'council:route', user_id: userId, error: err instanceof Error ? err.message : String(err), status: 'failed' })
     return res.status(500).json({
       error: 'routing_failed',
       message: err instanceof Error ? err.message : 'Unknown error',

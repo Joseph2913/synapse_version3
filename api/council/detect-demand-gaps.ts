@@ -288,7 +288,7 @@ Return JSON: { "signals": [{ "queries": ["query1", "query2"], "topic": "Topic Na
         });
       }
     } catch (err) {
-      console.error('[detect-demand-gaps] Gemini clustering failed:', err);
+      logError({ stage: 'council:detect-demand-gaps', error: `Gemini clustering failed: ${err instanceof Error ? err.message : String(err)}`, status: 'partial' });
       // Fall back to treating each query as its own signal
       for (const q of userQueries) {
         signals.push({
@@ -503,7 +503,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         results.push({ topic: signal.topic, agentName: agentMatch.agent_name, action: 'gap_updated' });
       }
     } catch (err) {
-      console.error(`[detect-demand-gaps] Error processing signal "${signal.topic}":`, err);
+      logError({ stage: 'council:detect-demand-gaps', error: `error processing signal "${signal.topic}": ${err instanceof Error ? err.message : String(err)}`, status: 'partial' });
       results.push({ topic: signal.topic, agentName: null, action: 'error' });
     }
   }

@@ -393,7 +393,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single();
 
       if (agentErr) {
-        console.error(`[propose-agents] Failed to create agent for ${cluster.domain}:`, agentErr.message);
+        logError({ stage: 'council:propose-agents', error: `failed to create agent for ${cluster.domain}: ${agentErr.message}`, status: 'partial' });
         continue;
       }
 

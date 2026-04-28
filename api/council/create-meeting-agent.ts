@@ -210,7 +210,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single();
 
       if (createErr) {
-        console.error(`[create-integration-agent] Failed for ${integration.id}:`, createErr.message);
+        logError({ stage: 'council:create-meeting-agent', error: `failed to create agent for integration ${integration.id}: ${createErr.message}`, status: 'partial' });
         continue;
       }
 

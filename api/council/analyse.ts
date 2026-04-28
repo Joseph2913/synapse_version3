@@ -331,7 +331,7 @@ Respond with JSON:
       errors: errors.length > 0 ? errors : undefined,
     })
   } catch (err) {
-    console.error('Council analyse error:', err)
+    logError({ stage: 'council:analyse', error: err instanceof Error ? err.message : String(err), status: 'failed' })
     return res.status(500).json({
       error: 'analysis_failed',
       message: err instanceof Error ? err.message : 'Unknown error',

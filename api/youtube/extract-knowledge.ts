@@ -4,9 +4,12 @@ import {
   MAX_TRANSCRIPT_CHARS,
   runExtractionCore,
   PROMPT_VERSION,
+  PIPELINE_MODEL,
+  PIPELINE_EMBEDDING_MODEL,
   type Anchor,
   type UserProfile,
   type PromptSkillHint,
+  type TokenAccumulator,
 } from '../pipeline/extract-pipeline.js';
 
 // 300s — map-reduce extraction runs windows in parallel but dedup + chunk
@@ -327,6 +330,79 @@ async function checkDailyLimit(
   }
 }
 
+// ─── STAGE 12 — AUDIT SESSION HELPERS ────────────────────────────────────────
+// Gemini 2.5 Flash pricing at 2026-04-28.
+const COST_INPUT_PER_TOKEN = 0.075 / 1_000_000;
+const COST_OUTPUT_PER_TOKEN = 0.30 / 1_000_000;
+
+function estimateCost(promptTokens: number, outputTokens: number): number {
+  return promptTokens * COST_INPUT_PER_TOKEN + outputTokens * COST_OUTPUT_PER_TOKEN;
+}
+
+/** Write an extraction session row. Never throws — Stage 12 is Skip-with-telemetry. */
+async function writeAuditSession(
+  supabase: ReturnType<typeof getSupabase>,
+  fields: {
+    userId: string;
+    sourceName: string;
+    sourceType: string;
+    sourceId?: string;
+    contentPreview: string;
+    extractionMode: string;
+    anchorEmphasis: string;
+    userGuidance?: string | null;
+    selectedAnchorIds?: string[];
+    entityCount: number;
+    relationshipCount: number;
+    chunkCount: number;
+    crossConnectionCount: number;
+    durationMs: number;
+    promptVersion: string;
+    model: string;
+    embeddingModel: string;
+    promptTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costEstimateUsd: number;
+    sessionStatus: 'success' | 'failed' | 'degraded';
+    errorReason?: string | null;
+  }
+): Promise<void> {
+  try {
+    const row: Record<string, unknown> = {
+      user_id: fields.userId,
+      source_name: fields.sourceName,
+      source_type: fields.sourceType,
+      source_content_preview: fields.contentPreview.slice(0, 300),
+      extraction_mode: fields.extractionMode,
+      anchor_emphasis: fields.anchorEmphasis,
+      entity_count: fields.entityCount,
+      relationship_count: fields.relationshipCount,
+      chunk_count: fields.chunkCount,
+      cross_connection_count: fields.crossConnectionCount,
+      extraction_duration_ms: fields.durationMs,
+      prompt_version: fields.promptVersion,
+      model: fields.model,
+      embedding_model: fields.embeddingModel,
+      prompt_tokens: fields.promptTokens || null,
+      output_tokens: fields.outputTokens || null,
+      total_tokens: fields.totalTokens || null,
+      cost_estimate_usd: fields.costEstimateUsd || null,
+      session_status: fields.sessionStatus,
+    };
+    if (fields.sourceId) row.source_id = fields.sourceId;
+    if (fields.userGuidance) row.user_guidance = fields.userGuidance;
+    if (fields.selectedAnchorIds?.length) row.selected_anchor_ids = fields.selectedAnchorIds;
+    if (fields.errorReason) row.error_reason = fields.errorReason;
+    const { error } = await supabase.from('extraction_sessions').insert(row);
+    if (error) {
+      logError({ stage: 'audit', user_id: fields.userId, status: 'skipped', error: error.message });
+    }
+  } catch (err) {
+    logError({ stage: 'audit', user_id: fields.userId, status: 'skipped', error: String(err) });
+  }
+}
+
 // ─── MAIN EXTRACTION LOGIC ─────────────────────────────────────────────────────
 
 async function extractKnowledgeForItem(
@@ -351,6 +427,12 @@ async function extractKnowledgeForItem(
     return { success: false, nodesCreated: 0, edgesCreated: 0, error: 'No transcript' };
   }
 
+  // Stage 12: declare audit vars outside try so the catch block can reference them.
+  let sourceId: string | undefined;
+  let extractionMode = item.extraction_mode ?? 'comprehensive';
+  let anchorEmphasis = item.anchor_emphasis ?? 'standard';
+  let tokenUsage: TokenAccumulator = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+
   try {
     // Note: status is already 'extracting' with started_at set — the atomic
     // claim RPC (claim_youtube_extraction_batch) does that in the same query
@@ -371,7 +453,7 @@ async function extractKnowledgeForItem(
         transcript_source: 'decoupled_pipeline',
       },
     });
-    const sourceId = persistResult.sourceId;
+    sourceId = persistResult.sourceId;
 
     // For replays, wipe prior nodes/edges so re-extraction starts clean.
     if (persistResult.status === 'replaced') {
@@ -428,8 +510,8 @@ async function extractKnowledgeForItem(
     const defaultSettings = settingsResult.data as { default_mode: string; default_anchor_emphasis: string } | null;
     const activeSkills = (skillsResult.data ?? []) as PromptSkillHint[];
 
-    const extractionMode = item.extraction_mode ?? defaultSettings?.default_mode ?? 'comprehensive';
-    const anchorEmphasis = item.anchor_emphasis ?? defaultSettings?.default_anchor_emphasis ?? 'standard';
+    extractionMode = item.extraction_mode ?? defaultSettings?.default_mode ?? 'comprehensive';
+    anchorEmphasis = item.anchor_emphasis ?? defaultSettings?.default_anchor_emphasis ?? 'standard';
 
     const coreResult = await runExtractionCore({
       content: transcript,
@@ -453,6 +535,7 @@ async function extractKnowledgeForItem(
     });
 
     const { savedNodeMap, nodesCreated, edgesCreated, crossConnectionCount, chunksCreated } = coreResult;
+    tokenUsage = coreResult.tokenUsage;
 
     // ── COMPLETE ────────────────────────────────────────────────────────────────
     await supabase
@@ -465,22 +548,30 @@ async function extractKnowledgeForItem(
       })
       .eq('id', item.id);
 
-    // Save extraction session record
-    await supabase.from('extraction_sessions').insert({
-      user_id: item.user_id,
-      source_name: item.video_title ?? item.video_id,
-      source_type: 'youtube',
-      source_content_preview: transcript.slice(0, 300),
-      extraction_mode: extractionMode,
-      anchor_emphasis: anchorEmphasis,
-      user_guidance: item.custom_instructions ?? null,
-      selected_anchor_ids: item.linked_anchor_ids ?? [],
-      entity_count: nodesCreated,
-      relationship_count: edgesCreated,
-      chunk_count: chunksCreated,
-      cross_connection_count: crossConnectionCount,
-      extraction_duration_ms: Date.now() - itemStartTime,
-      prompt_version: PROMPT_VERSION,
+    // Stage 12: write audit session (skip-with-telemetry — never blocks extraction).
+    await writeAuditSession(supabase, {
+      userId: item.user_id,
+      sourceName: item.video_title ?? item.video_id,
+      sourceType: 'youtube',
+      sourceId,
+      contentPreview: transcript.slice(0, 300),
+      extractionMode,
+      anchorEmphasis,
+      userGuidance: item.custom_instructions ?? null,
+      selectedAnchorIds: item.linked_anchor_ids ?? [],
+      entityCount: nodesCreated,
+      relationshipCount: edgesCreated,
+      chunkCount: chunksCreated,
+      crossConnectionCount,
+      durationMs: Date.now() - itemStartTime,
+      promptVersion: PROMPT_VERSION,
+      model: PIPELINE_MODEL,
+      embeddingModel: PIPELINE_EMBEDDING_MODEL,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costEstimateUsd: estimateCost(tokenUsage.promptTokens, tokenUsage.outputTokens),
+      sessionStatus: 'success',
     });
 
     // Update daily counter (skip-with-telemetry — counter is non-essential)
@@ -551,6 +642,33 @@ async function extractKnowledgeForItem(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[extract-knowledge] Item ${item.id} failed:`, err);
+
+    // Stage 12: write failure session (skip-with-telemetry — never rethrows).
+    await writeAuditSession(supabase, {
+      userId: item.user_id,
+      sourceName: item.video_title ?? item.video_id,
+      sourceType: 'youtube',
+      sourceId,
+      contentPreview: transcript.slice(0, 300),
+      extractionMode,
+      anchorEmphasis,
+      userGuidance: item.custom_instructions ?? null,
+      selectedAnchorIds: item.linked_anchor_ids ?? [],
+      entityCount: 0,
+      relationshipCount: 0,
+      chunkCount: 0,
+      crossConnectionCount: 0,
+      durationMs: Date.now() - itemStartTime,
+      promptVersion: PROMPT_VERSION,
+      model: PIPELINE_MODEL,
+      embeddingModel: PIPELINE_EMBEDDING_MODEL,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costEstimateUsd: estimateCost(tokenUsage.promptTokens, tokenUsage.outputTokens),
+      sessionStatus: 'failed',
+      errorReason: msg.slice(0, 500),
+    });
 
     const isRateLimited = msg.startsWith('RATE_LIMITED');
     const newRetryCount = (item.retry_count ?? 0) + 1;
@@ -1066,6 +1184,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           duration_ms: Date.now() - startTime,
         });
       }
+    }
+
+    // Fire-and-forget: trigger an immediate async rebuild of the next stale
+    // council agent after the batch completes. Any stale flags were set per-item
+    // inside processAdvisoryCouncilHook. Mirrors the cross-connect pattern.
+    if (processed > 0) {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
+      fetch(`${appUrl}/api/council/rebuild-agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}` },
+        body: JSON.stringify({ next_stale: true }),
+      }).catch(() => { /* fire-and-forget */ })
     }
 
     return res.status(200).json({

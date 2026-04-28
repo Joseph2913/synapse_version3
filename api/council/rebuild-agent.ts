@@ -205,13 +205,13 @@ async function generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
       const data = json as { embeddings?: Array<{ values?: number[] }> }
       const vectors = (data.embeddings ?? []).map(e => e.values ?? [])
       if (vectors.length !== slice.length) {
-        console.warn(`[rebuild-agent] batch embedding length mismatch: ${vectors.length} vs ${slice.length}`)
+        logError({ stage: 'council:rebuild-agent', error: `batch embedding mismatch: got ${vectors.length} vectors for ${slice.length} texts`, status: 'partial' })
         out.push(...slice.map(() => [] as number[]))
         continue
       }
       out.push(...vectors)
     } catch (err) {
-      console.warn(`[rebuild-agent] batch embedding failed: ${(err as Error).message}; falling back to empty vectors`)
+      logError({ stage: 'council:rebuild-agent', error: `batch embedding failed: ${(err as Error).message}`, status: 'skipped' })
       out.push(...slice.map(() => [] as number[]))
     }
   }

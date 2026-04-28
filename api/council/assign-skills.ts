@@ -347,7 +347,7 @@ ${JSON.stringify(skillSummaries, null, 2)}`;
         }
       }
     } catch (err) {
-      console.error(`[assign-skills] Gemini batch ${i / BATCH_SIZE} failed:`, String(err));
+      logError({ stage: 'council:assign-skills', error: `Gemini batch ${i / BATCH_SIZE} failed: ${String(err)}`, status: 'partial' });
       // Continue with remaining batches rather than failing the whole run
     }
 
@@ -391,7 +391,7 @@ async function writeAssignments(
       .select('id');
 
     if (error) {
-      console.error(`[assign-skills] Upsert chunk ${i / CHUNK_SIZE} failed:`, error.message);
+      logError({ stage: 'council:assign-skills', error: `domain_agent_skills upsert chunk ${i / CHUNK_SIZE} failed: ${error.message}`, status: 'partial' });
     } else {
       written += (data?.length ?? 0);
       skippedDuplicate += chunk.length - (data?.length ?? 0);
@@ -442,7 +442,7 @@ async function addSkillSourcesToAgents(
       .select('id');
 
     if (error) {
-      console.error(`[assign-skills] domain_agent_sources upsert chunk failed:`, error.message);
+      logError({ stage: 'council:assign-skills', error: `domain_agent_sources upsert chunk failed: ${error.message}`, status: 'partial' });
     } else {
       added += (data?.length ?? 0);
     }
@@ -464,7 +464,7 @@ async function markAgentsStale(
     .in('id', uniqueIds);
 
   if (error) {
-    console.error(`[assign-skills] Failed to mark agents stale:`, error.message);
+    logError({ stage: 'council:assign-skills', error: `failed to mark agents stale: ${error.message}`, status: 'partial' });
     return 0;
   }
 

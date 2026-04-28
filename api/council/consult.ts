@@ -606,7 +606,7 @@ Respond with JSON matching this schema:
     })
 
   } catch (err) {
-    console.error('Council consult error:', err)
+    logError({ stage: 'council:consult', error: err instanceof Error ? err.message : String(err), status: 'failed' })
     return res.status(500).json({
       error: 'pipeline_failed',
       message: err instanceof Error ? err.message : 'Unknown error',

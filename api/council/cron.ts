@@ -234,13 +234,13 @@ async function generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
       const data = json as { embeddings?: Array<{ values?: number[] }> };
       const vectors = (data.embeddings ?? []).map(e => e.values ?? []);
       if (vectors.length !== slice.length) {
-        console.warn(`[cron] batch embedding length mismatch: ${vectors.length} vs ${slice.length}`);
+        logError({ stage: 'council:cron', error: `batch embedding mismatch: got ${vectors.length} vectors for ${slice.length} texts`, status: 'partial' });
         out.push(...slice.map(() => [] as number[]));
         continue;
       }
       out.push(...vectors);
     } catch (err) {
-      console.warn(`[cron] batch embedding failed: ${(err as Error).message}; falling back to empty vectors`);
+      logError({ stage: 'council:cron', error: `batch embedding failed: ${(err as Error).message}`, status: 'skipped' });
       out.push(...slice.map(() => [] as number[]));
     }
   }
@@ -406,6 +406,11 @@ const TENSION_MAX_PER_AGENT_PER_RUN = 3;
 const TENSION_INSIGHTS_PROMPT_CAP = 20;
 const TENSION_CLAIM_PROMPT_TRUNC = 200;
 const TENSION_COOLDOWN_DAYS = 7;
+
+// Standing question decay: how many days before an unanswered question is dismissed.
+// user_defined questions are never decayed. answered questions are permanent.
+const OPEN_QUESTION_DECAY_DAYS = 30;
+const PARTIAL_QUESTION_DECAY_DAYS = 60;
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -590,7 +595,7 @@ async function phase0_answerCheckAndLink(
       .select('id')
       .maybeSingle();
     if (runErr) {
-      console.warn(`[council-cron] phase0: failed to create run row for user ${userId}:`, runErr.message);
+      logError({ stage: 'council:cron', user_id: userId, error: `phase0: run row creation failed: ${runErr.message}`, status: 'partial' });
       continue;
     }
     if (runRow && (runRow as { id: string }).id) {
@@ -617,7 +622,7 @@ async function phase0_answerCheckAndLink(
       });
 
       if (rpcErr) {
-        console.warn(`[council-cron] phase0: pull candidates failed for agent ${agent.id}:`, rpcErr.message);
+        logError({ stage: 'council:cron', user_id: agent.user_id, error: `phase0: pull candidates failed for agent ${agent.id}: ${rpcErr.message}`, status: 'partial' });
         perAgentFailures++;
         continue;
       }
@@ -644,7 +649,7 @@ async function phase0_answerCheckAndLink(
         .order('created_at', { ascending: false })
         .limit(TENSION_INSIGHTS_PROMPT_CAP * 2); // over-fetch, then filter cooldown
       if (insFetchErr) {
-        console.warn(`[council-cron] phase0: active insight fetch failed for agent ${agent.id}:`, insFetchErr.message);
+        logError({ stage: 'council:cron', user_id: agent.user_id, error: `phase0: insight fetch failed for agent ${agent.id}: ${insFetchErr.message}`, status: 'partial' });
       }
       const activeInsights: ActiveInsightLite[] = ((insightsRaw ?? []) as Array<{
         id: string;
@@ -689,7 +694,7 @@ async function phase0_answerCheckAndLink(
           if (bIdx === 0) allContradictions.push(...contradictions);
         } catch (gErr) {
           const msg = gErr instanceof Error ? gErr.message : String(gErr);
-          console.warn(`[council-cron] phase0: Gemini batch failed for agent ${agent.id}:`, msg);
+          logError({ stage: 'council:cron', user_id: agent.user_id, error: `phase0: Gemini batch failed for agent ${agent.id}: ${msg}`, status: 'partial' });
         }
       }
 
@@ -814,7 +819,7 @@ async function phase0_answerCheckAndLink(
           p_updates: updates,
         });
         if (applyErr) {
-          console.warn(`[council-cron] phase0: bulk_apply_question_addressing failed for agent ${agent.id}:`, applyErr.message);
+          logError({ stage: 'council:cron', user_id: agent.user_id, error: `phase0: bulk apply failed for agent ${agent.id}: ${applyErr.message}`, status: 'partial' });
           perAgentFailures++;
         }
       }
@@ -826,13 +831,13 @@ async function phase0_answerCheckAndLink(
         ];
         const { error: insErr } = await supabase.from('agent_insights').insert(rowsToInsert);
         if (insErr) {
-          console.warn(`[council-cron] phase0: insight insert failed for agent ${agent.id}:`, insErr.message);
+          logError({ stage: 'council:cron', user_id: agent.user_id, error: `phase0: insight insert failed for agent ${agent.id}: ${insErr.message}`, status: 'partial' });
           perAgentFailures++;
         }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[council-cron] phase0: agent ${agent.id} failed:`, msg);
+      logError({ stage: 'council:cron', user_id: agent.user_id, error: `phase0: agent ${agent.id} failed: ${msg}`, status: 'partial' });
       perAgentFailures++;
     }
   }
@@ -863,6 +868,68 @@ async function phase0_answerCheckAndLink(
     perUserCounters,
     runIds,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE 1: STANDING QUESTION DECAY
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Decay rule:
+//   - gap_driven / frontier questions with status 'open' older than
+//     OPEN_QUESTION_DECAY_DAYS days → dismissed.
+//   - Any non-user_defined question with status 'partially_addressed' older
+//     than PARTIAL_QUESTION_DECAY_DAYS days → dismissed.
+//   - user_defined questions are never decayed (user created them explicitly).
+//   - answered questions are never decayed (they represent captured knowledge).
+//
+// Phase 2 (expertise rebuild) separately archives open gap_driven/frontier
+// questions when an agent is rebuilt. Decay is the fallback for agents that
+// have not received new sources and would otherwise accumulate stale questions.
+
+async function phase1_decayStaleQuestions(supabase: SupabaseClient): Promise<PhaseResult> {
+  const phaseStart = Date.now()
+  const nowIso = new Date().toISOString()
+  const openCutoff = new Date(Date.now() - OPEN_QUESTION_DECAY_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  const partialCutoff = new Date(Date.now() - PARTIAL_QUESTION_DECAY_DAYS * 24 * 60 * 60 * 1000).toISOString()
+
+  const { error: openErr } = await supabase
+    .from('agent_standing_questions')
+    .update({ status: 'dismissed', status_changed_at: nowIso })
+    .in('question_type', ['gap_driven', 'frontier'])
+    .eq('status', 'open')
+    .lt('generated_at', openCutoff)
+
+  if (openErr) {
+    logError({ stage: 'council:cron', error: `question decay (open) failed: ${openErr.message}`, status: 'partial' })
+  }
+
+  const { error: partialErr } = await supabase
+    .from('agent_standing_questions')
+    .update({ status: 'dismissed', status_changed_at: nowIso })
+    .neq('question_type', 'user_defined')
+    .eq('status', 'partially_addressed')
+    .lt('generated_at', partialCutoff)
+
+  if (partialErr) {
+    logError({ stage: 'council:cron', error: `question decay (partial) failed: ${partialErr.message}`, status: 'partial' })
+  }
+
+  const ok = !openErr && !partialErr
+  log({
+    stage: 'council:cron',
+    phase: '1_decay',
+    status: ok ? 'ok' : 'partial',
+    open_cutoff: openCutoff,
+    partial_cutoff: partialCutoff,
+    duration_ms: Date.now() - phaseStart,
+  })
+
+  return {
+    phase: '1_decay',
+    success: ok,
+    detail: `open questions dismissed (>${OPEN_QUESTION_DECAY_DAYS}d), partially_addressed dismissed (>${PARTIAL_QUESTION_DECAY_DAYS}d)${!ok ? ' — with errors' : ''}`,
+    duration_ms: Date.now() - phaseStart,
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1405,7 +1472,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabase();
   const phaseResults: PhaseResult[] = [];
 
-  console.log('[council-cron] Starting nightly advisory council cron');
+  log({ stage: 'council:cron', status: 'ok', msg: 'starting nightly run' });
 
   // Phase 0: Pull-based answer check + novel-connection insights.
   // Opens a council_cron_runs row per user; finalised at the end of the handler.
@@ -1418,7 +1485,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     phase0PerUserCounters = p0.perUserCounters;
     phase0RunIds = p0.runIds;
     phase0Duration = p0.result.duration_ms;
-    console.log(`[council-cron] Phase 0 complete: ${p0.result.detail} (${p0.result.duration_ms}ms)`);
+    log({ stage: 'council:cron', phase: '0_answer_check', status: 'ok', detail: p0.result.detail, duration_ms: p0.result.duration_ms });
 
     // Persist Phase 0 counters immediately so telemetry survives any
     // subsequent-phase timeout. Final handler-end update below may overwrite
@@ -1445,11 +1512,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[council-cron] Phase 0 failed:', msg);
+    logError({ stage: 'council:cron', error: `phase 0 failed: ${msg}`, status: 'failed' });
     phaseResults.push({ phase: '0_answer_check', success: false, detail: msg, duration_ms: Date.now() - startTime });
   }
 
-  // Phase 1 (signal processing) retired — agent_signals table removed.
+  // Phase 1: Standing question decay
+  try {
+    const p1 = await phase1_decayStaleQuestions(supabase)
+    phaseResults.push(p1)
+    log({ stage: 'council:cron', phase: '1_decay', status: 'ok', detail: p1.detail, duration_ms: p1.duration_ms })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logError({ stage: 'council:cron', error: `phase 1 (decay) failed: ${msg}`, status: 'failed' })
+    phaseResults.push({ phase: '1_decay', success: false, detail: msg, duration_ms: Date.now() - startTime })
+  }
 
   // Phase 2: Rebuild stale expertise indexes
   let rebuiltAgentIds: string[] = [];
@@ -1457,10 +1533,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const p2 = await phase2_rebuildExpertise(supabase);
     phaseResults.push(p2.result);
     rebuiltAgentIds = p2.rebuiltAgentIds;
-    console.log(`[council-cron] Phase 2 complete: ${p2.result.detail} (${p2.result.duration_ms}ms)`);
+    log({ stage: 'council:cron', phase: '2_expertise', status: 'ok', detail: p2.result.detail, duration_ms: p2.result.duration_ms });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[council-cron] Phase 2 failed:', msg);
+    logError({ stage: 'council:cron', error: `phase 2 failed: ${msg}`, status: 'failed' });
     phaseResults.push({ phase: '2_expertise', success: false, detail: msg, duration_ms: Date.now() - startTime });
   }
 
@@ -1468,10 +1544,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const p3 = await phase3_regenerateQuestionsAndGaps(supabase, rebuiltAgentIds);
     phaseResults.push(p3);
-    console.log(`[council-cron] Phase 3 complete: ${p3.detail} (${p3.duration_ms}ms)`);
+    log({ stage: 'council:cron', phase: '3_questions_gaps', status: 'ok', detail: p3.detail, duration_ms: p3.duration_ms });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[council-cron] Phase 3 failed:', msg);
+    logError({ stage: 'council:cron', error: `phase 3 failed: ${msg}`, status: 'failed' });
     phaseResults.push({ phase: '3_questions_gaps', success: false, detail: msg, duration_ms: Date.now() - startTime });
   }
 
@@ -1479,10 +1555,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const p4 = await phase4_refreshAwareness(supabase, rebuiltAgentIds);
     phaseResults.push(p4);
-    console.log(`[council-cron] Phase 4 complete: ${p4.detail} (${p4.duration_ms}ms)`);
+    log({ stage: 'council:cron', phase: '4_awareness', status: 'ok', detail: p4.detail, duration_ms: p4.duration_ms });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[council-cron] Phase 4 failed:', msg);
+    logError({ stage: 'council:cron', error: `phase 4 failed: ${msg}`, status: 'failed' });
     phaseResults.push({ phase: '4_awareness', success: false, detail: msg, duration_ms: Date.now() - startTime });
   }
 
@@ -1490,10 +1566,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const p5 = await phase5_updateHealth(supabase);
     phaseResults.push(p5);
-    console.log(`[council-cron] Phase 5 complete: ${p5.detail} (${p5.duration_ms}ms)`);
+    log({ stage: 'council:cron', phase: '5_health', status: 'ok', detail: p5.detail, duration_ms: p5.duration_ms });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[council-cron] Phase 5 failed:', msg);
+    logError({ stage: 'council:cron', error: `phase 5 failed: ${msg}`, status: 'failed' });
     phaseResults.push({ phase: '5_health', success: false, detail: msg, duration_ms: Date.now() - startTime });
   }
 
@@ -1511,9 +1587,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
       body: JSON.stringify({ lookbackHours: 24 }),
     }).catch(err => {
-      console.warn('[council-cron] Demand gap detection trigger failed (non-fatal):', err);
+      logError({ stage: 'council:cron', error: `demand gap trigger failed: ${(err as Error).message}`, status: 'skipped' });
     });
-    console.log('[council-cron] Phase 6: demand gap detection triggered (fire-and-forget)');
+    log({ stage: 'council:cron', phase: '6_demand_gaps', status: 'ok', msg: 'demand gap detection triggered (fire-and-forget)' });
   } catch {
     // Non-fatal
   }
@@ -1553,11 +1629,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
       .eq('id', runId);
     if (updErr) {
-      console.warn(`[council-cron] Failed to finalise council_cron_runs row ${runId}:`, updErr.message);
+      logError({ stage: 'council:cron', user_id: userId, error: `run row finalise failed for ${runId}: ${updErr.message}`, status: 'partial' });
     }
   }
 
-  console.log(`[council-cron] Complete in ${totalDuration}ms — ${allSuccess ? 'ALL PASSED' : 'SOME FAILED'}`);
+  log({ stage: 'council:cron', status: allSuccess ? 'ok' : 'partial', duration_ms: totalDuration, phases_failed: phaseResults.filter(p => !p.success).map(p => p.phase) });
 
   return res.status(200).json({
     success: allSuccess,

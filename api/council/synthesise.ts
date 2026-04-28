@@ -243,7 +243,7 @@ Respond with JSON:
       },
     })
   } catch (err) {
-    console.error('Council synthesise error:', err)
+    logError({ stage: 'council:synthesise', error: err instanceof Error ? err.message : String(err), status: 'failed' })
     return res.status(500).json({
       error: 'synthesis_failed',
       message: err instanceof Error ? err.message : 'Unknown error',

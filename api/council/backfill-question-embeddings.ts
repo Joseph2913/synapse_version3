@@ -190,7 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           }
         }
       } catch (err) {
-        console.error('[backfill-question-embeddings] batch embed failed:', err instanceof Error ? err.message : err)
+        logError({ stage: 'council:backfill', error: `batch embed failed: ${err instanceof Error ? err.message : String(err)}`, status: 'partial' })
       }
 
       if (updates.length > 0) {
@@ -199,7 +199,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           p_updates: updates,
         })
         if (rpcErr) {
-          console.error('[backfill-question-embeddings] rpc error', rpcErr)
+          logError({ stage: 'council:backfill', error: `bulk_set_question_embeddings rpc error: ${rpcErr.message}`, status: 'failed' })
           throw new Error(`bulk_set_question_embeddings failed: ${rpcErr.message} (code=${rpcErr.code ?? 'none'}) details=${rpcErr.details ?? 'none'}`)
         }
         totalUpdated += updates.length
@@ -214,7 +214,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       duration_ms: Date.now() - startedAt,
     })
   } catch (err) {
-    console.error('[backfill-question-embeddings]', err)
+    logError({ stage: 'council:backfill', error: err instanceof Error ? err.message : String(err), status: 'failed' })
     const message = err instanceof Error
       ? err.message
       : (typeof err === 'object' && err !== null ? JSON.stringify(err) : String(err))

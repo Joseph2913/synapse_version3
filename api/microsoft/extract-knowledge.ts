@@ -441,6 +441,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Fire-and-forget: trigger an immediate async rebuild of the next stale
+    // council agent. Any stale flags were set per-item above. Mirrors the
+    // fire-and-forget pattern used by cross-connect and YouTube extraction.
+    if (processed > 0) {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
+      fetch(`${appUrl}/api/council/rebuild-agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}` },
+        body: JSON.stringify({ next_stale: true }),
+      }).catch(() => { /* fire-and-forget */ })
+    }
+
     return res.status(200).json({ processed });
   } catch (err) {
     console.error('[microsoft/extract-knowledge] Error:', err);
