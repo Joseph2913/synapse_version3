@@ -25,7 +25,9 @@ import {
 import { embedEdgeBatch, type EdgeForEmbedding, type NodeLabel } from './edgeEmbedding'
 import { supabase } from './supabase'
 import { checkDeduplication, savePotentialDuplicates } from './deduplication'
-import { discoverCrossConnections, saveCrossConnectionEdges } from './crossConnections'
+// discoverCrossConnections / saveCrossConnectionEdges are no longer called here.
+// Cross-connection discovery runs server-side via /api/cross-connect/run
+// (fire-and-forget) so it never blocks the pipeline caller.
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -262,77 +264,7 @@ export async function runHeadlessExtraction(
     }
   }
 
-  // ── Step 7: Cross-connections ──────────────────────────────────────────────
-
-  progress('discovering_connections', 'Discovering cross-connections…')
-
-  let crossConnectionCount = 0
-  let crossEdgeIds: string[] = []
-  try {
-    if (savedNodes.length > 0) {
-      const crossEdges = await discoverCrossConnections(
-        savedNodes.map(n => n.id),
-        userId,
-      )
-      crossConnectionCount = crossEdges.length
-      if (crossEdges.length > 0) {
-        crossEdgeIds = await saveCrossConnectionEdges(userId, crossEdges)
-
-        // Embed cross-connection edges (non-blocking)
-        try {
-          // Collect all node IDs referenced by cross-connection edges
-          const crossNodeIds = new Set<string>()
-          for (const e of crossEdges) {
-            crossNodeIds.add(e.sourceNodeId)
-            crossNodeIds.add(e.targetNodeId)
-          }
-
-          // Build node label map — start with saved nodes, then fetch any missing
-          const crossNodesMap = new Map<string, NodeLabel>(
-            saveResult.allNodes.map(n => [n.id, { id: n.id, label: n.label, entity_type: n.entity_type }])
-          )
-
-          const missingIds = [...crossNodeIds].filter(id => !crossNodesMap.has(id))
-          if (missingIds.length > 0) {
-            const { data: missingNodes } = await supabase
-              .from('knowledge_nodes')
-              .select('id, label, entity_type')
-              .in('id', missingIds)
-            for (const n of missingNodes ?? []) {
-              crossNodesMap.set(n.id, { id: n.id, label: n.label, entity_type: n.entity_type })
-            }
-          }
-
-          const crossEdgesForEmbedding: EdgeForEmbedding[] = []
-          for (let i = 0; i < crossEdges.length; i++) {
-            const e = crossEdges[i]
-            const id = crossEdgeIds[i]
-            if (e && id) {
-              crossEdgesForEmbedding.push({
-                id,
-                source_node_id: e.sourceNodeId,
-                target_node_id: e.targetNodeId,
-                relation_type: e.relationType,
-                evidence: e.evidence || null,
-              })
-            }
-          }
-
-          const crossEmbeddings = await embedEdgeBatch(crossEdgesForEmbedding, crossNodesMap)
-          const crossToUpdate = [...crossEmbeddings.entries()].map(([id, embedding]) => ({ id, embedding }))
-          if (crossToUpdate.length > 0) {
-            await updateEdgeEmbeddings(crossToUpdate)
-          }
-        } catch (embErr) {
-          console.warn('[extractionPipeline] Cross-connection edge embedding failed:', embErr)
-        }
-      }
-    }
-  } catch {
-    // Non-blocking
-  }
-
-  // ── Step 8: Telemetry + anchor scoring ─────────────────────────────────────
+  // ── Step 7: Telemetry + background jobs ───────────────────────────────────
 
   const durationMs = Date.now() - startTime
 
@@ -345,11 +277,11 @@ export async function runHeadlessExtraction(
     userGuidance: config.customGuidance,
     selectedAnchorIds: config.anchors.map(() => ''),
     extractedNodeIds: savedNodes.map(n => n.id),
-    extractedEdgeIds: [...savedEdgeIds, ...crossEdgeIds],
+    extractedEdgeIds: savedEdgeIds,
     entityCount: savedNodes.length,
-    relationshipCount: savedEdgeIds.length + crossEdgeIds.length,
+    relationshipCount: savedEdgeIds.length,
     chunkCount,
-    crossConnectionCount,
+    crossConnectionCount: 0, // updated async by /api/cross-connect/run
     durationMs,
     promptVersion: composed.version,
   }).catch(() => {})
@@ -363,6 +295,16 @@ export async function runHeadlessExtraction(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ userId, sourceId, nodeIds: savedNodes.map(n => n.id) }),
+    }).catch(() => {})
+
+    // Stage 8: Cross-connection discovery — server-side, fire-and-forget
+    fetch('/api/cross-connect/run', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ nodeIds: savedNodes.map(n => n.id), sourceId }),
     }).catch(() => {})
   }
 
@@ -381,9 +323,9 @@ export async function runHeadlessExtraction(
   return {
     sourceId,
     nodeIds: savedNodes.map(n => n.id),
-    edgeIds: [...savedEdgeIds, ...crossEdgeIds],
+    edgeIds: savedEdgeIds,
     chunkCount,
-    crossConnectionCount,
+    crossConnectionCount: 0, // connections discovered async
     durationMs,
   }
 }

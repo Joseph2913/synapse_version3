@@ -1337,36 +1337,58 @@ export async function discoverCrossConnections(
 ): Promise<number> {
   const { weight = 0.8, itemStartTime = Date.now(), timeBudgetMs = DEFAULT_TIME_BUDGET_MS } = opts;
   if (savedNodeMap.size === 0) return 0;
+  // Time-budget gate: skip if the extraction has already taken too long.
+  // DEFAULT_TIME_BUDGET_MS = 50 s. Cross-connections get whatever remains up
+  // to that cap. If we are past it, log and return so the caller can finish.
   if (Date.now() - itemStartTime >= timeBudgetMs) {
-    console.log(`[extract-pipeline] Skipping cross-connections — time budget exceeded`);
+    log({ stage: 'cross-connect', status: 'skipped', user_id: userId, reason: 'time_budget_exceeded' });
     return 0;
   }
 
+  const stageStart = Date.now();
   try {
     const newNodeIds = new Set(savedNodeMap.values());
-    type SemanticCandidate = { id: string; label: string; entity_type: string; description: string | null };
+    type SemanticCandidate = { id: string; label: string; entity_type: string; description: string | null; similarity?: number };
     const candidateMap = new Map<string, SemanticCandidate>();
 
+    // One RPC call per new node. Stop early if the budget runs out mid-loop.
     for (const [, embedding] of nodeEmbeddings) {
-      const { data: similar } = await supabase.rpc('match_knowledge_nodes', {
+      if (Date.now() - itemStartTime >= timeBudgetMs) {
+        log({ stage: 'cross-connect', status: 'partial', user_id: userId, reason: 'time_budget_during_rpc' });
+        break;
+      }
+      const { data: similar, error: rpcErr } = await supabase.rpc('match_knowledge_nodes', {
         query_embedding: embedding,
         match_threshold: 0.55,
         match_count: 30,
         p_user_id: userId,
       });
+      if (rpcErr) {
+        logError({ stage: 'cross-connect', user_id: userId, status: 'skipped', error: `RPC error: ${rpcErr.message}` });
+        continue;
+      }
       for (const s of (similar ?? []) as SemanticCandidate[]) {
-        if (!newNodeIds.has(s.id)) candidateMap.set(s.id, s);
+        if (!newNodeIds.has(s.id)) {
+          const existing = candidateMap.get(s.id);
+          if (!existing || (s.similarity ?? 0) > (existing.similarity ?? 0)) candidateMap.set(s.id, s);
+        }
       }
     }
 
-    const existingNodes = [...candidateMap.values()].slice(0, 40);
-    if (existingNodes.length === 0) return 0;
+    // Cap at 20 top candidates — consistent with api/cross-connect/run.ts
+    const existingNodes = [...candidateMap.values()]
+      .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
+      .slice(0, 20);
+    if (existingNodes.length === 0) {
+      log({ stage: 'cross-connect', status: 'ok', user_id: userId, duration_ms: Date.now() - stageStart, edges_created: 0, reason: 'no_candidates' });
+      return 0;
+    }
 
     const newEntityLines = entities.slice(0, 20)
       .map(e => `- [${e.entity_type}] ${e.label}: ${e.description ?? ''}`)
       .join('\n');
     const existingEntityLines = existingNodes
-      .map((e) => `- [${e.entity_type}] ${e.label}: ${e.description ?? ''}`)
+      .map(e => `- [${e.entity_type}] ${e.label}: ${e.description ?? ''}`)
       .join('\n');
 
     const crossPrompt = `You are building a knowledge graph. Identify meaningful cross-source relationships between new and existing entities.
@@ -1386,7 +1408,7 @@ Rules:
 Return ONLY valid JSON:
 {
   "relationships": [
-    { "source": "new entity label", "target": "existing entity label", "relation_type": "one of: leads_to|supports|enables|blocks|contradicts|part_of|relates_to|associated_with", "evidence": "one sentence justification" }
+    { "source": "entity label", "target": "entity label", "relation_type": "one of: leads_to|supports|enables|blocks|contradicts|part_of|relates_to|associated_with", "evidence": "one sentence justification" }
   ]
 }
 
@@ -1397,47 +1419,76 @@ Return an empty array if no genuine cross-source connections exist.`;
       const { json } = await geminiFetch(
         `${GEMINI_MODEL}:generateContent`,
         {
+          system_instruction: { parts: [{ text: 'You are a knowledge graph relationship expert. Find non-obvious cross-source connections. Prioritise directional, specific types over generic ones.' }] },
           contents: [{ parts: [{ text: crossPrompt }] }],
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
         },
         30_000,
-        'pipeline:cross-connections'
+        'cross-connect'
       );
       crossData = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-    } catch {
+    } catch (geminiErr) {
+      logError({ stage: 'cross-connect', user_id: userId, status: 'skipped', error: `Gemini error: ${(geminiErr as Error).message}`, duration_ms: Date.now() - stageStart });
       return 0;
     }
     const crossText = crossData.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!crossText) return 0;
+    if (!crossText) {
+      log({ stage: 'cross-connect', status: 'skipped', user_id: userId, duration_ms: Date.now() - stageStart, reason: 'empty_gemini_response' });
+      return 0;
+    }
 
     let crossResult: { relationships?: ExtractedRelationship[] };
     try {
       crossResult = JSON.parse(crossText);
     } catch (parseErr) {
-      console.error('[extract-pipeline] Malformed cross-connection JSON from Gemini:', crossText.slice(0, 500));
-      throw parseErr;
+      logError({ stage: 'cross-connect', user_id: userId, status: 'skipped', error: `malformed JSON: ${crossText.slice(0, 200)}`, duration_ms: Date.now() - stageStart });
+      return 0;
     }
 
     const existingNodeMap = new Map(existingNodes.map(n => [n.label.toLowerCase(), n.id]));
-    let crossConnectionCount = 0;
+    const savedLabelMap = new Map<string, string>();
+    for (const [label, id] of savedNodeMap) {
+      savedLabelMap.set(label.toLowerCase(), id);
+    }
+
+    // Build bulk insert list — never loop individual inserts (CLAUDE.md bulk-write rule)
+    type EdgeInsert = { user_id: string; source_node_id: string; target_node_id: string; relation_type: string; evidence: string | null; weight: number };
+    const toInsert: EdgeInsert[] = [];
     for (const rel of crossResult.relationships ?? []) {
-      const sourceId = savedNodeMap.get(rel.source) ?? existingNodeMap.get(rel.source?.toLowerCase());
-      const targetId = savedNodeMap.get(rel.target) ?? existingNodeMap.get(rel.target?.toLowerCase());
-      if (sourceId && targetId && sourceId !== targetId) {
-        const { error } = await supabase.from('knowledge_edges').insert({
+      const srcId = savedLabelMap.get(rel.source?.toLowerCase()) ?? existingNodeMap.get(rel.source?.toLowerCase());
+      const tgtId = savedLabelMap.get(rel.target?.toLowerCase()) ?? existingNodeMap.get(rel.target?.toLowerCase());
+      if (srcId && tgtId && srcId !== tgtId) {
+        toInsert.push({
           user_id: userId,
-          source_node_id: sourceId,
-          target_node_id: targetId,
+          source_node_id: srcId,
+          target_node_id: tgtId,
           relation_type: rel.relation_type ?? 'relates_to',
           evidence: rel.evidence ?? null,
           weight,
         });
-        if (!error) crossConnectionCount++;
       }
     }
+
+    if (toInsert.length === 0) {
+      log({ stage: 'cross-connect', status: 'ok', user_id: userId, duration_ms: Date.now() - stageStart, edges_created: 0 });
+      return 0;
+    }
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('knowledge_edges')
+      .insert(toInsert)
+      .select('id');
+
+    if (insertErr) {
+      logError({ stage: 'cross-connect', user_id: userId, status: 'skipped', error: `bulk insert failed: ${insertErr.message}`, edge_count: toInsert.length, duration_ms: Date.now() - stageStart });
+      return 0;
+    }
+
+    const crossConnectionCount = inserted?.length ?? 0;
+    log({ stage: 'cross-connect', status: 'ok', user_id: userId, duration_ms: Date.now() - stageStart, edges_created: crossConnectionCount, candidates_evaluated: existingNodes.length });
     return crossConnectionCount;
   } catch (err) {
-    console.warn('[extract-pipeline] Cross-connection discovery failed:', err);
+    logError({ stage: 'cross-connect', user_id: userId, status: 'skipped', error: (err as Error).message, duration_ms: Date.now() - stageStart });
     return 0;
   }
 }

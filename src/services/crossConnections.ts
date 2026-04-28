@@ -2,6 +2,31 @@ import { supabase, semanticSearchNodes } from './supabase'
 import { callApi } from './apiClient'
 import type { DiscoveredEdge } from '../types/extraction'
 
+// ─── Structured logging ──────────────────────────────────────────────────────
+// Browser-side structured log helpers matching the Stage 0 canonical recipe.
+// These write to the browser console in the same JSON shape used by backend
+// log() helpers so Vercel log filters work consistently for cross-connect events.
+
+type LogStatus = 'ok' | 'failed' | 'partial' | 'skipped'
+
+interface LogFields {
+  stage: string
+  user_id?: string
+  source_id?: string
+  duration_ms?: number
+  status?: LogStatus
+  error?: string
+  [k: string]: unknown
+}
+
+function log(fields: LogFields): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }))
+}
+
+function logError(fields: LogFields & { error: string }): void {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
 const MAX_GEMINI_CALLS = 5
 const CANDIDATES_PER_NODE = 30
 const BATCH_SIZE = 25
@@ -69,7 +94,7 @@ export async function discoverCrossConnections(
       .in('id', newNodeIds)
 
     if (fetchError || !newNodesRaw?.length) {
-      console.warn('[crossConnections] Failed to fetch new nodes:', fetchError?.message)
+      logError({ stage: 'cross-connect', status: 'skipped', error: fetchError?.message ?? 'no new nodes found' })
       return []
     }
 
@@ -77,14 +102,14 @@ export async function discoverCrossConnections(
     const candidates = await findCandidates(newNodes, newNodeIds, userId)
 
     if (candidates.length === 0) {
-      console.warn('[crossConnections] No candidates found — graph may be too sparse or embeddings missing')
+      log({ stage: 'cross-connect', status: 'skipped', reason: 'no_candidates' })
       return []
     }
 
-    console.info(`[crossConnections] ${candidates.length} candidate pairs found for ${newNodes.length} new nodes`)
+    log({ stage: 'cross-connect', status: 'ok', candidate_count: candidates.length, node_count: newNodes.length })
     return await inferRelationships(newNodes, candidates)
   } catch (err) {
-    console.warn('[crossConnections] Discovery failed:', err)
+    logError({ stage: 'cross-connect', status: 'skipped', error: (err as Error).message ?? String(err) })
     return []
   }
 }
@@ -102,7 +127,7 @@ async function findCandidates(
   // ── Source 1: Semantic similarity (per new node, RPC-based) ──────────────
   for (const newNode of newNodes) {
     if (!newNode.embedding) {
-      console.warn(`[crossConnections] Skipping "${newNode.label}" — no embedding stored yet`)
+      log({ stage: 'cross-connect', status: 'partial', reason: 'no_embedding', label: newNode.label })
       continue
     }
 
@@ -246,7 +271,7 @@ async function inferRelationships(
       const edges = await inferBatch(batch, newNodeMap, existingNodeMap)
       allEdges.push(...edges)
     } catch (err) {
-      console.warn('[crossConnections] Batch inference failed:', err)
+      logError({ stage: 'cross-connect', status: 'skipped', error: `batch inference failed: ${(err as Error).message}` })
     }
   }
 
@@ -288,7 +313,7 @@ async function inferBatch(
   try {
     parsed = JSON.parse(rawText)
   } catch {
-    console.warn('[crossConnections] Failed to parse Gemini response')
+    logError({ stage: 'cross-connect', status: 'skipped', error: 'failed to parse Gemini response' })
     return []
   }
 
@@ -400,7 +425,7 @@ export async function saveCrossConnectionEdges(
     .select('id')
 
   if (error) {
-    console.warn('[crossConnections] Failed to save cross-connection edges:', error.message)
+    logError({ stage: 'cross-connect', status: 'skipped', error: `failed to save edges: ${error.message}` })
     return []
   }
 

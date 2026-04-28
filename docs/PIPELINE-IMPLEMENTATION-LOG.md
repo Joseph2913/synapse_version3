@@ -47,7 +47,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 | 5 | Entity extraction | Partial (v2 pipeline shipped) | _pending_ | 2026-04-26 |
 | 6 | Deduplication + merge | Not started | _pending_ | 2026-04-26 |
 | 7 | Knowledge persistence | Not started | _pending_ | 2026-04-26 |
-| 8 | Cross-connection discovery | Not started | _pending_ | 2026-04-26 |
+| 8 | Cross-connection discovery | Done | [STAGE-8-CROSS-CONNECT.md](STAGE-8-CROSS-CONNECT.md) | 2026-04-28 |
 | 9 | Anchor scoring | Not started | _pending_ | 2026-04-26 |
 | 10 | Skills detection + scoring | Not started | _pending_ | 2026-04-26 |
 | 11 | Council updates | Partial (Phase 0 shipped) | _pending_ | 2026-04-26 |
@@ -207,9 +207,25 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 ### Stage 8 — Cross-connection discovery
 
-**Status:** Not started.
+**Status:** Done. Owner doc: [STAGE-8-CROSS-CONNECT.md](STAGE-8-CROSS-CONNECT.md). Shipped 2026-04-28.
 
-**Open:** move out of request path into queued post-extraction job, confirm `semanticSearchNodes()` RPC and embedding index, batch Gemini calls (not one-per-candidate), explicit time-budget vs completeness rule.
+**Shipped:**
+- **New endpoint `api/cross-connect/run.ts`** — full server-side orchestration: auth-gated POST `{ nodeIds, sourceId? }`. Fetches new nodes + embeddings from `knowledge_nodes`, calls `match_knowledge_nodes` RPC per node (SIMILARITY_THRESHOLD 0.55, CANDIDATES_PER_NODE 30), deduplicates candidates by highest similarity, sends ONE Gemini call for up to GEMINI_BATCH_SIZE (20) top candidates, bulk-inserts confirmed edges. Uses canonical Stage 0 patterns (geminiFetch, log/logError, Supabase factory helpers, all inlined per Vercel bundling rule).
+- **Moved out of the browser request path.** `useExtraction.ts` and `extractionPipeline.ts` no longer await `discoverCrossConnections` / `saveCrossConnectionEdges` inline. Both now fire-and-forget to `/api/cross-connect/run` after extraction completes — identical pattern to anchor scoring. The extraction flow completes immediately; cross-connections discover in a background Vercel function.
+- **`match_knowledge_nodes` RPC fixed for 3072-dim HNSW.** The existing HNSW index used `vector_cosine_ops` which caps at 2000 dimensions. Migration `20260428_knowledge_nodes_halfvec_index.sql` drops the old index, creates `idx_knowledge_nodes_embedding_hnsw_halfvec` using `(embedding::halfvec(3072)) halfvec_cosine_ops` (m=16, ef_construction=64 — matches Stage 3 D-007), and replaces the RPC to cast both sides to `halfvec(3072)` so queries hit the new index. Parameter type remains `vector(3072)` for backward compatibility.
+- **Batching confirmed.** Both `api/cross-connect/run.ts` and `api/pipeline/extract-pipeline.ts:discoverCrossConnections` make exactly ONE Gemini call per extraction covering all candidates — not one call per candidate pair. `api/gemini/cross-connect.ts` (the legacy per-request endpoint) is retained as-is for direct browser callers but is no longer invoked by the orchestration path.
+- **Time budget enforced.** `CROSS_CONNECT_TIME_BUDGET_MS = 25_000` in `api/cross-connect/run.ts`. `DEFAULT_TIME_BUDGET_MS = 50_000` in `api/pipeline/extract-pipeline.ts` (covers full pipeline; cross-connections get the remainder). If the budget is consumed during RPC candidate gathering, we stop collection early and run Gemini on whatever candidates were found. If the budget is consumed before the Gemini call, we log and skip.
+- **Bulk insert everywhere.** `api/cross-connect/run.ts` and the refactored `discoverCrossConnections` in `api/pipeline/extract-pipeline.ts` both do a single `.insert(array)` call. The previous individual-insert loop in `extract-pipeline.ts` (one INSERT per relationship) is gone.
+- **Structured logging.** All code paths use `log()` / `logError()` with `stage: 'cross-connect'`. Fields include `user_id`, `source_id`, `edges_created`, `candidates_evaluated`, `duration_ms`, `prompt_tokens`, `reason` (for skips).
+- **Failure policy.** Stage 8 = Skip-with-telemetry per `FAILURE-POLICY.md`. Every catch block calls `logError()` with `status: 'skipped'` and returns 200 / 0 edges. Source status is never set to `failed` or `degraded` by this stage.
+- **`src/services/crossConnections.ts` logging migrated.** Browser-side orchestration helpers now use structured `log()` / `logError()` helpers with `stage: 'cross-connect'` instead of unstructured `console.warn` / `console.info`.
+- **tsc -b --force passes clean.** Zero new errors introduced.
+
+**Open follow-ups (non-blocking):**
+- Cross-connection count in `extraction_sessions` is recorded as 0 for browser and headless pipeline paths (since discovery now runs async). The count could be updated via a Supabase UPDATE when `/api/cross-connect/run` completes, if the UI needs it. Deferred.
+- `api/gemini/cross-connect.ts` (the original per-request Gemini proxy) is now only called by `src/services/crossConnections.ts` — itself only called by direct consumer code, not the main extraction flows. Consider deprecating it when `crossConnections.ts` is fully retired.
+
+**Decisions:** see D-S8-01, D-S8-02, D-S8-03 below.
 
 ---
 
@@ -423,6 +439,25 @@ Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
 **Rationale:** Unifying the cron extractor as a downstream consumer of rows already created by the capture endpoint is a cleaner architecture but a bigger refactor than Stage 2 owns. Stage 2 closes the dedup gap and standardises persistence; the unification is a future stage's concern.
 **Status:** Active.
 
+### D-S8-01 — Cross-connection runs as fire-and-forget post-extraction job, not inline
+**Date:** 2026-04-28
+**Decision:** Cross-connection discovery is removed from the synchronous extraction path in both `useExtraction.ts` and `extractionPipeline.ts`. Both now fire-and-forget to `/api/cross-connect/run` after extraction completes — the same pattern used by anchor scoring. The `api/pipeline/extract-pipeline.ts` inline path (used by serverless pipelines: YouTube, meetings, GitHub, ingest) retains its time-budget-gated inline call because those pipelines are already fully async and the inline approach avoids a second network round-trip inside Vercel.
+**Rationale:** Cross-connections are enrichment (Failure-POLICY.md: Skip-with-telemetry). They must not block the user-visible extraction completion UX. On a large graph, the RPC + Gemini call can take 5–15 s. Making users wait for it after an already 30–60 s extraction is a poor experience. Running it in a background Vercel function is the correct architectural placement.
+**Effect:** `crossConnectionCount` in the extraction session row is recorded as 0 for browser and headless pipeline paths. This is an acceptable gap; the session row is primarily used for debugging and the count is not user-facing.
+**Status:** Active.
+
+### D-S8-02 — match_knowledge_nodes must cast to halfvec(3072) to use HNSW index
+**Date:** 2026-04-28
+**Decision:** The `match_knowledge_nodes` RPC is rewritten (migration `20260428_knowledge_nodes_halfvec_index.sql`) to cast `kn.embedding` and `query_embedding` to `halfvec(3072)` on both sides of the `<=>` operator. The HNSW index is also recreated using `halfvec_cosine_ops` (replacing `vector_cosine_ops`).
+**Rationale:** pgvector's standard `vector_cosine_ops` HNSW implementation caps at 2000 dimensions. Our embeddings are 3072-dim (`gemini-embedding-001`). The prior index was therefore unusable and every `match_knowledge_nodes` call silently fell back to a sequential scan over all ~19,000+ nodes. This same fix was applied to `source_chunks` in Stage 3 (migration `stage3_chunks_constraints_and_index`, decision D-007) — `knowledge_nodes` was missed at that time.
+**Status:** Active.
+
+### D-S8-03 — Time budget for cross-connection discovery: 25 s (standalone) / remainder of 50 s (pipeline)
+**Date:** 2026-04-28
+**Decision:** `api/cross-connect/run.ts` uses `CROSS_CONNECT_TIME_BUDGET_MS = 25_000`. If RPC candidate gathering consumes the full 25 s, we stop collection early and run Gemini on whatever we have. `api/pipeline/extract-pipeline.ts:discoverCrossConnections` uses `DEFAULT_TIME_BUDGET_MS = 50_000` (the full pipeline budget), checked from `itemStartTime`. The cross-connection step gets whatever time remains after earlier pipeline stages. Gemini call itself gets a separate 30 s timeout.
+**Rationale:** 25 s for the standalone endpoint: leaves ample margin inside Vercel Pro's 300 s timeout even when called right after a 120 s extraction. 50 s for the inline pipeline: existing `DEFAULT_TIME_BUDGET_MS` that already governs the pipeline was the right cap rather than adding a new constant. If a pipeline consumes all 50 s before reaching cross-connections, the time-budget gate skips it with a log line.
+**Status:** Active.
+
 ### D-014 — Stage 0 Item 2B Gemini retry + token telemetry shipped via four-step rollout
 **Date:** 2026-04-28
 **Decision:** Apply the canonical `geminiFetch` / `embedText` / `embedTexts` recipe from `STAGE-0-FOUNDATIONS.md` Item 2 across all 41 backend files in `api/` that call Gemini, using the four-step pattern documented in the original deferral plan (1 pilot → 2 more → bulk → watch).
@@ -486,6 +521,9 @@ Themes that span multiple stages and should be tracked holistically.
 ## Changelog
 
 Reverse chronological. Every meaningful update goes here.
+
+### 2026-04-28 (Stage 8)
+- **Stage 8 — Cross-connection discovery. Done.** New standalone endpoint `api/cross-connect/run.ts` runs the full orchestration server-side: auth-gated POST, one `match_knowledge_nodes` RPC per new node (HNSW halfvec index, threshold 0.55), dedup candidates by highest similarity, single Gemini batch call for up to 20 candidates, bulk-insert confirmed edges. `useExtraction.ts` and `extractionPipeline.ts` now fire-and-forget to `/api/cross-connect/run` (never block the extraction UX). `api/pipeline/extract-pipeline.ts:discoverCrossConnections` retains its inline call for serverless pipelines but now uses bulk INSERT (was one INSERT per edge in a loop), structured `log()`/`logError()` with `stage:'cross-connect'`, and stops candidate collection early on time budget. Migration `20260428_knowledge_nodes_halfvec_index.sql` applied: drops `idx_knowledge_nodes_embedding_hnsw` (wrong `vector_cosine_ops` op class for 3072-dim), creates `idx_knowledge_nodes_embedding_hnsw_halfvec` with `halfvec_cosine_ops`, rewrites `match_knowledge_nodes` RPC to cast both sides to `halfvec(3072)` so the index is hit (fixes silent sequential scan). `src/services/crossConnections.ts` logging migrated to structured `log()`/`logError()` with `stage:'cross-connect'`. `tsc -b --force` clean. Decisions D-S8-01, D-S8-02, D-S8-03 recorded. Owner doc: [STAGE-8-CROSS-CONNECT.md](STAGE-8-CROSS-CONNECT.md).
 
 ### 2026-04-28
 - **Stage 4 — Prompt composition. Done.** Single canonical pure builder at [api/pipeline/extract-prompt.ts](../api/pipeline/extract-prompt.ts) — no env reads, browser-safe, deterministic. Both browser (`src/utils/promptBuilder.ts`) and serverless (`api/pipeline/extract-pipeline.ts`) re-export from it; the legacy plain-prose builder is gone. Active confirmed `knowledge_skills` (top 12) inject as a `<user_expertise>` hints block — wired in browser via `src/services/promptSkillsContext.ts` and in five serverless paths (youtube, github, meetings, microsoft, ingest/session). New `extraction_sessions.prompt_version` column (migration `20260428_extraction_sessions_prompt_version.sql` applied to prod) stamped from `composeExtractionPrompt()`; `PROMPT_VERSION = '2.1.0'`. Snapshot tests lock the rendered prompt for all four modes; 25 unit tests in [tests/prompts/extract-prompt.test.ts](../tests/prompts/extract-prompt.test.ts) cover invariants, modes, anchor emphasis, skills wiring, profile, and version stability. Owner doc: [STAGE-4-PROMPT.md](STAGE-4-PROMPT.md). Decisions D-S4-01 through D-S4-04.

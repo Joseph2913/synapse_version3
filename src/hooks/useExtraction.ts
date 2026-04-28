@@ -22,7 +22,9 @@ import {
 } from '../services/extractionPersistence'
 import { supabase } from '../services/supabase'
 import { checkDeduplication, savePotentialDuplicates } from '../services/deduplication'
-import { discoverCrossConnections, saveCrossConnectionEdges } from '../services/crossConnections'
+// discoverCrossConnections and saveCrossConnectionEdges are no longer called
+// directly from the browser. Cross-connection discovery runs server-side via
+// /api/cross-connect/run (fire-and-forget) so it never blocks the extraction UX.
 
 const INITIAL_STATE: PipelineState = {
   step: 'idle',
@@ -315,32 +317,7 @@ export function useExtraction(): UseExtractionReturn {
           }
         }
 
-        // Step 8: Discover cross-connections
-        update({
-          step: 'discovering_connections',
-          statusText: `Checking ${savedNodes.length} new entities against existing graph...`,
-        })
-
-        let crossConnectionCount = 0
-        let crossEdgeIds: string[] = []
-        try {
-          if (savedNodes.length > 0) {
-            const crossEdges = await discoverCrossConnections(
-              savedNodes.map(n => n.id),
-              userId
-            )
-            crossConnectionCount = crossEdges.length
-
-            if (crossEdges.length > 0) {
-              crossEdgeIds = await saveCrossConnectionEdges(userId, crossEdges)
-            }
-          }
-        } catch (crossErr) {
-          console.warn('[useExtraction] Cross-connection discovery failed:', crossErr)
-          // Continue — cross-connection failure is non-fatal
-        }
-
-        // Record the extraction session
+        // Record the extraction session before firing background jobs
         stopTimer()
         const durationMs = Date.now() - startTimeRef.current
 
@@ -353,17 +330,17 @@ export function useExtraction(): UseExtractionReturn {
           userGuidance: config?.customGuidance,
           selectedAnchorIds: config?.anchors.map(() => ''), // simplified
           extractedNodeIds: savedNodes.map(n => n.id),
-          extractedEdgeIds: [...savedEdgeIds, ...crossEdgeIds],
+          extractedEdgeIds: savedEdgeIds,
           entityCount: savedNodes.length,
-          relationshipCount: savedEdgeIds.length + crossEdgeIds.length,
+          relationshipCount: savedEdgeIds.length,
           chunkCount,
-          crossConnectionCount,
+          crossConnectionCount: 0, // updated async by /api/cross-connect/run
           durationMs,
           promptVersion: promptVersionRef.current,
         })
 
-        // Trigger anchor scoring — fire-and-forget, never blocks the UI
-        if (savedNodes.length > 0 && sourceId) {
+        // Trigger anchor scoring and cross-connection discovery — fire-and-forget, never block the UI
+        if (savedNodes.length > 0) {
           const { data: { session: currentSession } } = await supabase.auth.getSession()
           if (currentSession?.access_token) {
             fetch('/api/anchors/score-post-extraction', {
@@ -380,12 +357,27 @@ export function useExtraction(): UseExtractionReturn {
             }).catch(err => {
               console.warn('[useExtraction] Anchor scoring trigger failed (non-fatal):', err)
             })
+
+            // Stage 8: Cross-connection discovery — server-side, never blocks the UI
+            fetch('/api/cross-connect/run', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentSession.access_token}`,
+              },
+              body: JSON.stringify({
+                nodeIds:  savedNodes.map(n => n.id),
+                sourceId: sourceId ?? undefined,
+              }),
+            }).catch(err => {
+              console.warn('[useExtraction] Cross-connection trigger failed (non-fatal):', err)
+            })
           }
         }
 
         update({
           step: 'complete',
-          crossConnectionCount,
+          crossConnectionCount: 0,
           statusText: 'Extraction complete!',
           elapsedMs: durationMs,
         })
