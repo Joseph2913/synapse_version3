@@ -6,10 +6,7 @@
  * structured intent classification.
  */
 
-import { fetchWithRetry, GEMINI_CHAT_MODEL } from './gemini'
-
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { callApi } from './apiClient'
 
 /** Retrieval type determines which search strategy to use (PRD-RAG-01) */
 export type RetrievalType = 'factual' | 'relational' | 'synthesis'
@@ -135,60 +132,14 @@ export async function classifyQuery(
   question: string,
   conversationContext?: string
 ): Promise<QueryClassification> {
-  if (!GEMINI_API_KEY) {
-    console.warn('[classifier] No API key, using default classification')
-    return DEFAULT_CLASSIFICATION
-  }
-
   // PRD-RAG-01: Try heuristic retrieval type detection first (fast, no API call)
   const heuristicRetrievalType = detectRetrievalTypeHeuristic(question)
 
   try {
-    const prompt = `Classify this knowledge graph query. Return ONLY valid JSON.
-
-Query: "${question}"
-${conversationContext ? `Conversation context: "${conversationContext}"` : ''}
-
-Classify into:
-- intent: factual (specific fact/date/name), analytical (why/how/implications), comparative (X vs Y), exploratory (open-ended/what exists), temporal (timeline/evolution/latest), actionable (risks/actions/decisions)
-- retrieval: { chunkCount (3-20), traversalHops (1-3), prioritiseRecency (bool), needsBroadSearch (bool) }
-- responseFormat: prose (default analysis), list (ranked items), comparison (structured side-by-side), timeline (chronological), summary (concise overview)
-- thinkingBudget: 0 (simple fact), 1024 (moderate), 4096 (complex analysis), 8192 (deep multi-source reasoning)
-- suggestFollowUp: true if the topic has natural depth to explore further
-- confidence: 0-1
-
-Return only the JSON object.`
-
-    const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            maxOutputTokens: 512,
-            temperature: 0,
-            responseMimeType: 'application/json',
-            // Disable thinking — classification is a simple task that doesn't
-            // need internal reasoning, and thinking was consuming the entire
-            // output budget leaving only "{" as the response
-            thinkingConfig: { thinkingBudget: 0 },
-          },
-        }),
-      },
-      1 // Single attempt — speed over reliability for classification
-    )
-
-    const data = await response.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
-    }
-
-    // Gemini 2.5 Flash returns thinking parts before the real JSON — skip them
-    const parts = data.candidates?.[0]?.content?.parts ?? []
-    const textPart = parts.find(p => p.thought !== true && typeof p.text === 'string')
-      ?? parts.find(p => typeof p.text === 'string')
-    const text = textPart?.text
+    const { text } = await callApi<{ text: string }>('/api/gemini/classify-query', {
+      question,
+      conversationContext,
+    })
 
     if (!text) {
       console.warn('[classifier] Empty response, using default')
