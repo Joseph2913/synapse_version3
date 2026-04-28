@@ -4,9 +4,13 @@ import { waitUntil } from '@vercel/functions';
 import {
   runExtractionCore,
   stripMarkdown,
+  PIPELINE_MODEL,
+  PIPELINE_EMBEDDING_MODEL,
+  PROMPT_VERSION,
   type Anchor,
   type UserProfile,
   type PromptSkillHint,
+  type TokenAccumulator,
 } from '../pipeline/extract-pipeline.js';
 
 export const maxDuration = 300;
@@ -37,6 +41,75 @@ async function resolveAuth(req: VercelRequest): Promise<{ userId: string | null;
     return { userId: user?.id ?? null, isIngestSecret: false };
   } catch {
     return { userId: null, isIngestSecret: false };
+  }
+}
+
+// ─── AUDIT HELPERS ────────────────────────────────────────────────────────────
+
+const COST_INPUT_PER_TOKEN = 0.075 / 1_000_000;
+const COST_OUTPUT_PER_TOKEN = 0.30 / 1_000_000;
+
+function estimateCost(promptTokens: number, outputTokens: number): number {
+  return promptTokens * COST_INPUT_PER_TOKEN + outputTokens * COST_OUTPUT_PER_TOKEN;
+}
+
+async function writeAuditSession(
+  supabase: ReturnType<typeof getSupabase>,
+  fields: {
+    userId: string;
+    sourceName: string;
+    sourceType: string;
+    sourceId?: string | null;
+    contentPreview: string;
+    extractionMode: string;
+    anchorEmphasis: string;
+    userGuidance?: string | null;
+    selectedAnchorIds?: string[];
+    entityCount: number;
+    relationshipCount: number;
+    chunkCount: number;
+    crossConnectionCount: number;
+    durationMs: number;
+    promptVersion: string;
+    model: string;
+    embeddingModel: string;
+    promptTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costEstimateUsd: number;
+    sessionStatus: 'success' | 'failed' | 'degraded';
+    errorReason?: string | null;
+  }
+): Promise<void> {
+  try {
+    const { error } = await supabase.from('extraction_sessions').insert({
+      user_id: fields.userId,
+      source_name: fields.sourceName,
+      source_type: fields.sourceType,
+      source_id: fields.sourceId ?? null,
+      source_content_preview: fields.contentPreview,
+      extraction_mode: fields.extractionMode,
+      anchor_emphasis: fields.anchorEmphasis,
+      user_guidance: fields.userGuidance ?? null,
+      selected_anchor_ids: fields.selectedAnchorIds ?? [],
+      entity_count: fields.entityCount,
+      relationship_count: fields.relationshipCount,
+      chunk_count: fields.chunkCount,
+      cross_connection_count: fields.crossConnectionCount,
+      extraction_duration_ms: fields.durationMs,
+      prompt_version: fields.promptVersion,
+      model: fields.model,
+      embedding_model: fields.embeddingModel,
+      prompt_tokens: fields.promptTokens,
+      output_tokens: fields.outputTokens,
+      total_tokens: fields.totalTokens,
+      cost_estimate_usd: fields.costEstimateUsd,
+      session_status: fields.sessionStatus,
+      error_reason: fields.errorReason ?? null,
+    });
+    if (error) console.error('[retry-source] audit-session insert failed:', error.message);
+  } catch (e) {
+    console.error('[retry-source] audit-session insert threw:', String(e));
   }
 }
 
@@ -72,6 +145,8 @@ async function runRetryPipeline(
 ): Promise<void> {
   const supabase = getSupabase();
   const startTime = Date.now();
+  let anchorIds: string[] = [];
+  let tokenUsage: TokenAccumulator = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
 
   const setStatus = async (extractionStatus: string, topLevel?: string) => {
     const meta = { ...originalMetadata, extraction_status: extractionStatus, retry_started_at: new Date().toISOString() };
@@ -94,7 +169,7 @@ async function runRetryPipeline(
     const [profileResult, anchorsResult, skillsResult] = await Promise.all([
       supabase.from('user_profiles').select('*').eq('user_id', userId).maybeSingle(),
       supabase.from('knowledge_nodes')
-        .select('label, entity_type, description')
+        .select('id, label, entity_type, description')
         .eq('user_id', userId)
         .eq('is_anchor', true)
         .limit(10),
@@ -108,6 +183,7 @@ async function runRetryPipeline(
 
     const userProfile = profileResult.data as UserProfile | null;
     const anchors = (anchorsResult.data ?? []) as Anchor[];
+    anchorIds = (anchorsResult.data ?? []).map(a => (a as { id: string }).id);
     const activeSkills = (skillsResult.data ?? []) as PromptSkillHint[];
 
     const coreResult = await runExtractionCore({
@@ -130,6 +206,7 @@ async function runRetryPipeline(
       supabase,
     });
 
+    tokenUsage = coreResult.tokenUsage;
     const savedNodeIds = Array.from(coreResult.savedNodeMap.values());
     if (savedNodeIds.length > 0) {
       const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
@@ -151,12 +228,67 @@ async function runRetryPipeline(
       }).catch(() => {});
     }
 
+    const durationMs = Date.now() - startTime;
     await setStatus('completed', 'complete');
-    console.log(`[ingest/retry-source] Done: ${coreResult.nodesCreated} nodes, ${coreResult.edgesCreated} edges, ${coreResult.chunksCreated} chunks in ${Date.now() - startTime}ms`);
+
+    // Stage 12: write success session (skip-with-telemetry).
+    await writeAuditSession(supabase, {
+      userId,
+      sourceName: title,
+      sourceType,
+      sourceId,
+      contentPreview: content.slice(0, 300),
+      extractionMode: 'comprehensive',
+      anchorEmphasis: 'aggressive',
+      userGuidance: guidance,
+      selectedAnchorIds: anchorIds,
+      entityCount: coreResult.nodesCreated,
+      relationshipCount: coreResult.edgesCreated,
+      chunkCount: coreResult.chunksCreated,
+      crossConnectionCount: coreResult.crossConnectionCount,
+      durationMs,
+      promptVersion: PROMPT_VERSION,
+      model: PIPELINE_MODEL,
+      embeddingModel: PIPELINE_EMBEDDING_MODEL,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costEstimateUsd: estimateCost(tokenUsage.promptTokens, tokenUsage.outputTokens),
+      sessionStatus: 'success',
+    });
+
+    console.log(`[ingest/retry-source] Done: ${coreResult.nodesCreated} nodes, ${coreResult.edgesCreated} edges, ${coreResult.chunksCreated} chunks in ${durationMs}ms`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[ingest/retry-source] Failed:', msg);
     await setStatus('error', 'failed');
+
+    // Stage 12: write failure session (skip-with-telemetry — never rethrows).
+    await writeAuditSession(supabase, {
+      userId,
+      sourceName: title,
+      sourceType,
+      sourceId,
+      contentPreview: content.slice(0, 300),
+      extractionMode: 'comprehensive',
+      anchorEmphasis: 'aggressive',
+      userGuidance: guidance,
+      selectedAnchorIds: anchorIds,
+      entityCount: 0,
+      relationshipCount: 0,
+      chunkCount: 0,
+      crossConnectionCount: 0,
+      durationMs: Date.now() - startTime,
+      promptVersion: PROMPT_VERSION,
+      model: PIPELINE_MODEL,
+      embeddingModel: PIPELINE_EMBEDDING_MODEL,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costEstimateUsd: estimateCost(tokenUsage.promptTokens, tokenUsage.outputTokens),
+      sessionStatus: 'failed',
+      errorReason: msg.slice(0, 500),
+    });
   }
 }
 

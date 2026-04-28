@@ -4,9 +4,13 @@ import { waitUntil } from '@vercel/functions';
 import {
   runExtractionCore,
   stripMarkdown,
+  PIPELINE_MODEL,
+  PIPELINE_EMBEDDING_MODEL,
+  PROMPT_VERSION,
   type Anchor,
   type UserProfile,
   type PromptSkillHint,
+  type TokenAccumulator,
 } from '../pipeline/extract-pipeline.js';
 
 // 300s ceiling to cover map-reduce + dedup + chunk persistence on long sources.
@@ -52,6 +56,77 @@ function log(fields: LogFields): void {
 
 function logError(fields: LogFields & { error: string }): void {
   console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+// ─── AUDIT HELPERS ────────────────────────────────────────────────────────────
+
+const COST_INPUT_PER_TOKEN = 0.075 / 1_000_000;
+const COST_OUTPUT_PER_TOKEN = 0.30 / 1_000_000;
+
+function estimateCost(promptTokens: number, outputTokens: number): number {
+  return promptTokens * COST_INPUT_PER_TOKEN + outputTokens * COST_OUTPUT_PER_TOKEN;
+}
+
+async function writeAuditSession(
+  supabase: ReturnType<typeof getSupabase>,
+  fields: {
+    userId: string;
+    sourceName: string;
+    sourceType: string;
+    sourceId?: string | null;
+    contentPreview: string;
+    extractionMode: string;
+    anchorEmphasis: string;
+    userGuidance?: string | null;
+    selectedAnchorIds?: string[];
+    entityCount: number;
+    relationshipCount: number;
+    chunkCount: number;
+    crossConnectionCount: number;
+    durationMs: number;
+    promptVersion: string;
+    model: string;
+    embeddingModel: string;
+    promptTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costEstimateUsd: number;
+    sessionStatus: 'success' | 'failed' | 'degraded';
+    errorReason?: string | null;
+  }
+): Promise<void> {
+  try {
+    const { error } = await supabase.from('extraction_sessions').insert({
+      user_id: fields.userId,
+      source_name: fields.sourceName,
+      source_type: fields.sourceType,
+      source_id: fields.sourceId ?? null,
+      source_content_preview: fields.contentPreview,
+      extraction_mode: fields.extractionMode,
+      anchor_emphasis: fields.anchorEmphasis,
+      user_guidance: fields.userGuidance ?? null,
+      selected_anchor_ids: fields.selectedAnchorIds ?? [],
+      entity_count: fields.entityCount,
+      relationship_count: fields.relationshipCount,
+      chunk_count: fields.chunkCount,
+      cross_connection_count: fields.crossConnectionCount,
+      extraction_duration_ms: fields.durationMs,
+      prompt_version: fields.promptVersion,
+      model: fields.model,
+      embedding_model: fields.embeddingModel,
+      prompt_tokens: fields.promptTokens,
+      output_tokens: fields.outputTokens,
+      total_tokens: fields.totalTokens,
+      cost_estimate_usd: fields.costEstimateUsd,
+      session_status: fields.sessionStatus,
+      error_reason: fields.errorReason ?? null,
+    });
+    if (error) {
+      logError({ stage: 'audit-session', error: error.message });
+    }
+  } catch (e) {
+    logError({ stage: 'audit-session', error: String(e) });
+  }
 }
 
 // ─── Stage 2 — persistSource (GitHub session variant, inlined) ────────────────
@@ -218,6 +293,8 @@ async function runExtractionPipeline(params: {
   const { sourceId, userId, title, content, guidance, metadata } = params;
   const startTime = Date.now();
   const supabase = getSupabase();
+  let anchorIds: string[] = [];
+  let tokenUsage: TokenAccumulator = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
 
   const updateStatus = async (status: string, extra?: Record<string, unknown>) => {
     const meta = { ...metadata, extraction_status: status, ...extra };
@@ -247,7 +324,7 @@ async function runExtractionPipeline(params: {
       supabase.from('user_profiles').select('*').eq('user_id', userId).maybeSingle(),
       supabase
         .from('knowledge_nodes')
-        .select('label, entity_type, description')
+        .select('id, label, entity_type, description')
         .eq('user_id', userId)
         .eq('is_anchor', true)
         .limit(10),
@@ -262,6 +339,7 @@ async function runExtractionPipeline(params: {
 
     const userProfile = profileResult.data as UserProfile | null;
     const anchors = (anchorsResult.data ?? []) as Anchor[];
+    anchorIds = (anchorsResult.data ?? []).map(a => (a as { id: string }).id);
     const activeSkills = (skillsResult.data ?? []) as PromptSkillHint[];
 
     // Manual capture sessions always run the most aggressive mode because
@@ -292,6 +370,7 @@ async function runExtractionPipeline(params: {
     });
 
     const { savedNodeMap, nodesCreated, edgesCreated, crossConnectionCount, chunksCreated } = coreResult;
+    tokenUsage = coreResult.tokenUsage;
 
 
     // ── STEP 10: TRIGGER ANCHOR SCORING (fire-and-forget) ───────────────────
@@ -325,12 +404,39 @@ async function runExtractionPipeline(params: {
     }
 
     // ── COMPLETE ────────────────────────────────────────────────────────────
+    const durationMs = Date.now() - startTime;
     await updateStatus('completed', {
       processing_completed_at: new Date().toISOString(),
-      duration_ms: Date.now() - startTime,
+      duration_ms: durationMs,
     });
 
-    console.log(`[ingest/session] Complete: ${nodesCreated} nodes, ${edgesCreated} edges (${crossConnectionCount} cross), ${chunksCreated} chunks in ${Date.now() - startTime}ms`);
+    // Stage 12: write success session (skip-with-telemetry).
+    await writeAuditSession(supabase, {
+      userId,
+      sourceName: title,
+      sourceType: 'github',
+      sourceId,
+      contentPreview: content.slice(0, 300),
+      extractionMode: 'comprehensive',
+      anchorEmphasis: 'aggressive',
+      userGuidance: guidance ?? null,
+      selectedAnchorIds: anchorIds,
+      entityCount: nodesCreated,
+      relationshipCount: edgesCreated,
+      chunkCount: chunksCreated,
+      crossConnectionCount,
+      durationMs,
+      promptVersion: PROMPT_VERSION,
+      model: PIPELINE_MODEL,
+      embeddingModel: PIPELINE_EMBEDDING_MODEL,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costEstimateUsd: estimateCost(tokenUsage.promptTokens, tokenUsage.outputTokens),
+      sessionStatus: 'success',
+    });
+
+    console.log(`[ingest/session] Complete: ${nodesCreated} nodes, ${edgesCreated} edges (${crossConnectionCount} cross), ${chunksCreated} chunks in ${durationMs}ms`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[ingest/session] Pipeline error:', err);
@@ -338,6 +444,33 @@ async function runExtractionPipeline(params: {
       error: msg,
       failed_at: new Date().toISOString(),
     }).catch(() => { /* best-effort status update */ });
+
+    // Stage 12: write failure session (skip-with-telemetry — never rethrows).
+    await writeAuditSession(supabase, {
+      userId,
+      sourceName: title,
+      sourceType: 'github',
+      sourceId,
+      contentPreview: content.slice(0, 300),
+      extractionMode: 'comprehensive',
+      anchorEmphasis: 'aggressive',
+      userGuidance: guidance ?? null,
+      selectedAnchorIds: anchorIds,
+      entityCount: 0,
+      relationshipCount: 0,
+      chunkCount: 0,
+      crossConnectionCount: 0,
+      durationMs: Date.now() - startTime,
+      promptVersion: PROMPT_VERSION,
+      model: PIPELINE_MODEL,
+      embeddingModel: PIPELINE_EMBEDDING_MODEL,
+      promptTokens: tokenUsage.promptTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costEstimateUsd: estimateCost(tokenUsage.promptTokens, tokenUsage.outputTokens),
+      sessionStatus: 'failed',
+      errorReason: msg.slice(0, 500),
+    });
   }
 }
 

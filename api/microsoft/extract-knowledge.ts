@@ -2,9 +2,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import {
   runExtractionCore,
+  PIPELINE_MODEL,
+  PIPELINE_EMBEDDING_MODEL,
+  PROMPT_VERSION,
   type Anchor,
   type UserProfile,
   type PromptSkillHint,
+  type TokenAccumulator,
 } from '../pipeline/extract-pipeline.js';
 
 export const maxDuration = 300;
@@ -61,6 +65,77 @@ function log(fields: LogFields): void {
 
 function logError(fields: LogFields & { error: string }): void {
   console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', ...fields }))
+}
+
+// ─── AUDIT HELPERS ────────────────────────────────────────────────────────────
+
+const COST_INPUT_PER_TOKEN = 0.075 / 1_000_000;
+const COST_OUTPUT_PER_TOKEN = 0.30 / 1_000_000;
+
+function estimateCost(promptTokens: number, outputTokens: number): number {
+  return promptTokens * COST_INPUT_PER_TOKEN + outputTokens * COST_OUTPUT_PER_TOKEN;
+}
+
+async function writeAuditSession(
+  supabase: ReturnType<typeof getSupabase>,
+  fields: {
+    userId: string;
+    sourceName: string;
+    sourceType: string;
+    sourceId?: string | null;
+    contentPreview: string;
+    extractionMode: string;
+    anchorEmphasis: string;
+    userGuidance?: string | null;
+    selectedAnchorIds?: string[];
+    entityCount: number;
+    relationshipCount: number;
+    chunkCount: number;
+    crossConnectionCount: number;
+    durationMs: number;
+    promptVersion: string;
+    model: string;
+    embeddingModel: string;
+    promptTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costEstimateUsd: number;
+    sessionStatus: 'success' | 'failed' | 'degraded';
+    errorReason?: string | null;
+  }
+): Promise<void> {
+  try {
+    const { error } = await supabase.from('extraction_sessions').insert({
+      user_id: fields.userId,
+      source_name: fields.sourceName,
+      source_type: fields.sourceType,
+      source_id: fields.sourceId ?? null,
+      source_content_preview: fields.contentPreview,
+      extraction_mode: fields.extractionMode,
+      anchor_emphasis: fields.anchorEmphasis,
+      user_guidance: fields.userGuidance ?? null,
+      selected_anchor_ids: fields.selectedAnchorIds ?? [],
+      entity_count: fields.entityCount,
+      relationship_count: fields.relationshipCount,
+      chunk_count: fields.chunkCount,
+      cross_connection_count: fields.crossConnectionCount,
+      extraction_duration_ms: fields.durationMs,
+      prompt_version: fields.promptVersion,
+      model: fields.model,
+      embedding_model: fields.embeddingModel,
+      prompt_tokens: fields.promptTokens,
+      output_tokens: fields.outputTokens,
+      total_tokens: fields.totalTokens,
+      cost_estimate_usd: fields.costEstimateUsd,
+      session_status: fields.sessionStatus,
+      error_reason: fields.errorReason ?? null,
+    });
+    if (error) {
+      logError({ stage: 'audit-session', error: error.message });
+    }
+  } catch (e) {
+    logError({ stage: 'audit-session', error: String(e) });
+  }
 }
 
 // ─── Stage 2 — persistSource (Microsoft variant, inlined) ────────────────────
@@ -228,6 +303,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }).eq('id', item.id);
 
       const itemStartTime = Date.now();
+      let itemExtractMode = 'comprehensive';
+      let itemAnchorEmphasis = 'standard';
+      let itemAnchorIds: string[] = [];
+      let itemSourceId: string | null = null;
+      let itemTokenUsage: TokenAccumulator = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+
       try {
         // ── Fetch extraction config (profile, integration settings, anchors) ──
         const [profileRes, integrationRes, anchorsRes, extractionSettingsRes, skillsRes] = await Promise.all([
@@ -239,7 +320,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .maybeSingle(),
           supabase
             .from('knowledge_nodes')
-            .select('label, entity_type, description')
+            .select('id, label, entity_type, description')
             .eq('user_id', item.user_id)
             .eq('is_anchor', true)
             .limit(10),
@@ -262,14 +343,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } | null;
         const defaults = extractionSettingsRes.data as { default_mode: string; default_anchor_emphasis: string } | null;
 
-        const extractionMode = integrationSettings?.extraction_mode ?? defaults?.default_mode ?? 'comprehensive';
-        const anchorEmphasis = integrationSettings?.anchor_emphasis ?? defaults?.default_anchor_emphasis ?? 'standard';
+        itemExtractMode = integrationSettings?.extraction_mode ?? defaults?.default_mode ?? 'comprehensive';
+        itemAnchorEmphasis = integrationSettings?.anchor_emphasis ?? defaults?.default_anchor_emphasis ?? 'standard';
+        const extractionMode = itemExtractMode;
+        const anchorEmphasis = itemAnchorEmphasis;
 
         // Full anchor context — before consolidation, Microsoft only passed
         // anchor labels as a comma-separated string to Gemini. Now it gets
         // the same rich anchor context (type + description) every other
         // pipeline uses.
         const anchors = (anchorsRes.data ?? []) as Anchor[];
+        itemAnchorIds = (anchorsRes.data ?? []).map(a => (a as { id: string }).id);
         const activeSkills = (skillsRes.data ?? []) as PromptSkillHint[];
 
         // ── Determine source shape ──
@@ -304,6 +388,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           slicedContent,
         );
         const sourceId = persistResult.sourceId;
+        itemSourceId = sourceId;
         log({
           stage: 'persist',
           user_id: item.user_id,
@@ -335,6 +420,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           options: { itemStartTime },
         });
 
+        itemTokenUsage = coreResult.tokenUsage;
+
         // ── Mark queue complete ──
         await supabase.from('microsoft_ingestion_queue').update({
           status: 'completed',
@@ -344,6 +431,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         }).eq('id', item.id);
+
+        // Stage 12: write success session (skip-with-telemetry).
+        await writeAuditSession(supabase, {
+          userId: item.user_id,
+          sourceName: item.title ?? 'Microsoft 365',
+          sourceType,
+          sourceId,
+          contentPreview: item.content.slice(0, 300),
+          extractionMode,
+          anchorEmphasis,
+          userGuidance: integrationSettings?.custom_instructions ?? null,
+          selectedAnchorIds: itemAnchorIds,
+          entityCount: coreResult.nodesCreated,
+          relationshipCount: coreResult.edgesCreated,
+          chunkCount: coreResult.chunksCreated,
+          crossConnectionCount: coreResult.crossConnectionCount,
+          durationMs: Date.now() - itemStartTime,
+          promptVersion: PROMPT_VERSION,
+          model: PIPELINE_MODEL,
+          embeddingModel: PIPELINE_EMBEDDING_MODEL,
+          promptTokens: itemTokenUsage.promptTokens,
+          outputTokens: itemTokenUsage.outputTokens,
+          totalTokens: itemTokenUsage.totalTokens,
+          costEstimateUsd: estimateCost(itemTokenUsage.promptTokens, itemTokenUsage.outputTokens),
+          sessionStatus: 'success',
+        });
 
         // ── TRIGGER SKILLS DETECTION (fire-and-forget) ──────────────────
         {
@@ -438,6 +551,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             updated_at: new Date().toISOString(),
           }).eq('id', item.id);
         }
+
+        // Stage 12: write failure session (skip-with-telemetry — never rethrows).
+        await writeAuditSession(supabase, {
+          userId: item.user_id,
+          sourceName: item.title ?? 'Microsoft 365',
+          sourceType: item.resource_type === 'meeting_transcript' || item.resource_type === 'calendar_event' ? 'meeting' : 'research',
+          sourceId: itemSourceId,
+          contentPreview: item.content.slice(0, 300),
+          extractionMode: itemExtractMode,
+          anchorEmphasis: itemAnchorEmphasis,
+          selectedAnchorIds: itemAnchorIds,
+          entityCount: 0,
+          relationshipCount: 0,
+          chunkCount: 0,
+          crossConnectionCount: 0,
+          durationMs: Date.now() - itemStartTime,
+          promptVersion: PROMPT_VERSION,
+          model: PIPELINE_MODEL,
+          embeddingModel: PIPELINE_EMBEDDING_MODEL,
+          promptTokens: itemTokenUsage.promptTokens,
+          outputTokens: itemTokenUsage.outputTokens,
+          totalTokens: itemTokenUsage.totalTokens,
+          costEstimateUsd: estimateCost(itemTokenUsage.promptTokens, itemTokenUsage.outputTokens),
+          sessionStatus: 'failed',
+          errorReason: msg.slice(0, 500),
+        });
       }
     }
 

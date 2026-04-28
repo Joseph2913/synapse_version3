@@ -156,8 +156,9 @@ export async function saveExtractionSession(
     chunkCount: number
     crossConnectionCount: number
     durationMs: number
-    /** Stage 4 — canonical PROMPT_VERSION used to compose the extraction prompt. */
     promptVersion?: string
+    model?: string
+    embeddingModel?: string
   }
 ): Promise<string | null> {
   try {
@@ -174,6 +175,8 @@ export async function saveExtractionSession(
       cross_connection_count: data.crossConnectionCount,
       extraction_duration_ms: data.durationMs,
       prompt_version: data.promptVersion ?? 'unknown',
+      model: data.model ?? 'unknown',
+      embedding_model: data.embeddingModel ?? 'unknown',
     }
 
     if (data.userGuidance) row.user_guidance = data.userGuidance

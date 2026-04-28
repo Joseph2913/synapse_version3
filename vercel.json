@@ -78,6 +78,10 @@
     {
       "path": "/api/cron/sweep-stuck-sources",
       "schedule": "30 * * * *"
+    },
+    {
+      "path": "/api/cron/prune-sessions",
+      "schedule": "0 4 * * *"
     }
   ]
 }

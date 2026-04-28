@@ -51,7 +51,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 | 9 | Anchor scoring | Done | [STAGE-9-ANCHOR-SCORING.md](STAGE-9-ANCHOR-SCORING.md) | 2026-04-28 |
 | 10 | Skills detection + scoring | Done | _inline_ | 2026-04-28 |
 | 11 | Council updates | Done | _inline_ | 2026-04-28 |
-| 12 | Extraction session audit | Not started | _pending_ | 2026-04-26 |
+| 12 | Extraction session audit | Done | _inline_ | 2026-04-28 |
 | 13 | Surfacing (RAG, MCP, activity) | Not started | _pending_ | 2026-04-26 |
 | S | Secret hygiene + client-server boundary | Scoped (urgent — incident-driven) | _pending_ | 2026-04-28 |
 
@@ -363,9 +363,20 @@ All three use `Authorization: Bearer ${CRON_SECRET}` and are genuine fire-and-fo
 
 ### Stage 12 — Extraction session audit
 
-**Status:** Not started.
+**Status:** Done.
 
-**Open:** rows written even on failure, capture real anchor IDs (not empty strings), stamp prompt + model + embedding versions, capture token counts and cost estimate, retention policy.
+**What shipped:**
+
+- **Schema migration** `supabase/migrations/20260428_extraction_sessions_audit.sql`: nine new columns — `source_id uuid REFERENCES knowledge_sources(id) ON DELETE SET NULL`, `session_status text NOT NULL DEFAULT 'success'` (check constraint: `success | failed | degraded`), `error_reason text`, `model text NOT NULL DEFAULT 'unknown'`, `embedding_model text NOT NULL DEFAULT 'unknown'`, `prompt_tokens integer`, `output_tokens integer`, `total_tokens integer`, `cost_estimate_usd numeric(10,6)`. Two indexes: `extraction_sessions_source_id_idx`, `extraction_sessions_status_created_idx`. `prune_old_extraction_sessions()` RPC (SECURITY DEFINER, deletes rows older than 90 days).
+- **`TokenAccumulator` interface** and `PIPELINE_MODEL` / `PIPELINE_EMBEDDING_MODEL` constants added to `api/pipeline/extract-pipeline.ts`. `extractEntities` and `extractEntitiesMapReduce` accept an optional `tokenAcc` parameter that aggregates `promptTokenCount + candidatesTokenCount + totalTokenCount` from each `geminiFetch` call. `runExtractionCore` creates the accumulator, threads it through both extraction paths, and returns `tokenUsage` in `CoreExtractionResult`.
+- **All six pipeline files** updated with inlined `writeAuditSession()` + `estimateCost()` helpers, outer-variable pattern for audit vars, success session write, and failure session write in catch: `api/youtube/extract-knowledge.ts`, `api/github/extract-knowledge.ts`, `api/meetings/process.ts`, `api/ingest/session.ts`, `api/ingest/retry-source.ts`, `api/microsoft/extract-knowledge.ts`.
+- **Anchor ID fix:** all six files changed anchor query from `select('label, entity_type, description')` to `select('id, label, entity_type, description')` and extract `anchorIds` array for stamping on `selected_anchor_ids`.
+- **Duration fix:** `meetings/process.ts` now captures `itemStartTime = Date.now()` before the try block and computes `durationMs = Date.now() - itemStartTime` for both success and failure writes. The previous `extraction_duration_ms: null` bug is fixed.
+- **Cost model:** Gemini 2.5 Flash pricing at 2026-04-28 — $0.075/1M input tokens, $0.30/1M output tokens.
+- **Retention cron:** `api/cron/prune-sessions.ts` calls `prune_old_extraction_sessions()` RPC. Registered in `vercel.json` at `0 4 * * *` (daily 04:00 UTC).
+- **Browser path:** `src/services/extractionPersistence.ts:saveExtractionSession()` updated to accept and stamp `model` and `embeddingModel` fields.
+- **Constraint:** all audit writes are Skip-with-telemetry — `writeAuditSession()` wraps the insert in try/catch and never rethrows.
+- `tsc -b --force` clean. Zero new TypeScript errors.
 
 ---
 
@@ -697,6 +708,9 @@ Themes that span multiple stages and should be tracked holistically.
 ## Changelog
 
 Reverse chronological. Every meaningful update goes here.
+
+### 2026-04-28 (Stage 12)
+- **Stage 12 — Extraction session audit. Done.** All six open items resolved. (1) Session rows now written on EVERY extraction attempt, not just successes — all six pipeline files (`youtube`, `github`, `meetings`, `ingest/session`, `ingest/retry-source`, `microsoft`) have a `writeAuditSession()` call in both the success path and the catch block. (2) Anchor IDs captured — anchor queries extended to `select('id, label, entity_type, description')` across all files; `selected_anchor_ids` column now populated with real UUIDs instead of empty strings. (3) Model and embedding model stamped — `PIPELINE_MODEL` and `PIPELINE_EMBEDDING_MODEL` constants exported from `extract-pipeline.ts` and used by all callers. (4) Token counts and cost estimate captured — `TokenAccumulator` interface threads through `extractEntities` → `extractEntitiesMapReduce` → `runExtractionCore`; each `geminiFetch` call accumulates `promptTokenCount + candidatesTokenCount + totalTokenCount`; `cost_estimate_usd` computed at $0.075/1M input and $0.30/1M output (Gemini 2.5 Flash pricing at 2026-04-28). (5) `extraction_duration_ms` fixed in meetings — `itemStartTime = Date.now()` hoisted above try block, real duration computed. (6) Retention policy: migration adds `prune_old_extraction_sessions()` SECURITY DEFINER RPC (90-day cutoff); new `api/cron/prune-sessions.ts` calls it; daily cron at 04:00 UTC registered in `vercel.json`. Schema migration: `supabase/migrations/20260428_extraction_sessions_audit.sql` — nine new columns, two indexes, check constraint, RPC. Browser: `saveExtractionSession()` in `src/services/extractionPersistence.ts` updated with `model` and `embeddingModel` fields. `tsc -b --force` clean.
 
 ### 2026-04-28 (Stage 11)
 - **Stage 11 — Council updates. Done.** Three open items closed: (1) Wire agent updates into extraction flow: fire-and-forget POST to `/api/council/rebuild-agent` with `{ next_stale: true }` added at extraction completion in `api/youtube/extract-knowledge.ts`, `api/meetings/process.ts`, `api/microsoft/extract-knowledge.ts`. Council agents now rebuild within minutes of new knowledge landing, not just at 2 AM. Decision D-S11-01. (2) Expertise index recomputation rule documented: rule is implemented in `api/council/rebuild-agent.ts:rebuildExpertise()` — fetch all linked source IDs from `domain_agent_sources`, fetch nodes+chunks, call Gemini to regenerate the structured expertise JSON, update `domain_agents` with `index_stale=false`. (3) Standing question decay: new `phase1_decayStaleQuestions()` added as Phase 1 of the nightly cron. Decay rule: gap_driven/frontier open questions >30 days → dismissed; non-user_defined partially_addressed questions >60 days → dismissed. user_defined and answered questions are never decayed. Decision D-S11-02. (4) Structured logging: all 12 files under `api/council/` fully migrated — every `console.log`/`warn`/`error` replaced with `log()`/`logError()` using `stage: 'council:*'` prefix. `tsc -b --force` clean. Zero new errors introduced.

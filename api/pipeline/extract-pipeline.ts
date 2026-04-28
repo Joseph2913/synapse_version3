@@ -233,7 +233,19 @@ export interface CoreExtractionResult {
   chunksCreated: number;
   mergedEntitiesLog: DedupResult['mergedEntitiesLog'];
   nearMatchQueue: NearMatch[];
+  tokenUsage: TokenAccumulator;              // Stage 12 — aggregate token counts across Gemini calls
 }
+
+/** Stage 12 — accumulated token usage across all Gemini calls in one extraction run. */
+export interface TokenAccumulator {
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+/** Canonical model names used by this pipeline — exported so callers can stamp audit sessions. */
+export const PIPELINE_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+export const PIPELINE_EMBEDDING_MODEL = 'gemini-embedding-001';
 
 // ─── TYPE + QUALITY VALIDATION ─────────────────────────────────────────────
 
@@ -671,7 +683,8 @@ export const buildExtractionPrompt = buildExtractionPromptCanonical;
  */
 export async function extractEntities(
   content: string,
-  systemPrompt: string
+  systemPrompt: string,
+  tokenAcc?: TokenAccumulator
 ): Promise<ExtractionResult> {
   // Defensive guard: upstream routes should validate content, but if a null
   // or empty string reaches us we want a clear error instead of a TypeError
@@ -693,6 +706,11 @@ export async function extractEntities(
       'pipeline:extract'
     );
     json = result.json;
+    if (tokenAcc && result.usage) {
+      tokenAcc.promptTokens += result.usage.promptTokenCount ?? 0;
+      tokenAcc.outputTokens += result.usage.candidatesTokenCount ?? 0;
+      tokenAcc.totalTokens += result.usage.totalTokenCount ?? 0;
+    }
   } catch (err) {
     const msg = (err as Error).message;
     if (msg.startsWith('RATE_LIMITED')) {
@@ -740,7 +758,8 @@ export async function extractEntities(
  */
 export async function extractEntitiesMapReduce(
   content: string,
-  systemPrompt: string
+  systemPrompt: string,
+  tokenAcc?: TokenAccumulator
 ): Promise<ExtractionResult> {
   const windows: string[] = [];
   const step = MAP_REDUCE_WINDOW - MAP_REDUCE_OVERLAP;
@@ -756,7 +775,7 @@ export async function extractEntitiesMapReduce(
 
   const windowResults = await Promise.allSettled(
     windows.map(async (w, i) => {
-      const out = await extractEntities(w, systemPrompt);
+      const out = await extractEntities(w, systemPrompt, tokenAcc);
       console.log(`[extract-pipeline] map-reduce window ${i + 1}/${windows.length}: ${out.entities.length} entities, ${out.relationships.length} relationships`);
       return out;
     })
@@ -1551,10 +1570,11 @@ export async function runExtractionCore(params: {
 
   // 1. Gemini entity extraction — single call under threshold, map-reduce above
   const systemPrompt = buildExtractionPrompt(promptConfig);
+  const tokenAcc: TokenAccumulator = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
   const rawResult =
     content.length > MAP_REDUCE_THRESHOLD
-      ? await extractEntitiesMapReduce(content, systemPrompt)
-      : await extractEntities(content, systemPrompt);
+      ? await extractEntitiesMapReduce(content, systemPrompt, tokenAcc)
+      : await extractEntities(content, systemPrompt, tokenAcc);
   console.log(`[extract-pipeline] Raw: ${rawResult.entities.length} entities, ${rawResult.relationships.length} relationships for ${source.sourceId} (content_len=${content.length})`);
 
   // 1a. Consolidate same-label-different-type duplicates and strip trailing
@@ -1710,5 +1730,6 @@ export async function runExtractionCore(params: {
     chunksCreated,
     mergedEntitiesLog: dedup.mergedEntitiesLog,
     nearMatchQueue: dedup.nearMatchQueue,
+    tokenUsage: tokenAcc,
   };
 }
