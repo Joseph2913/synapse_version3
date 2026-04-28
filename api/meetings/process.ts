@@ -243,10 +243,20 @@ async function processMeeting(
           .update({ index_stale: true, last_ingestion_at: new Date().toISOString() })
           .eq('id', agentId);
 
-        console.log(`[meetings/process] Linked source ${meeting.id} to agent ${agentId}`);
+        log({ stage: 'council', user_id: meeting.user_id, source_id: meeting.id, status: 'ok', msg: `linked to agent ${agentId}` });
+      }
+      // Fire-and-forget: trigger an immediate async rebuild of the next stale
+      // council agent. Mirrors the pattern used by anchor scoring and cross-connect.
+      if (agentIds.size > 0) {
+        const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
+        fetch(`${appUrl}/api/council/rebuild-agent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}` },
+          body: JSON.stringify({ next_stale: true }),
+        }).catch(() => { /* fire-and-forget */ })
       }
     } catch (agentErr) {
-      console.warn('[meetings/process] Meeting agent link failed (non-fatal):', agentErr);
+      log({ stage: 'council', user_id: meeting.user_id, source_id: meeting.id, status: 'skipped', error: String(agentErr) });
     }
 
     // Save extraction session record

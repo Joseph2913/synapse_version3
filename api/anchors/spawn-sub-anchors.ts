@@ -28,6 +28,10 @@ const CRON_SECRET               = process.env.CRON_SECRET
 
 const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY')
+}
+
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 // ─── Structured logging ─────────────────────────────────────────────────────
@@ -170,7 +174,7 @@ async function propagateInheritance(
 
   const { error } = await sb.from('knowledge_edges').insert(toInsert)
   if (error) {
-    console.warn(`[spawn-sub-anchors] Inheritance propagation error: ${error.message}`)
+    logError({ stage: 'anchor', error: `Inheritance propagation: ${error.message}` })
     return 0
   }
   return toInsert.length
@@ -314,7 +318,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', nodeId)
 
       if (nodeErr) {
-        console.warn(`[spawn-sub-anchors] Node update failed for ${nodeId}: ${nodeErr.message}`)
+        logError({ stage: 'anchor', user_id: userId, error: `Node update failed for ${nodeId}: ${nodeErr.message}` })
         continue
       }
 
@@ -332,7 +336,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (candErr) {
         // Rollback node
         await sb.from('knowledge_nodes').update({ is_anchor: false, parent_anchor_id: null }).eq('id', nodeId)
-        console.warn(`[spawn-sub-anchors] Candidate update failed for ${candidate.id}: ${candErr.message}`)
+        logError({ stage: 'anchor', user_id: userId, error: `Candidate update failed for ${candidate.id}: ${candErr.message}` })
         continue
       }
 
@@ -341,16 +345,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       inheritedEdgesTotal += edgesCreated
 
       promoted++
-      console.log(
-        `[spawn-sub-anchors] "${node.label}" → sub of "${bestParent.anchor.label}" ` +
-        `(affinity=${bestParent.affinity.toFixed(2)}, inherited=${edgesCreated})`
-      )
+      log({ stage: 'anchor', user_id: userId, status: 'ok', sub_anchor: node.label, parent: bestParent.anchor.label, affinity: bestParent.affinity, inherited_edges: edgesCreated })
     }
 
-    console.log(
-      `[spawn-sub-anchors] userId=${userId} candidates=${candidates.length} ` +
-      `promoted=${promoted} inheritedEdges=${inheritedEdgesTotal} duration=${Date.now() - startTime}ms`
-    )
+    log({
+      stage: 'anchor', user_id: userId, status: 'ok',
+      candidates:      candidates.length,
+      promoted,
+      inherited_edges: inheritedEdgesTotal,
+      duration_ms:     Date.now() - startTime,
+    })
 
     return res.status(200).json({
       success: true,
@@ -362,7 +366,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[spawn-sub-anchors] Error:', msg)
+    logError({ stage: 'anchor', user_id: userId, error: msg, duration_ms: Date.now() - startTime })
     return res.status(500).json({ success: false, error: msg, duration_ms: Date.now() - startTime })
   }
 }

@@ -8,6 +8,9 @@ const SUPABASE_URL              = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const GEMINI_API_KEY            = process.env.GEMINI_API_KEY!
 
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY')
+}
 if (!GEMINI_API_KEY) {
   throw new Error('[gemini] Missing env var: GEMINI_API_KEY')
 }
@@ -176,7 +179,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .slice(0, 200)
 
     if (unconnected.length === 0) {
-      console.log(`[on-confirm] nodeId=${nodeId} — no unconnected nodes to evaluate`)
+      log({ stage: 'anchor', user_id: userId, status: 'skipped', node_id: nodeId, message: 'no unconnected nodes to evaluate' })
       return res.status(200).json({ success: true, edgesCreated: 0, duration_ms: Date.now() - startTime })
     }
 
@@ -214,7 +217,7 @@ ${nodeList}`
       )
       geminiData = json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
     } catch (err) {
-      console.error(`[on-confirm] Gemini error: ${(err as Error).message}`)
+      logError({ stage: 'anchor', user_id: userId, error: `Gemini error: ${(err as Error).message}` })
       return res.status(200).json({ success: true, edgesCreated: 0, note: 'Gemini call failed', duration_ms: Date.now() - startTime })
     }
 
@@ -257,10 +260,10 @@ ${nodeList}`
         }
       }
     } catch (parseErr) {
-      console.warn('[on-confirm] Failed to parse Gemini response:', parseErr)
+      logError({ stage: 'anchor', user_id: userId, error: `Failed to parse Gemini response: ${(parseErr as Error).message}` })
     }
 
-    console.log(`[on-confirm] nodeId=${nodeId} edgesCreated=${edgesCreated} duration=${Date.now() - startTime}ms`)
+    log({ stage: 'anchor', user_id: userId, status: 'ok', node_id: nodeId, edges_created: edgesCreated, duration_ms: Date.now() - startTime })
 
     return res.status(200).json({
       success: true,
@@ -269,7 +272,7 @@ ${nodeList}`
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[on-confirm] Error:', msg)
+    logError({ stage: 'anchor', user_id: userId, error: msg, duration_ms: Date.now() - startTime })
     return res.status(200).json({ success: true, edgesCreated: 0, error: msg, duration_ms: Date.now() - startTime })
   }
 }

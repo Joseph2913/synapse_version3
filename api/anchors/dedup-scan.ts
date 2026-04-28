@@ -7,8 +7,11 @@ const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const CRON_SECRET = process.env.CRON_SECRET
 
-const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY')
+}
 
+const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 // ─── Structured logging ─────────────────────────────────────────────────────
 
@@ -182,7 +185,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[dedup-scan] Error:', msg)
+    logError({ stage: 'anchor', error: msg })
     return res.status(500).json({ success: false, error: msg })
   }
 }

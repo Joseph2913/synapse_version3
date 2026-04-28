@@ -8,9 +8,11 @@ const SUPABASE_URL              = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const CRON_SECRET               = process.env.CRON_SECRET
 
-const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('[supabase] Missing env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY')
+}
 
-// ─── AUTH ──────────────────────────────────────────────────────────────────────
+const getSupabase = () => createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 // ─── Structured logging ─────────────────────────────────────────────────────
 
@@ -37,31 +39,30 @@ function logError(fields: LogFields & { error: string }): void {
 async function resolveUserId(req: VercelRequest): Promise<string | null> {
   const auth = req.headers['authorization']
   if (!auth) return null
-
   if (CRON_SECRET && auth === `Bearer ${CRON_SECRET}`) {
     return (req.body as Record<string, unknown>)?.userId as string ?? null
   }
-
   const token = auth.replace('Bearer ', '')
   const sb = getSupabase()
-  const { data: { user }, error } = await sb.auth.getUser(token)
-  if (error || !user) return null
-  return user.id
+  try {
+    const { data: { user }, error } = await sb.auth.getUser(token)
+    if (error || !user) return null
+    return user.id
+  } catch {
+    return null
+  }
 }
 
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 type ScoringProfile = 'balanced' | 'emerging_topics' | 'deep_concepts' | 'active_focus' | 'well_evidenced'
 
-const AUTO_CONFIRM_THRESHOLD = 0.50
+const AUTO_CONFIRM_THRESHOLD       = 0.50
 const QUIET_AUTO_CONFIRM_THRESHOLD = 0.38
 
 const DEFAULT_CONFIG = {
-  suggestionThreshold:         0.38,
-  dormantAfterDays:            60,
-  resurfaceCooldownDays:       30,
-  autoDismissAfterDays:        14,
-  scoringProfile:              'balanced' as ScoringProfile,
-  autoArchiveDormantAfterDays: null as number | null,
+  suggestionThreshold: 0.38,
+  dormantAfterDays:    60,
+  scoringProfile:      'balanced' as ScoringProfile,
 }
 
 const SIGNAL_WEIGHTS: Record<ScoringProfile, {
@@ -79,19 +80,15 @@ function resolveUserConfig(processingPreferences: Record<string, unknown> | null
   return { ...DEFAULT_CONFIG, ...stored }
 }
 
-// ─── MOMENTUM CONSTANTS (identical to score-daily — serverless constraint) ────
+// ─── MOMENTUM CONSTANTS (same as score-daily — serverless constraint forbids shared imports)
 const MOMENTUM_WINDOW_DAYS = 7
-const MOMENTUM_DECAY = 0.6
-const DAY_WEIGHTS = Array.from({ length: MOMENTUM_WINDOW_DAYS }, (_, i) =>
-  Math.pow(MOMENTUM_DECAY, i)
-)
-const MAX_MOMENTUM = DAY_WEIGHTS.reduce((s, w) => s + w, 0)
-const MIN_ACTIVE_DAYS = 1
-const MOMENTUM_THRESHOLD = 0.06
+const MOMENTUM_DECAY       = 0.6
+const DAY_WEIGHTS          = Array.from({ length: MOMENTUM_WINDOW_DAYS }, (_, i) => Math.pow(MOMENTUM_DECAY, i))
+const MAX_MOMENTUM         = DAY_WEIGHTS.reduce((s, w) => s + w, 0)
+const MIN_ACTIVE_DAYS      = 1
+const MOMENTUM_THRESHOLD   = 0.06
 const STREAK_BONUS_PER_DAY = 0.1
-const MAX_STREAK_BONUS = 1.5
-
-// ─── MOMENTUM COMPUTATION (identical to score-daily — serverless constraint) ──
+const MAX_STREAK_BONUS     = 1.5
 
 interface MomentumResult {
   nodeId: string
@@ -112,11 +109,9 @@ function computeMomentum(
   for (const [nodeId, edges] of nodeEdgeMap) {
     const dayBuckets = new Array(MOMENTUM_WINDOW_DAYS).fill(0)
     for (const edge of edges) {
-      const ageMs = now - new Date(edge.created_at).getTime()
+      const ageMs    = now - new Date(edge.created_at).getTime()
       const dayIndex = Math.floor(ageMs / oneDayMs)
-      if (dayIndex >= 0 && dayIndex < MOMENTUM_WINDOW_DAYS) {
-        dayBuckets[dayIndex]++
-      }
+      if (dayIndex >= 0 && dayIndex < MOMENTUM_WINDOW_DAYS) dayBuckets[dayIndex]++
     }
 
     const activeDays = dayBuckets.filter(c => c > 0).length
@@ -136,18 +131,11 @@ function computeMomentum(
       }
     }
 
-    const streakMultiplier = Math.min(
-      1 + Math.max(streak - 1, 0) * STREAK_BONUS_PER_DAY,
-      MAX_STREAK_BONUS
-    )
-    const boostedMomentum = rawMomentum * streakMultiplier
-    const momentumScore = Math.min(boostedMomentum / (MAX_MOMENTUM * MAX_STREAK_BONUS), 1.0)
+    const streakMultiplier = Math.min(1 + Math.max(streak - 1, 0) * STREAK_BONUS_PER_DAY, MAX_STREAK_BONUS)
+    const momentumScore    = Math.min(rawMomentum * streakMultiplier / (MAX_MOMENTUM * MAX_STREAK_BONUS), 1.0)
 
     if (momentumScore >= MOMENTUM_THRESHOLD) {
-      results.push({
-        nodeId, momentumScore, activeDays, consecutiveStreak: streak,
-        edgeCount7d: edges.length, dayDistribution: dayBuckets,
-      })
+      results.push({ nodeId, momentumScore, activeDays, consecutiveStreak: streak, edgeCount7d: edges.length, dayDistribution: dayBuckets })
     }
   }
 
@@ -155,7 +143,7 @@ function computeMomentum(
   return results
 }
 
-// ─── Levenshtein distance (inline — serverless constraint) ────────────────────
+// ─── Levenshtein (inline — serverless constraint) ─────────────────────────────
 function levenshteinDistance(a: string, b: string): number {
   const m = a.length, n = b.length
   const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
@@ -171,7 +159,7 @@ function levenshteinDistance(a: string, b: string): number {
   return dp[m]![n]!
 }
 
-// ─── Check if anchor candidate duplicates an existing confirmed anchor ────────
+// ─── Anchor dedup check ───────────────────────────────────────────────────────
 async function checkAnchorCandidateDedup(
   userId: string,
   candidateNodeId: string,
@@ -190,7 +178,6 @@ async function checkAnchorCandidateDedup(
 
   if (!candidate?.embedding) return { isDuplicate: false }
 
-  // Check via semantic similarity RPC
   const { data: similarNodes } = await sb.rpc('find_similar_nodes', {
     p_user_id:   userId,
     p_embedding: candidate.embedding,
@@ -203,15 +190,9 @@ async function checkAnchorCandidateDedup(
   )
 
   if (anchorMatch) {
-    return {
-      isDuplicate: true,
-      duplicateOfAnchorId:    anchorMatch.id,
-      duplicateOfAnchorLabel: anchorMatch.label,
-      similarity:             anchorMatch.similarity,
-    }
+    return { isDuplicate: true, duplicateOfAnchorId: anchorMatch.id, duplicateOfAnchorLabel: anchorMatch.label, similarity: anchorMatch.similarity }
   }
 
-  // Also check Levenshtein against confirmed anchors
   const { data: anchors } = await sb
     .from('knowledge_nodes')
     .select('id, label, entity_type')
@@ -220,21 +201,14 @@ async function checkAnchorCandidateDedup(
     .neq('id', candidateNodeId)
 
   const normalizedCandidate = (candidate.label as string).toLowerCase().trim()
-
   for (const anchor of anchors ?? []) {
     const normalizedAnchor = (anchor.label as string).toLowerCase().trim()
-    const editDist = levenshteinDistance(normalizedCandidate, normalizedAnchor)
-    const maxLen = Math.max(normalizedCandidate.length, normalizedAnchor.length)
+    const editDist  = levenshteinDistance(normalizedCandidate, normalizedAnchor)
+    const maxLen    = Math.max(normalizedCandidate.length, normalizedAnchor.length)
     if (maxLen === 0) continue
     const similarity = 1 - (editDist / maxLen)
-
     if (similarity >= 0.90) {
-      return {
-        isDuplicate: true,
-        duplicateOfAnchorId:    anchor.id as string,
-        duplicateOfAnchorLabel: anchor.label as string,
-        similarity,
-      }
+      return { isDuplicate: true, duplicateOfAnchorId: anchor.id as string, duplicateOfAnchorLabel: anchor.label as string, similarity }
     }
   }
 
@@ -242,10 +216,10 @@ async function checkAnchorCandidateDedup(
 }
 
 // ─── HANDLER ───────────────────────────────────────────────────────────────────
-// Post-extraction scoring: given newly created nodeIds, check if any of them
-// (combined with their recent edge history) now have enough momentum to surface.
-// This is a targeted version of the daily scorer — it only looks at the nodes
-// from this extraction, but evaluates them with the same momentum-first pipeline.
+// Post-extraction scoring: called asynchronously (fire-and-forget from extraction
+// callers) after new nodes land. Targeted version of the daily scorer — evaluates
+// only nodes from this extraction, but uses the same momentum-first pipeline.
+// Decision D-S9-01: anchor scoring is async only (never in the sync extraction path).
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -255,18 +229,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const startTime = Date.now()
-  const userId = await resolveUserId(req)
+  const userId    = await resolveUserId(req)
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
-  const body = req.body as { userId?: string; sourceId?: string; nodeIds?: string[] }
+  const body      = req.body as { userId?: string; sourceId?: string; nodeIds?: string[] }
   const { nodeIds, sourceId } = body
 
   if (!nodeIds || nodeIds.length === 0) {
     return res.status(400).json({ error: 'nodeIds is required and must be non-empty' })
   }
 
-  const sb = getSupabase()
-  const now = Date.now()
+  log({ stage: 'anchor', user_id: userId, source_id: sourceId, status: 'ok', message: 'score-post-extraction started', node_count: nodeIds.length })
+
+  const sb         = getSupabase()
+  const now        = Date.now()
   const sevenDaysAgo = new Date(now - MOMENTUM_WINDOW_DAYS * 86400000).toISOString()
 
   try {
@@ -289,9 +265,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .eq('user_id', userId)
 
     const candidateNodes = (nodeRows ?? []).filter(n => !n.is_anchor)
-    const candidateIds = candidateNodes.map(n => n.id as string)
+    const candidateIds   = candidateNodes.map(n => n.id as string)
 
     if (candidateIds.length === 0) {
+      log({ stage: 'anchor', user_id: userId, source_id: sourceId, status: 'skipped', message: 'All nodes are already anchors', duration_ms: Date.now() - startTime })
       return res.status(200).json({
         success: true, scored: 0, surfaced: 0,
         duration_ms: Date.now() - startTime,
@@ -299,7 +276,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
-    // 3. Fetch all edges in the 7-day window for these nodes (both directions)
+    // 3. Fetch 7-day edges for candidate nodes
     const [outEdgesRes, inEdgesRes] = await Promise.all([
       sb.from('knowledge_edges')
         .select('source_node_id, target_node_id, relation_type, created_at')
@@ -315,7 +292,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const recentEdges = [...(outEdgesRes.data ?? []), ...(inEdgesRes.data ?? [])]
 
-    // Build node → edges map for momentum
     const nodeEdgeMap = new Map<string, Array<{ created_at: string }>>()
     for (const id of candidateIds) nodeEdgeMap.set(id, [])
     for (const edge of recentEdges) {
@@ -326,19 +302,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // 4. Phase 1: Momentum gate
-    const momentumResults = computeMomentum(nodeEdgeMap, now)
-
-    // For post-extraction, also include nodes that just got created today
-    // even if they only have 1 active day — they're brand new.
-    // We create a "seed" entry for them so the daily cron can track them.
-    const momentumNodeIds = new Set(momentumResults.map(m => m.nodeId))
-    const seedNodes = candidateIds.filter(id => !momentumNodeIds.has(id))
+    const momentumResults  = computeMomentum(nodeEdgeMap, now)
+    const momentumNodeIds  = new Set(momentumResults.map(m => m.nodeId))
+    const seedNodes        = candidateIds.filter(id => !momentumNodeIds.has(id))
 
     // 5. Phase 2: Full signals for momentum-qualified nodes
-    // Fetch ALL edges (not just 7-day) for structural signals
     const qualifiedIds = momentumResults.map(m => m.nodeId)
-    let scored = 0
-    let surfaced = 0
+    let scored = 0, surfaced = 0
+
+    const candidateBatch: Record<string, unknown>[] = []
 
     if (qualifiedIds.length > 0) {
       const [allOutRes, allInRes] = await Promise.all([
@@ -352,13 +324,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('user_id', userId),
       ])
 
-      const allOut = allOutRes.data ?? []
-      const allIn  = allInRes.data ?? []
+      const allOut  = allOutRes.data ?? []
+      const allIn   = allInRes.data ?? []
       const allEdges = [...allOut, ...allIn]
 
-      // Neighbour metadata
-      const neighbourIds = new Set<string>()
       const qualifiedIdSet = new Set(qualifiedIds)
+      const neighbourIds   = new Set<string>()
       for (const e of allEdges) {
         if (qualifiedIdSet.has(e.source_node_id as string)) neighbourIds.add(e.target_node_id as string)
         if (qualifiedIdSet.has(e.target_node_id as string)) neighbourIds.add(e.source_node_id as string)
@@ -373,30 +344,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : { data: [] }
 
       const neighbourMap = new Map((nbNodes ?? []).map(n => [n.id as string, n]))
-      const nodeMap = new Map(candidateNodes.map(n => [n.id as string, n]))
-
-      // Batch-fetch existing candidates
-      const { data: existingCandidates } = await sb
-        .from('anchor_candidates')
-        .select('id, node_id, status, dismiss_count')
-        .eq('user_id', userId)
-        .in('node_id', qualifiedIds)
-
-      const existingMap = new Map(
-        (existingCandidates ?? []).map(c => [c.node_id as string, c])
-      )
-
-      const w = SIGNAL_WEIGHTS[config.scoringProfile as ScoringProfile]
-      const nowStr = new Date().toISOString()
-      const protectedStatuses = ['confirmed', 'dismissed', 'archived', 'dormant']
+      const nodeMap      = new Map(candidateNodes.map(n => [n.id as string, n]))
+      const w            = SIGNAL_WEIGHTS[config.scoringProfile as ScoringProfile]
+      const nowStr       = new Date().toISOString()
 
       for (const m of momentumResults) {
         const nodeRow = nodeMap.get(m.nodeId)
-        const myOut = allOut.filter(e => e.source_node_id === m.nodeId)
-        const myIn  = allIn.filter(e => e.target_node_id === m.nodeId)
-        const myAll = [...myOut, ...myIn]
+        const myOut   = allOut.filter(e => e.source_node_id === m.nodeId)
+        const myIn    = allIn.filter(e => e.target_node_id === m.nodeId)
+        const myAll   = [...myOut, ...myIn]
 
-        const relTypes = new Set(myAll.map(e => e.relation_type).filter(Boolean))
+        const relTypes  = new Set(myAll.map(e => e.relation_type).filter(Boolean))
         const nbTypeSet = new Set<string>()
         let anchorNb = 0, totalNb = 0
 
@@ -409,18 +367,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (nb) { nbTypeSet.add(nb.entity_type as string); totalNb++; if (nb.is_anchor) anchorNb++ }
         }
 
-        const srcIdSet = new Set<string>()
+        const srcIdSet   = new Set<string>()
         const srcTypeSet = new Set<string>()
-        if (nodeRow?.source_id) srcIdSet.add(nodeRow.source_id as string)
+        if (nodeRow?.source_id)   srcIdSet.add(nodeRow.source_id as string)
         if (nodeRow?.source_type) srcTypeSet.add(nodeRow.source_type as string)
         for (const e of myAll) {
           const nbId = qualifiedIdSet.has(e.source_node_id as string) ? e.target_node_id : e.source_node_id
-          const nb = neighbourMap.get(nbId as string)
-          if (nb?.source_id) srcIdSet.add(nb.source_id as string)
+          const nb   = neighbourMap.get(nbId as string)
+          if (nb?.source_id)   srcIdSet.add(nb.source_id as string)
           if (nb?.source_type) srcTypeSet.add(nb.source_type as string)
         }
 
-        // Compute scores
         const degreeScore     = Math.min(myAll.length / 20, 1.0)
         const diversityFactor = Math.min(nbTypeSet.size / 5, 1.0)
         const centralityScore = (degreeScore * 0.6) + (diversityFactor * 0.4)
@@ -428,129 +385,109 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const sourceCountScore = Math.min(srcIdSet.size / 4, 1.0)
         const typeCountScore   = Math.min(srcTypeSet.size / 3, 1.0)
         const diversityScore   = (sourceCountScore * 0.65) + (typeCountScore * 0.35)
+        const richnessScore    = Math.min(relTypes.size / 6, 1.0)
 
-        const richnessScore = Math.min(relTypes.size / 6, 1.0)
-
-        let composite = (centralityScore * w.centrality) +
-          (diversityScore * w.diversity) + (richnessScore * w.richness)
-
+        let composite = (centralityScore * w.centrality) + (diversityScore * w.diversity) + (richnessScore * w.richness)
         const overlapRatio = anchorNb / Math.max(totalNb, 1)
         if (overlapRatio > 0.70) composite *= 0.75
-
         const momentumBoost = 0.70 + (m.momentumScore * 0.30)
         composite = Math.min(Math.max(composite * momentumBoost, 0), 1.0)
 
-        // Reasoning
         const parts: string[] = []
         if (m.consecutiveStreak >= 3) parts.push(`Active ${m.consecutiveStreak} days in a row`)
-        else if (m.activeDays >= 2) parts.push(`Appeared on ${m.activeDays} of the last 7 days`)
-        if (srcIdSet.size >= 2) parts.push(`in ${srcIdSet.size} different sources`)
-        if (srcTypeSet.size >= 2) parts.push(`spanning ${srcTypeSet.size} content types`)
-        if (relTypes.size >= 4) parts.push(`with ${relTypes.size} relationship types`)
-        if (anchorNb >= 2) parts.push(`connects to ${anchorNb} existing anchors`)
+        else if (m.activeDays >= 2)   parts.push(`Appeared on ${m.activeDays} of the last 7 days`)
+        if (srcIdSet.size >= 2)       parts.push(`in ${srcIdSet.size} different sources`)
+        if (srcTypeSet.size >= 2)     parts.push(`spanning ${srcTypeSet.size} content types`)
+        if (relTypes.size >= 4)       parts.push(`with ${relTypes.size} relationship types`)
+        if (anchorNb >= 2)            parts.push(`connects to ${anchorNb} existing anchors`)
 
-        // Check if this candidate duplicates an existing confirmed anchor
+        // Dedup check against existing confirmed anchors
         let isDupCandidate = false
         try {
           const dupCheck = await checkAnchorCandidateDedup(userId, m.nodeId, sb)
           if (dupCheck.isDuplicate && dupCheck.duplicateOfAnchorId) {
             isDupCandidate = true
-            // Boost the existing anchor's score
+            // Boost existing anchor's score; queue merge suggestion
             await sb.from('anchor_candidates')
               .update({
                 composite_score: Math.min(composite * 1.15, 1.0),
-                last_scored_at: nowStr,
-                reasoning_text: (parts.join(', ') + `. Validated by duplicate candidate.`).trim(),
+                last_scored_at:  nowStr,
+                reasoning_text:  (parts.join(', ') + '. Validated by duplicate candidate.').trim(),
               })
               .eq('node_id', dupCheck.duplicateOfAnchorId)
               .eq('user_id', userId)
-            // Queue a merge suggestion
+
             try {
               await sb.from('potential_duplicates').insert({
-                user_id: userId,
-                node_a_id: dupCheck.duplicateOfAnchorId,
-                node_b_id: m.nodeId,
+                user_id:    userId,
+                node_a_id:  dupCheck.duplicateOfAnchorId,
+                node_b_id:  m.nodeId,
                 similarity: dupCheck.similarity ?? 0.9,
                 match_type: 'semantic',
-                status: 'pending',
-                metadata: {
-                  detected_at: nowStr,
+                status:     'pending',
+                metadata:   {
+                  detected_at:      nowStr,
                   detection_source: 'anchor_scoring',
-                  anchor_label: dupCheck.duplicateOfAnchorLabel,
+                  anchor_label:     dupCheck.duplicateOfAnchorLabel,
                 },
               })
             } catch { /* ignore duplicate constraint violations */ }
-            console.log(`[score-post-extraction] Skipped candidate ${m.nodeId} — duplicates anchor ${dupCheck.duplicateOfAnchorLabel}`)
+
+            log({ stage: 'anchor', user_id: userId, status: 'skipped', message: `Candidate ${m.nodeId} duplicates anchor ${dupCheck.duplicateOfAnchorLabel}` })
           }
         } catch (err) {
-          console.warn(`[score-post-extraction] Anchor dedup check failed for ${m.nodeId} (non-fatal):`, err)
+          logError({ stage: 'anchor', user_id: userId, error: `Dedup check failed for ${m.nodeId}: ${(err as Error).message}` })
         }
 
         if (isDupCandidate) { scored++; continue }
 
-        // Two-zone system: auto-confirm (≥0.50) and quiet auto-confirm (0.38–0.49).
-        // Everything below 0.38 stays pending/hidden — no manual review queue.
-        const shouldAutoConfirm = composite >= AUTO_CONFIRM_THRESHOLD
-        const shouldQuietConfirm = composite >= QUIET_AUTO_CONFIRM_THRESHOLD
-        const shouldConfirm = shouldAutoConfirm || shouldQuietConfirm
-        const existing = existingMap.get(m.nodeId)
-        const daysActive = nodeRow?.created_at
+        const shouldConfirm  = composite >= AUTO_CONFIRM_THRESHOLD || composite >= QUIET_AUTO_CONFIRM_THRESHOLD
+        const status         = shouldConfirm ? 'confirmed' : 'pending'
+        const daysActive     = nodeRow?.created_at
           ? Math.floor((now - new Date(nodeRow.created_at as string).getTime()) / 86400000) : 0
 
-        if (existing) {
-          const updatePayload: Record<string, unknown> = {
-            composite_score: composite, centrality_score: centralityScore,
-            diversity_score: diversityScore, velocity_score: m.momentumScore,
-            richness_score: richnessScore, mention_count: m.edgeCount7d,
-            source_count: srcIdSet.size, unique_source_types: srcTypeSet.size,
-            days_active: daysActive,
-            recent_velocity: m.momentumScore,
-            velocity_direction: m.consecutiveStreak >= 2 ? 'rising' : 'stable',
-            scoring_profile: config.scoringProfile, reasoning_text: parts.join(', ') + '.',
-            last_scored_at: nowStr, threshold_at_scoring: config.suggestionThreshold,
-          }
-          // Auto-confirm or quiet auto-confirm: upgrade pending/suggested → confirmed
-          if (shouldConfirm && !['confirmed', 'archived', 'dormant'].includes(existing.status as string)) {
-            updatePayload.status = 'confirmed'
-            updatePayload.reviewed_at = nowStr
-            updatePayload.suggested_at = updatePayload.suggested_at ?? nowStr
-            surfaced++
-            await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', m.nodeId)
-          }
-          // Below threshold: if currently 'suggested' (legacy), demote to 'pending'
-          if (!shouldConfirm && existing.status === 'suggested') {
-            updatePayload.status = 'pending'
-            updatePayload.suggested_at = null
-          }
-          await sb.from('anchor_candidates').update(updatePayload).eq('id', existing.id as string)
-        } else {
-          const insertStatus = shouldConfirm ? 'confirmed' : 'pending'
-          await sb.from('anchor_candidates').insert({
-            user_id: userId, node_id: m.nodeId,
-            composite_score: composite, centrality_score: centralityScore,
-            diversity_score: diversityScore, velocity_score: m.momentumScore,
-            richness_score: richnessScore, behavioural_score: 0,
-            mention_count: m.edgeCount7d, source_count: srcIdSet.size,
-            unique_source_types: srcTypeSet.size, days_active: daysActive,
-            recent_velocity: m.momentumScore,
-            velocity_direction: m.consecutiveStreak >= 2 ? 'rising' : 'stable',
-            status: insertStatus, scoring_profile: config.scoringProfile,
-            reasoning_text: parts.join(', ') + '.',
-            threshold_at_scoring: config.suggestionThreshold,
-            suggested_at: insertStatus === 'confirmed' ? nowStr : null,
-            reviewed_at: insertStatus === 'confirmed' ? nowStr : null,
-            first_scored_at: nowStr, last_scored_at: nowStr,
-          })
-          if (insertStatus === 'confirmed') {
-            await sb.from('knowledge_nodes').update({ is_anchor: true }).eq('id', m.nodeId)
-            surfaced++
-          }
-        }
+        if (shouldConfirm) surfaced++
+
+        candidateBatch.push({
+          node_id:             m.nodeId,
+          composite_score:     composite,
+          centrality_score:    centralityScore,
+          diversity_score:     diversityScore,
+          velocity_score:      m.momentumScore,
+          richness_score:      richnessScore,
+          behavioural_score:   0,
+          mention_count:       m.edgeCount7d,
+          source_count:        srcIdSet.size,
+          unique_source_types: srcTypeSet.size,
+          days_active:         daysActive,
+          recent_velocity:     m.momentumScore,
+          velocity_direction:  m.consecutiveStreak >= 2 ? 'rising' : 'stable',
+          scoring_profile:     config.scoringProfile,
+          reasoning_text:      parts.join(', ') + '.',
+          threshold_at_scoring: config.suggestionThreshold,
+          status,
+          suggested_at:        status === 'confirmed' ? nowStr : null,
+          reviewed_at:         status === 'confirmed' ? nowStr : null,
+          first_scored_at:     nowStr,
+          last_scored_at:      nowStr,
+        })
         scored++
+      }
+
+      // Bulk upsert momentum-qualified candidates via RPC
+      if (candidateBatch.length > 0) {
+        const { error: upsertErr } = await sb.rpc('bulk_upsert_anchor_candidates', {
+          p_user_id:    userId,
+          p_candidates: candidateBatch,
+        })
+        if (upsertErr) {
+          logError({ stage: 'anchor', user_id: userId, source_id: sourceId, error: `bulk_upsert_anchor_candidates: ${upsertErr.message}` })
+        }
       }
     }
 
-    // 6. Seed entries for brand-new nodes (no momentum yet, but track them)
+    // 6. Seed entries for brand-new nodes (no momentum yet — track them for the daily cron)
+    // Use a single multi-row insert, skipping nodes that already have a candidate row.
     if (seedNodes.length > 0) {
       const { data: existingSeedCandidates } = await sb
         .from('anchor_candidates')
@@ -563,30 +500,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       )
       const nowStr = new Date().toISOString()
 
-      for (const nodeId of seedNodes) {
-        if (existingSeedSet.has(nodeId)) continue
-        await sb.from('anchor_candidates').insert({
-          user_id: userId, node_id: nodeId,
-          composite_score: 0, centrality_score: 0, diversity_score: 0,
-          velocity_score: 0, richness_score: 0, behavioural_score: 0,
-          mention_count: 0, source_count: 0, unique_source_types: 0,
-          days_active: 0, recent_velocity: 0, velocity_direction: 'stable',
-          status: 'pending', scoring_profile: config.scoringProfile,
-          reasoning_text: 'Newly extracted — tracking for momentum.',
+      const seedBatch = seedNodes
+        .filter(nodeId => !existingSeedSet.has(nodeId))
+        .map(nodeId => ({
+          user_id:             userId,
+          node_id:             nodeId,
+          composite_score:     0,
+          centrality_score:    0,
+          diversity_score:     0,
+          velocity_score:      0,
+          richness_score:      0,
+          behavioural_score:   0,
+          mention_count:       0,
+          source_count:        0,
+          unique_source_types: 0,
+          days_active:         0,
+          recent_velocity:     0,
+          velocity_direction:  'stable',
+          status:              'pending',
+          scoring_profile:     config.scoringProfile,
+          reasoning_text:      'Newly extracted — tracking for momentum.',
           threshold_at_scoring: config.suggestionThreshold,
-          first_scored_at: nowStr, last_scored_at: nowStr,
-        })
+          first_scored_at:     nowStr,
+          last_scored_at:      nowStr,
+        }))
+
+      if (seedBatch.length > 0) {
+        const { error: seedErr } = await sb.from('anchor_candidates').insert(seedBatch)
+        if (seedErr) {
+          logError({ stage: 'anchor', user_id: userId, source_id: sourceId, error: `Seed batch insert: ${seedErr.message}` })
+        }
       }
     }
 
-    console.log(
-      `[score-post-extraction] userId=${userId} sourceId=${sourceId} ` +
-      `candidates=${candidateIds.length} momentum_qualified=${qualifiedIds.length} ` +
-      `scored=${scored} surfaced=${surfaced} seeds=${seedNodes.length} ` +
-      `duration=${Date.now() - startTime}ms`
-    )
+    log({
+      stage: 'anchor', user_id: userId, source_id: sourceId, status: 'ok',
+      candidates:         candidateIds.length,
+      momentum_qualified: qualifiedIds.length,
+      scored,
+      surfaced,
+      seeds:              seedNodes.length,
+      duration_ms:        Date.now() - startTime,
+    })
 
-    // Fire-and-forget: spawn sub-anchors for any newly suggested candidates
+    // Fire-and-forget: spawn sub-anchors for any newly confirmed candidates
     if (surfaced > 0) {
       try {
         const baseUrl = req.headers['x-forwarded-host']
@@ -595,14 +552,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (baseUrl) {
           fetch(`${baseUrl}/api/anchors/spawn-sub-anchors`, {
-            method: 'POST',
+            method:  'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': req.headers['authorization'] ?? '',
             },
             body: JSON.stringify({ userId }),
           }).catch(err => {
-            console.warn('[score-post-extraction] spawn-sub-anchors fire-and-forget failed:', err)
+            logError({ stage: 'anchor', user_id: userId, error: `spawn-sub-anchors fire-and-forget: ${(err as Error).message}` })
           })
         }
       } catch { /* non-fatal */ }
@@ -614,7 +571,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[score-post-extraction] Error:', msg)
+    logError({ stage: 'anchor', user_id: userId, source_id: sourceId, error: msg, duration_ms: Date.now() - startTime })
     return res.status(500).json({ success: false, error: msg, duration_ms: Date.now() - startTime })
   }
 }
