@@ -40,8 +40,9 @@ function isEmbedBody(b: unknown): b is EmbedBody {
   return o.texts.every(t => typeof t === 'string')
 }
 
-async function embedSingle(text: string): Promise<number[] | null> {
+async function embedSingle(text: string): Promise<{ values: number[] | null; error?: string }> {
   const url = `${GEMINI_BASE}/${EMBED_MODEL}:embedContent?key=${GEMINI_API_KEY}`
+  let lastErr = ''
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const resp = await fetch(url, {
@@ -54,24 +55,26 @@ async function embedSingle(text: string): Promise<number[] | null> {
       })
       if (resp.ok) {
         const data = await resp.json() as { embedding?: { values?: number[] } }
-        return data.embedding?.values ?? null
+        return { values: data.embedding?.values ?? null }
       }
+      lastErr = `Gemini ${resp.status}: ${(await resp.text().catch(() => '')).slice(0, 200)}`
       if (resp.status === 429 || resp.status >= 500) {
         if (attempt < 2) {
           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
           continue
         }
       }
-      return null
-    } catch {
+      return { values: null, error: lastErr }
+    } catch (err) {
+      lastErr = (err as Error).message
       if (attempt < 2) {
         await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
         continue
       }
-      return null
+      return { values: null, error: lastErr }
     }
   }
-  return null
+  return { values: null, error: lastErr || 'unknown' }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -90,20 +93,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Embed in parallel with concurrency cap
   const concurrency = 5
   const embeddings: (number[] | null)[] = new Array(texts.length).fill(null)
+  const errors: string[] = []
   for (let i = 0; i < texts.length; i += concurrency) {
     const slice = texts.slice(i, i + concurrency)
     const results = await Promise.all(slice.map(t => embedSingle(t)))
-    results.forEach((v, j) => { embeddings[i + j] = v })
+    results.forEach((r, j) => {
+      embeddings[i + j] = r.values
+      if (r.error) errors.push(r.error)
+    })
   }
+
+  const successes = embeddings.filter(e => e !== null).length
+  const allFailed = successes === 0
+  const firstError = errors[0]
 
   console.log(JSON.stringify({
     stage: 'gemini:embed',
     user_id: userId,
     count: texts.length,
-    successes: embeddings.filter(e => e !== null).length,
+    successes,
     duration_ms: Date.now() - startedAt,
-    status: 'ok',
+    status: allFailed ? 'error' : (successes < texts.length ? 'partial' : 'ok'),
+    error: firstError,
   }))
+
+  // If every embedding failed, surface a 502 instead of a misleading 200 with
+  // an array of nulls — this makes runtime errors (referrer restriction, bad
+  // key, vendor outage) visible to the browser instead of looking like
+  // "embedding service is temporarily unavailable" further up the stack.
+  if (allFailed) {
+    return res.status(502).json({ error: 'vendor', detail: firstError ?? 'unknown' })
+  }
 
   return res.status(200).json({ embeddings })
 }
