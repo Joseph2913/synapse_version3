@@ -8,7 +8,8 @@
  */
 
 import type { ExtractionConfig, ReviewEntity, SourceMetadata } from '../types/extraction'
-import { buildExtractionPrompt } from '../utils/promptBuilder'
+import { composeExtractionPrompt } from '../utils/promptBuilder'
+import { fetchActiveSkillsForPrompt } from './promptSkillsContext'
 import { chunkSourceContent, buildEmbeddingInput } from '../utils/chunking'
 import { resolveSummary } from '../utils/summarize'
 import { extractEntities, generateEmbeddings } from './gemini'
@@ -105,8 +106,9 @@ export async function runHeadlessExtraction(
   // ── Step 3: Extract entities ───────────────────────────────────────────────
 
   progress('extracting', 'Running Gemini extraction…')
-  const systemPrompt = buildExtractionPrompt(config)
-  const extractionResult = await extractEntities(content, systemPrompt)
+  const activeSkills = await fetchActiveSkillsForPrompt(userId)
+  const composed = composeExtractionPrompt({ ...config, activeSkills })
+  const extractionResult = await extractEntities(content, composed.prompt)
 
   // Auto-approve all entities (no review pause)
   const reviewEntities: ReviewEntity[] = extractionResult.entities.map(e => ({
@@ -349,6 +351,7 @@ export async function runHeadlessExtraction(
     chunkCount,
     crossConnectionCount,
     durationMs,
+    promptVersion: composed.version,
   }).catch(() => {})
 
   // Trigger anchor scoring (fire-and-forget)

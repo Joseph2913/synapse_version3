@@ -2,8 +2,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import {
   runExtractionCore,
+  PROMPT_VERSION,
   type Anchor,
   type UserProfile,
+  type PromptSkillHint,
 } from '../pipeline/extract-pipeline.js';
 
 // 300s ceiling to cover map-reduce + dedup + chunk persistence on long sources.
@@ -151,7 +153,7 @@ async function extractKnowledgeForItem(
     // The shared core now runs fuzzy dedup for GitHub too, which means dev-
     // digest entities are properly merged with their counterparts from other
     // sources (e.g. the same technology referenced in a meeting).
-    const [profileResult, anchorsResult, settingsResult] = await Promise.all([
+    const [profileResult, anchorsResult, settingsResult, skillsResult] = await Promise.all([
       supabase.from('user_profiles').select('*').eq('user_id', item.user_id).maybeSingle(),
       supabase
         .from('knowledge_nodes')
@@ -160,11 +162,19 @@ async function extractKnowledgeForItem(
         .eq('is_anchor', true)
         .limit(10),
       supabase.from('extraction_settings').select('default_mode, default_anchor_emphasis').eq('user_id', item.user_id).maybeSingle(),
+      supabase
+        .from('knowledge_skills')
+        .select('label, domain, exposure_level')
+        .eq('user_id', item.user_id)
+        .eq('status', 'confirmed')
+        .order('confidence', { ascending: false })
+        .limit(12),
     ]);
 
     const userProfile = profileResult.data as UserProfile | null;
     const anchors = (anchorsResult.data ?? []) as Anchor[];
     const defaultSettings = settingsResult.data as { default_mode: string; default_anchor_emphasis: string } | null;
+    const activeSkills = (skillsResult.data ?? []) as PromptSkillHint[];
 
     const extractionMode = item.extraction_mode ?? defaultSettings?.default_mode ?? 'comprehensive';
     const anchorEmphasis = item.anchor_emphasis ?? defaultSettings?.default_anchor_emphasis ?? 'standard';
@@ -177,6 +187,7 @@ async function extractKnowledgeForItem(
         anchors,
         userProfile,
         customInstructions: item.custom_instructions,
+        activeSkills,
       },
       source: {
         sourceId,
@@ -235,6 +246,7 @@ async function extractKnowledgeForItem(
       chunk_count: chunksCreated,
       cross_connection_count: crossConnectionCount,
       extraction_duration_ms: Date.now() - itemStartTime,
+      prompt_version: PROMPT_VERSION,
     });
 
     // ── TRIGGER ANCHOR SCORING (fire-and-forget) ────────────────────────────────
