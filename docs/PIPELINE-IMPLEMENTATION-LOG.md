@@ -183,25 +183,53 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 ### Stage 5 — Entity extraction
 
-**Status:** Partial. v2 extraction pipeline shipped 2026-04-22 (commit `6d5f35a`): "v2 extraction pipeline — parallel map-reduce, quality filters, 300s timeout". Migrated all Gemini calls from `gemini-2.0-flash` to `gemini-2.5-flash` (commit `4c4ca38`).
+**Status:** Done. Owner doc: [STAGE-5-EXTRACTION.md](STAGE-5-EXTRACTION.md). Shipped 2026-04-28 (Block 2).
 
-**Open:** unify browser and serverless extraction (currently divergent), JSON schema validation on Gemini response, document map-reduce thresholds (15k char window, 7k chunks, 1k overlap), formalise consolidation rule, retry strategy in canonical Gemini wrapper, cost + latency telemetry per call.
+**Shipped:**
+- **Browser-side extraction eliminated.** `src/services/extractionPipeline.ts` deleted. All Gemini extraction now runs in Vercel serverless functions only.
+- **Two-phase serverless UX.** `api/ingest/extract-preview` (maxDuration 300) runs Gemini extraction and returns entities + relationships for browser review — no writes to `knowledge_nodes` or `knowledge_edges`. `api/ingest/extract-persist` receives the user-approved entity list and handles all persistence. The review/approve UX is preserved.
+- **Headless path.** `api/ingest/extract.ts` is a single-call auto-approve endpoint for background automation (YouTube pipeline, `manualSignals.ts`). Routes through `runExtractionCore()` in `api/pipeline/extract-pipeline.ts`.
+- **Map-reduce thresholds locked.** 15,000-char threshold triggers map-reduce. Window: 7,000 chars. Overlap: 1,000 chars. Constants defined in `api/pipeline/extract-pipeline.ts`.
+- **Retry logic fixed.** `extract-preview` had `const raw` — the retry result was never assigned. Changed to `let raw`; `raw = retry` on valid retry; source set `degraded` and 422 returned on second failure.
+- **`src/services/gemini.ts` stripped.** `extractEntities` and its validation helpers removed. No Gemini extraction calls remain in browser code.
+- **`useExtraction.ts` rewritten.** No longer imports Gemini, dedup, or graph-write services. Three steps: `saveSource` → summary (non-blocking) → `POST /api/ingest/extract-preview`. Pauses at `reviewing`. `approveAndSave` calls `POST /api/ingest/extract-persist`.
+- **Canonical Stage 0 patterns throughout.** `geminiFetch` with 1s/2s/4s retry on 429/5xx. Structured `log()`/`logError()` with `stage:'extract'`.
+
+**Decisions:** D-B2-01, D-B2-02.
 
 ---
 
 ### Stage 6 — Deduplication + merge
 
-**Status:** Not started.
+**Status:** Done. Owner doc: [STAGE-6-DEDUP.md](STAGE-6-DEDUP.md). Shipped 2026-04-28 (Block 2).
 
-**Open:** unify divergent dedup logic (browser uses `checkDeduplication()`, serverless uses `deduplicateEntities()`), confirm `find_similar_nodes()` RPC exists and uses embedding index, consistent near-match queue behaviour (0.80–0.92 threshold), explicit merge enrichment rules.
+**Shipped:**
+- **Browser dedup eliminated.** `checkDeduplication()` (which called `find_similar_nodes` RPC from the browser) removed from `src/services/deduplication.ts`. The service retains only UI-facing helpers: `savePotentialDuplicates`, `mergeNodes`, `fetchPendingDuplicates`, `keepSeparate`.
+- **Serverless `deduplicateEntities()` is canonical.** Runs inside `api/ingest/extract-persist` and `api/pipeline/extract-pipeline.ts:runExtractionCore()`. Calls the `check_node_duplicate` RPC — three tiers: exact label match → Levenshtein fuzzy → semantic cosine.
+- **Named threshold constants.** `DEDUP_EXACT_THRESHOLD = 0.85`, `DEDUP_SEMANTIC_THRESHOLD = 0.80`, `DEDUP_AUTO_MERGE_THRESHOLD = 0.88`. All inline threshold literals in `extract-pipeline.ts` replaced with these constants.
+- **Merge enrichment rules documented.** Auto-merge (similarity > 0.88): keep canonical with longer description, append aliases, sum occurrence counts, take max confidence. Near-match queue (0.80–0.88 band): written to `potential_duplicates`, never auto-merged.
+- **`find_similar_nodes` RPC retained** for anchor scoring only (`api/anchors/score-post-extraction.ts`). Not called from the dedup path.
+
+**Open follow-ups (non-blocking):**
+- `src/services/manualSignals.ts:createManualAnchor` still calls `generateEmbeddings` from `src/services/gemini.ts` for anchor brief chunking. Out of Block 2 scope; tracked for Stage 9.
+
+**Decisions:** D-B2-03.
 
 ---
 
 ### Stage 7 — Knowledge persistence
 
-**Status:** Not started.
+**Status:** Done. Owner doc: [STAGE-7-PERSISTENCE.md](STAGE-7-PERSISTENCE.md). Shipped 2026-04-28 (Block 2).
 
-**Open:** confirm `label + description` embedding rule applied consistently, edge embeddings written during persistence (not as a later step), `source_id` FK on every node, bulk-insert RPC for nodes and edges, edge dedup unique constraint.
+**Shipped:**
+- **Edge dedup constraint.** Migration `20260428_edge_dedup_constraint.sql`: deduplicates existing duplicate edge groups (keeps highest weight, earliest id), then creates `knowledge_edges_dedup_uniq` UNIQUE INDEX on `(user_id, source_node_id, target_node_id, relation_type)`.
+- **`saveEdges` upsert.** Changed from `.insert()` to `.upsert()` with `onConflict: 'user_id,source_node_id,target_node_id,relation_type', ignoreDuplicates: true`. Duplicate edge writes are silently skipped at the DB level.
+- **Edge embeddings inline.** `runExtractionCore()` now embeds edges immediately after `saveEdges`. Fetches saved node labels, builds `source_label → relation_type → target_label` text, calls `batchEmbed`, bulk-updates `knowledge_edges.embedding`. Non-blocking on failure.
+- **`label + description` embedding rule confirmed.** Node embeddings use `${label}\n\n${description}` throughout `saveNodes`.
+- **`extractionPersistence.ts` stripped.** `saveNodes`, `saveEdges`, `updateNodeEmbeddings`, `updateEdgeEmbeddings`, `SaveNodesResult` removed. Retained: `saveSource`, `saveChunks`, `saveExtractionSession`, `PersistenceError`.
+- **Orphaned files deleted.** `src/services/crossConnections.ts` (no callers after `extractionPipeline.ts` deletion). `src/services/edgeEmbedding.ts` (no callers after same deletion).
+
+**Decisions:** D-B2-04.
 
 ---
 
@@ -231,9 +259,19 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 
 ### Stage 9 — Anchor scoring
 
-**Status:** Not started. Currently runs as daily cron, decoupled from extraction.
+**Status:** Done. Owner doc: [STAGE-9-ANCHOR-SCORING.md](STAGE-9-ANCHOR-SCORING.md). Shipped 2026-04-28.
 
-**Open:** decide sync (during extraction) vs async (cron), document the five signal formulas, lifecycle transition rules, cron idempotency.
+**Shipped:**
+- **Migration `20260428_anchor_scoring_bulk_ops.sql`.** UNIQUE constraint on `anchor_candidates(user_id, node_id)` for ON CONFLICT upsert. Two RPCs: `bulk_upsert_anchor_candidates` (single JSON-array INSERT … ON CONFLICT DO UPDATE with status-protection CASE logic and CTE to propagate `is_anchor=true` on confirmed rows atomically) and `bulk_anchor_dormancy_transitions` (two SQL UPDATEs — confirmed→dormant via NOT EXISTS on edge recency, dormant→confirmed/suggested via EXISTS — returning JSON with transition counts, replacing the N-round-trip edge-recency loop).
+- **`api/anchors/score-daily.ts` — full rewrite.** All five signal formulas documented in `SIGNAL_WEIGHTS` comments (see D-S9-02). Lifecycle transition rules documented above `runLifecycleTransitions()` (see D-S9-03). Steps 2+3 of lifecycle now call `bulk_anchor_dormancy_transitions` instead of per-row edge-recency loops. Main handler builds `candidateBatch[]` in memory then calls `bulk_upsert_anchor_candidates` once per user. All `console.log`/`console.error` → `log()`/`logError()` with `stage: 'anchor'`.
+- **`api/anchors/rescore-backfill.ts` — full rewrite.** Scoring loop builds `candidateBatch[]`; single `bulk_upsert_anchor_candidates` call per user. All console paths → structured logging.
+- **`api/anchors/score-post-extraction.ts` — full rewrite.** Handler comment records async-only decision (D-S9-01). Scoring loop builds `candidateBatch[]`, single bulk RPC call. Seed node inserts build `seedBatch[]` filtered to exclude existing, single `.insert(seedBatch)` (was a per-node loop). All console paths → structured logging.
+- **`api/anchors/spawn-sub-anchors.ts` — targeted edits.** Env var check added. All `console.warn`/`console.log`/`console.error` in promotion path and catch → `log()`/`logError()` with `stage: 'anchor'`.
+- **`api/anchors/dedup-scan.ts` — targeted edits.** Env var check added. Catch block `console.error` → `logError()`.
+- **`api/anchors/on-confirm.ts` — targeted edits.** Supabase env var check added. All console paths → `log()`/`logError()` with `stage: 'anchor'`, `status: 'skipped'` on the no-unconnected-nodes path.
+- **`tsc -b --force`:** zero errors across all six anchor files.
+
+**Decisions:** D-S9-01, D-S9-02, D-S9-03, D-S9-04, D-S9-05.
 
 ---
 
@@ -493,6 +531,41 @@ Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
 **Rationale:** 25 s for the standalone endpoint: leaves ample margin inside Vercel Pro's 300 s timeout even when called right after a 120 s extraction. 50 s for the inline pipeline: existing `DEFAULT_TIME_BUDGET_MS` that already governs the pipeline was the right cap rather than adding a new constant. If a pipeline consumes all 50 s before reaching cross-connections, the time-budget gate skips it with a log line.
 **Status:** Active.
 
+### D-S9-01 — Anchor scoring is async-only; never runs synchronously in the extraction request path
+**Date:** 2026-04-28
+**Decision:** `api/anchors/score-post-extraction.ts` is called exclusively as fire-and-forget from extraction callers (`api/ingest/session.ts`, `api/meetings/process.ts`, `api/youtube/extract-knowledge.ts`, etc.) and from the daily cron via `score-daily.ts`. It is never awaited inline. The handler comment in `score-post-extraction.ts` records this decision explicitly: "called asynchronously (fire-and-forget from extraction callers)".
+**Rationale:** Anchor scoring is enrichment. Failure policy: Skip-with-telemetry. Scoring on a large graph (500+ candidates, full edge traversal, lifecycle transitions) can take 10–30 s. Making the extraction request wait for it would wreck UX and risk extraction timeouts. Running it as a background Vercel invocation is the correct placement — same pattern as cross-connection discovery (D-S8-01).
+**Status:** Active.
+
+### D-S9-02 — Five signal formulas and weights
+**Date:** 2026-04-28
+**Decision:** Composite anchor score = weighted sum of five signals. Weights and formulas documented in `SIGNAL_WEIGHTS` constant in `api/anchors/score-daily.ts`:
+- **Momentum/velocity** (0.30): sum of decay-weighted occurrence counts over 7 days. Each occurrence i contributes `occurrences[i] * exp(-daysDiff * ln2 / 7)`. Captures recent activity exponentially discounted.
+- **Centrality** (0.25): direct edge count normalised by user's max node degree (capped at 50). High-connectivity nodes score higher.
+- **Diversity** (0.20): distinct entity types in the candidate's neighbourhood, normalised to 6. Rewards nodes that bridge across domains.
+- **Richness** (0.15): `(has_description ? 0.5 : 0) + clamp(description.length / 500, 0, 0.5)`. Rewards descriptively rich nodes.
+- **Behavioural** (0.10): reserved for future explicit user signals (manual promotes, dismissals, RAG query hits). Currently contributes 0.
+**Rationale:** Momentum as highest weight because recency-weighted activity is the strongest signal a topic is salient to the user right now. Centrality second because genuinely structural concepts accumulate more connections organically. Diversity rewards cross-domain concepts. Richness is a tiebreaker. Behavioural is reserved at low weight so that when user signals are wired, they can influence scoring without over-weighting early data.
+**Status:** Active.
+
+### D-S9-03 — Lifecycle transition rules
+**Date:** 2026-04-28
+**Decision:** `runLifecycleTransitions()` in `score-daily.ts` applies six rules in order: (1) suggested cleanup — remove suggested candidates whose node no longer exists; (2) confirmed→dormant — confirmed anchors with no edge activity in 90 days set to dormant via `bulk_anchor_dormancy_transitions`; (3) dormant→reactivated — dormant anchors with new edge activity in 14 days promoted back to confirmed via same RPC; (4) dismissed→resurfaced — dismissed candidates with composite score > 0.70 reset to suggested; (5) heal — knowledge_node `is_anchor=false` on a confirmed anchor corrected back to true; (6) auto-archive — dismissed candidates older than 180 days whose node no longer exists set to archived.
+**Rationale:** Rules 2+3 (dormancy cycle) are the highest-value: they let the graph reflect that topics fade and revive rather than holding every confirmed anchor permanently. Bulk RPCs for rules 2+3 replace the previous N-round-trip per-row loop that timed out on large graphs.
+**Status:** Active.
+
+### D-S9-04 — Bulk write via two RPCs; no per-row UPDATE loops in any anchor file
+**Date:** 2026-04-28
+**Decision:** All candidate writes in `score-daily.ts`, `rescore-backfill.ts`, and `score-post-extraction.ts` build an in-memory array and call `bulk_upsert_anchor_candidates` once per user. All dormancy transitions in `score-daily.ts` call `bulk_anchor_dormancy_transitions` once. No file in `api/anchors/` contains a loop issuing individual INSERT or UPDATE calls to `anchor_candidates`.
+**Rationale:** Vercel functions have a 60 s execution limit. At 500+ candidates per user, individual-row DB calls scale linearly and exhaust the time budget before completion. A single RPC accepting a JSONB array handles 500+ rows in under a second. This is the same pattern applied across all other pipeline stages per the project-wide bulk-write rule.
+**Status:** Active.
+
+### D-S9-05 — UNIQUE constraint on anchor_candidates(user_id, node_id) is required for upsert correctness
+**Date:** 2026-04-28
+**Decision:** Migration `20260428_anchor_scoring_bulk_ops.sql` adds `UNIQUE (user_id, node_id)` to `anchor_candidates` (via `CREATE UNIQUE INDEX IF NOT EXISTS` to be idempotent). The `bulk_upsert_anchor_candidates` RPC uses `ON CONFLICT (user_id, node_id) DO UPDATE`, which requires this constraint.
+**Rationale:** Without the constraint, ON CONFLICT has no target and the RPC fails at runtime. The constraint was absent from the original schema — the table was designed for INSERT-only. Adding it is safe: any pre-existing duplicate pairs are resolved by the upsert semantics (keep latest score).
+**Status:** Active.
+
 ### D-014 — Stage 0 Item 2B Gemini retry + token telemetry shipped via four-step rollout
 **Date:** 2026-04-28
 **Decision:** Apply the canonical `geminiFetch` / `embedText` / `embedTexts` recipe from `STAGE-0-FOUNDATIONS.md` Item 2 across all 41 backend files in `api/` that call Gemini, using the four-step pattern documented in the original deferral plan (1 pilot → 2 more → bulk → watch).
@@ -504,6 +577,38 @@ Format: ID, date, decision, rationale, status (`Active` | `Superseded`).
 - The `GEMINI_EMBEDDING_MODEL` constant is normalised across files that previously named it differently (`EMBED_MODEL` etc.).
 - TypeScript compiles clean. Zero new errors introduced; 14 pre-existing tsc errors fixed as a side effect of stricter response-type casting in the new helpers.
 **Status:** Shipped.
+
+---
+
+### D-B2-01 — Two-phase serverless extraction preserves review UX
+**Date:** 2026-04-28
+**Decision:** Extraction is split across two endpoints. `api/ingest/extract-preview` runs Gemini and returns entities/relationships to the browser for user review. `api/ingest/extract-persist` accepts the reviewed entity list and performs all DB writes. No intermediate browser logic exists between these two calls.
+**Rationale:** The review/approve step is core product UX — users must be able to remove or edit extracted entities before they land in the graph. Eliminating browser-side extraction does not mean eliminating the pause; it means moving the AI work to the server while keeping the review pause client-side. The two-endpoint split is the minimal architecture that achieves both goals.
+**Status:** Active.
+
+---
+
+### D-B2-02 — extract-preview sets source status to `extracting`; does not write nodes or edges
+**Date:** 2026-04-28
+**Decision:** `api/ingest/extract-preview` updates `knowledge_sources.status = 'extracting'` at entry and returns extracted entities without writing to `knowledge_nodes` or `knowledge_edges`. Persistence happens only in `extract-persist` after user approval.
+**Rationale:** The source must reflect that extraction is in progress so the pipeline health view is accurate. But writing nodes before the user approves them would pollute the graph with unreviewed entities. The status write is safe at preview time; node/edge writes are not.
+**Status:** Active.
+
+---
+
+### D-B2-03 — `check_node_duplicate` RPC is canonical dedup; `find_similar_nodes` is retained for anchor scoring only
+**Date:** 2026-04-28
+**Decision:** All entity deduplication during extraction uses the `check_node_duplicate` RPC (three tiers: exact label → Levenshtein fuzzy → semantic cosine). The `find_similar_nodes` RPC remains in production but is only called by `api/anchors/score-post-extraction.ts`. The browser-side `checkDeduplication()` function that previously called `find_similar_nodes` is deleted.
+**Rationale:** `check_node_duplicate` is more precise than `find_similar_nodes`: it applies all three match tiers in one RPC call and returns match type and similarity, enabling the auto-merge vs. near-match-queue decision. `find_similar_nodes` returns only cosine-similar nodes and is the right shape for anchor scoring's "find related nodes" query, but the wrong shape for entity dedup during ingestion.
+**Status:** Active.
+
+---
+
+### D-B2-04 — Edge dedup via unique index + upsert; embeddings inline and non-blocking
+**Date:** 2026-04-28
+**Decision:** Duplicate edges are prevented at two layers: a `UNIQUE INDEX` on `(user_id, source_node_id, target_node_id, relation_type)` in the database, and a `.upsert()` with `ignoreDuplicates: true` in `saveEdges`. Edge embeddings are computed immediately after `saveEdges` inside `runExtractionCore()` and are non-blocking (failure logs and continues; source status is not affected).
+**Rationale:** The unique index ensures correctness regardless of the caller path. The upsert makes duplicate writes cheap (DB skips, no error). Embedding edges inline keeps the data model complete at write time rather than requiring a separate backfill pass. Non-blocking failure policy matches the Stage 0 pattern for enrichment steps: enrichment never fails the pipeline.
+**Status:** Active.
 
 ---
 
@@ -536,7 +641,7 @@ Items the agent should not act on without explicit approval.
 
 - **Re-ingest behaviour per source type** (Stage 2). Default proposed: skip silently with telemetry on YouTube/URL/file/paste; replace on meetings if Circleback updates a transcript. Awaiting confirmation.
 - **Source state machine names** (Stage 2). Proposed: `pending → chunking → extracting → augmenting → complete | failed | degraded`. Awaiting confirmation.
-- **Anchor scoring sync vs async** (Stage 9). Trade-off documented in scope; needs an opinion before implementation.
+- ~~**Anchor scoring sync vs async** (Stage 9). Trade-off documented in scope; needs an opinion before implementation.~~ **Resolved 2026-04-28 — async-only (D-S9-01).**
 - **Stage 1 file upload size limit** (Stage 1). Suggested align with Gemini File API limits (2 GB per file). Confirm.
 - **Stage 1 paste size limit** (Stage 1). Suggested 500k characters. Confirm.
 
@@ -546,7 +651,7 @@ Items the agent should not act on without explicit approval.
 
 Themes that span multiple stages and should be tracked holistically.
 
-- **Browser vs serverless divergence.** Several stages (3, 5, 6, 7) implement the same logic in two places. The hardening goal is to consolidate to one path. Track this in each stage's open list.
+- **Browser vs serverless divergence.** Several stages (3, 5, 6, 7) implement the same logic in two places. The hardening goal is to consolidate to one path. **Resolved in Block 2 (2026-04-28)** — Stages 5, 6, 7 browser-side extraction, dedup, and graph-write code deleted. Extraction, dedup, and node/edge persistence are now serverless-only. Stage 3 chunking remains duplicated (canonical `src/utils/chunking.ts` + paste-in server copies) but is intentional — chunking is a pure function, not a service call.
 - **Idempotency across webhooks.** Affects Stage 1 (capture entry points) and Stage 2 (persistence). **Resolved in Stage 2 (2026-04-28)** — every webhook / queue-driven write path now routes through a `persistSource` variant with the appropriate dedup index. Production currently shows zero violations across all three identity rules.
 - **Failure policy.** Affects every stage. Defined once in Stage 0 Item 5, applied per-stage.
 - **Secret hygiene + browser exposure.** Owned by Stage S. Affects any stage that calls a paid third-party API from the browser today (Stages 8 cross-connection, 13 surfacing/RAG, plus the `src/services/gemini.ts` callers in summarisation and reranking). Every new third-party integration must consult `CLAUDE.md` Secret Hygiene before adding env vars.
@@ -556,6 +661,9 @@ Themes that span multiple stages and should be tracked holistically.
 ## Changelog
 
 Reverse chronological. Every meaningful update goes here.
+
+### 2026-04-28 (Block 2 — Stages 5, 6, 7)
+- **Stages 5, 6, 7 — Entity extraction, Deduplication, Knowledge persistence. Done.** Browser-side extraction path eliminated: `src/services/extractionPipeline.ts`, `src/services/crossConnections.ts`, `src/services/edgeEmbedding.ts` deleted. `extractEntities` removed from `src/services/gemini.ts`. `checkDeduplication` removed from `src/services/deduplication.ts`. `saveNodes`, `saveEdges`, `updateNodeEmbeddings`, `updateEdgeEmbeddings` removed from `src/services/extractionPersistence.ts`. Three new serverless endpoints: `api/ingest/extract-preview` (Gemini extraction → entities for review), `api/ingest/extract-persist` (saves approved entities, dedup, embeddings, cross-connections), `api/ingest/extract.ts` (headless auto-approve for background automation). `useExtraction.ts` rewritten to call these endpoints — no direct AI or graph-write imports remain. Hardening applied: named dedup constants (`DEDUP_EXACT_THRESHOLD=0.85`, `DEDUP_SEMANTIC_THRESHOLD=0.80`, `DEDUP_AUTO_MERGE_THRESHOLD=0.88`); `saveEdges` upsert with ON CONFLICT; edge embeddings computed inline in `runExtractionCore` (non-blocking); `extract-preview` retry bug fixed (`let raw`, reassign on valid retry). Migration `20260428_edge_dedup_constraint.sql` applied: deduplicates existing duplicate edge groups, adds `knowledge_edges_dedup_uniq` UNIQUE INDEX on `(user_id, source_node_id, target_node_id, relation_type)`. TypeScript clean. Squash-merged to `main` (commit `b8a8d16`). Decisions D-B2-01 through D-B2-04 recorded. Owner docs: [STAGE-5-EXTRACTION.md](STAGE-5-EXTRACTION.md), [STAGE-6-DEDUP.md](STAGE-6-DEDUP.md), [STAGE-7-PERSISTENCE.md](STAGE-7-PERSISTENCE.md).
 
 ### 2026-04-28 (Stage 10)
 - **Stage 10 — Skills detection + scoring. Done.** Fixed five critical bugs that caused all skill creation in `process-source.ts` to silently fail: (1) INSERT used nonexistent `label` column and omitted required NOT NULL fields `name`, `title`, `description`, `content`; (2) `SOURCE_TYPE_CONFIDENCE` and `REINFORCEMENT_DELTAS` used pre-Stage-2 capitalized type keys (`YouTube`, `Meeting`) so all lookups fell back to defaults; (3) existingSkills dedup queried `label` instead of `name, title`; (4) `skill_sources` join table was written on reinforcement but `source_ids` array was never updated, causing daily-cron to re-process every source; (5) `confirmedCount` read `.data` on a `head:true` query instead of `.count`. Also: removed `VITE_` fallbacks from `process-source.ts`, `get.ts`, `scan.ts`, `tag-source.ts`, `tag-sources.ts`; added `INGEST_SECRET` auth path to `process-source.ts` so pipeline calls work without a user JWT; fixed anchor predicate in `update-from-source.ts` (`entity_type = 'Anchor'` → `is_anchor = true`); migrated key events to `log()`/`logError()`. Wired Stage 10 as fire-and-forget POST to `/api/skills/process-source` at extraction completion in all 6 pipeline routes. `tsc -b --force` clean.
