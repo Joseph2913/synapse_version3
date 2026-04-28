@@ -6,10 +6,7 @@
  * filtering out false positives from vector similarity search.
  */
 
-import { fetchWithRetry, GEMINI_CHAT_MODEL } from './gemini'
-
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { callApi } from './apiClient'
 
 export interface RerankerCandidate {
   id: string
@@ -112,56 +109,16 @@ export async function rerankCandidates(
     return candidates.map(c => ({ ...c, relevance_score: 5 }))
   }
 
-  if (!GEMINI_API_KEY) {
-    console.warn('[reranker] No API key, returning original order')
-    return candidates.slice(0, topN).map(c => ({ ...c, relevance_score: 5 }))
-  }
-
   // Cap candidates to avoid overwhelming Gemini's output budget.
-  // With 150 chars per candidate and 30 candidates, input is ~4,500 chars.
-  // Gemini needs ~4 tokens per score, so 30 scores ≈ 120 output tokens.
   const maxCandidates = 30
   const capped = candidates.slice(0, maxCandidates)
-
-  const candidateList = capped.map((c, i) =>
-    `[${i}] ${c.text.slice(0, 150)}`
-  ).join('\n')
-
-  const rerankPrompt = `Score each passage 0-10 for relevance to the query. Return ONLY a JSON array of ${capped.length} integers, nothing else.
-
-Query: "${query}"
-
-${candidateList}`
+  const passages = capped.map(c => c.text.slice(0, 150))
 
   try {
-    const response = await fetchWithRetry(
-      `${GEMINI_BASE_URL}/${GEMINI_CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: rerankPrompt }] }],
-          generationConfig: {
-            maxOutputTokens: 1024,
-            temperature: 0,
-            responseMimeType: 'application/json',
-            // Disable thinking — scoring is a simple task that doesn't
-            // need internal reasoning, and thinking eats the output budget
-            thinkingConfig: { thinkingBudget: 0 },
-          },
-        }),
-      },
-      1 // Single attempt — speed over reliability for reranking
-    )
-
-    const data = await response.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
-    }
-
-    const parts = data.candidates?.[0]?.content?.parts ?? []
-    const textPart = parts.find(p => p.thought !== true && typeof p.text === 'string')
-      ?? parts.find(p => typeof p.text === 'string')
-    const text = textPart?.text
+    const { text } = await callApi<{ text: string }>('/api/gemini/rerank', {
+      query,
+      passages,
+    })
 
     if (!text) {
       console.warn('[reranker] Empty response, returning original order')

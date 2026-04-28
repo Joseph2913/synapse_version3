@@ -298,7 +298,7 @@ This is a **living log**, not a plan. It tracks what has actually shipped, what 
 > **Migration progress:**
 > - [x] Step 1 — `src/utils/summarize.ts` → `api/gemini/summarize.ts` (2026-04-28). Auth-gated, tsc clean. `apiClient.ts` helper landed.
 > - [x] Step 2 — `src/services/queryClassifier.ts` → `api/gemini/classify-query.ts` (2026-04-28). Auth-gated, tsc clean.
-> - [ ] Step 3 — `src/services/reranker.ts`
+> - [x] Step 3 — `src/services/reranker.ts` → `api/gemini/rerank.ts` (2026-04-28). Auth-gated, tsc clean.
 > - [ ] Step 4 — `src/services/crossConnections.ts`
 > - [ ] Step 5 — `src/services/simulate.ts`
 > - [ ] Step 6 — `src/services/gemini.ts`
