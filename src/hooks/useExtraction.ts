@@ -7,7 +7,8 @@ import type {
   UseExtractionReturn,
 } from '../types/extraction'
 import { useAuth } from './useAuth'
-import { buildExtractionPrompt } from '../utils/promptBuilder'
+import { composeExtractionPrompt } from '../utils/promptBuilder'
+import { fetchActiveSkillsForPrompt } from '../services/promptSkillsContext'
 import { chunkSourceContent, buildEmbeddingInput } from '../utils/chunking'
 import { resolveSummary } from '../utils/summarize'
 import { extractEntities, generateEmbeddings } from '../services/gemini'
@@ -51,6 +52,7 @@ export function useExtraction(): UseExtractionReturn {
   const sourceIdRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<number>(0)
+  const promptVersionRef = useRef<string>('unknown')
 
   // Timer management
   const startTimer = useCallback(() => {
@@ -121,13 +123,15 @@ export function useExtraction(): UseExtractionReturn {
           console.warn('[useExtraction] Summary generation failed (non-blocking):', summaryErr)
         }
 
-        // Step 3: Compose prompt
+        // Step 3: Compose prompt (Stage 4 — canonical, with active skills hints)
         update({ step: 'composing_prompt', statusText: 'Composing extraction prompt...' })
-        const systemPrompt = buildExtractionPrompt(config)
+        const activeSkills = await fetchActiveSkillsForPrompt(userId)
+        const composed = composeExtractionPrompt({ ...config, activeSkills })
+        promptVersionRef.current = composed.version
 
         // Step 3: Extract entities
         update({ step: 'extracting', statusText: 'Waiting for Gemini extraction...' })
-        const result = await extractEntities(content, systemPrompt)
+        const result = await extractEntities(content, composed.prompt)
 
         // Convert to ReviewEntity[]
         const reviewEntities: ReviewEntity[] = result.entities.map(e => ({
@@ -355,6 +359,7 @@ export function useExtraction(): UseExtractionReturn {
           chunkCount,
           crossConnectionCount,
           durationMs,
+          promptVersion: promptVersionRef.current,
         })
 
         // Trigger anchor scoring — fire-and-forget, never blocks the UI
@@ -410,10 +415,13 @@ export function useExtraction(): UseExtractionReturn {
     })
 
     try {
-      const systemPrompt = buildExtractionPrompt(configRef.current)
+      const userId = user?.id
+      const activeSkills = userId ? await fetchActiveSkillsForPrompt(userId) : []
+      const composed = composeExtractionPrompt({ ...configRef.current, activeSkills })
+      promptVersionRef.current = composed.version
 
       update({ step: 'extracting', statusText: 'Re-extracting with Gemini...' })
-      const result = await extractEntities(contentRef.current, systemPrompt)
+      const result = await extractEntities(contentRef.current, composed.prompt)
 
       const reviewEntities: ReviewEntity[] = result.entities.map(e => ({
         ...e,

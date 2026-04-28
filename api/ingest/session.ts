@@ -6,6 +6,7 @@ import {
   stripMarkdown,
   type Anchor,
   type UserProfile,
+  type PromptSkillHint,
 } from '../pipeline/extract-pipeline.js';
 
 // 300s ceiling to cover map-reduce + dedup + chunk persistence on long sources.
@@ -239,7 +240,7 @@ async function runExtractionPipeline(params: {
     // ── STEPS 3-9: SHARED EXTRACTION PIPELINE ───────────────────────────────
     // Entity extraction, dedup, node+edge persistence, chunking, and cross-
     // connection discovery all live in api/_shared/extract-pipeline.ts.
-    const [profileResult, anchorsResult] = await Promise.all([
+    const [profileResult, anchorsResult, skillsResult] = await Promise.all([
       supabase.from('user_profiles').select('*').eq('user_id', userId).maybeSingle(),
       supabase
         .from('knowledge_nodes')
@@ -247,10 +248,18 @@ async function runExtractionPipeline(params: {
         .eq('user_id', userId)
         .eq('is_anchor', true)
         .limit(10),
+      supabase
+        .from('knowledge_skills')
+        .select('label, domain, exposure_level')
+        .eq('user_id', userId)
+        .eq('status', 'confirmed')
+        .order('confidence', { ascending: false })
+        .limit(12),
     ]);
 
     const userProfile = profileResult.data as UserProfile | null;
     const anchors = (anchorsResult.data ?? []) as Anchor[];
+    const activeSkills = (skillsResult.data ?? []) as PromptSkillHint[];
 
     // Manual capture sessions always run the most aggressive mode because
     // the user deliberately invoked ingestion — they want everything pulled
@@ -263,6 +272,7 @@ async function runExtractionPipeline(params: {
         anchors,
         userProfile,
         customInstructions: guidance ?? null,
+        activeSkills,
       },
       source: {
         sourceId,

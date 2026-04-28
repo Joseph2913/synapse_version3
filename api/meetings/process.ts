@@ -2,8 +2,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import {
   runExtractionCore,
+  PROMPT_VERSION,
   type Anchor,
   type UserProfile,
+  type PromptSkillHint,
 } from '../pipeline/extract-pipeline.js';
 
 // 300s ceiling to cover map-reduce + dedup + chunk persistence on long sources.
@@ -103,7 +105,7 @@ async function processMeeting(
     // ── STEPS 1-7: SHARED EXTRACTION PIPELINE ──────────────────────────────────
     // Entity extraction, dedup, node+edge persistence, chunking, and cross-
     // connection discovery all live in api/_shared/extract-pipeline.ts.
-    const [profileResult, anchorsResult, settingsResult] = await Promise.all([
+    const [profileResult, anchorsResult, settingsResult, skillsResult] = await Promise.all([
       supabase.from('user_profiles').select('*').eq('user_id', meeting.user_id).maybeSingle(),
       supabase
         .from('knowledge_nodes')
@@ -112,18 +114,26 @@ async function processMeeting(
         .eq('is_anchor', true)
         .limit(10),
       supabase.from('extraction_settings').select('default_mode, default_anchor_emphasis').eq('user_id', meeting.user_id).maybeSingle(),
+      supabase
+        .from('knowledge_skills')
+        .select('label, domain, exposure_level')
+        .eq('user_id', meeting.user_id)
+        .eq('status', 'confirmed')
+        .order('confidence', { ascending: false })
+        .limit(12),
     ]);
 
     const userProfile = profileResult.data as UserProfile | null;
     const anchors = (anchorsResult.data ?? []) as Anchor[];
     const defaultSettings = settingsResult.data as { default_mode: string; default_anchor_emphasis: string } | null;
+    const activeSkills = (skillsResult.data ?? []) as PromptSkillHint[];
 
     const extractionMode = defaultSettings?.default_mode ?? 'comprehensive';
     const anchorEmphasis = defaultSettings?.default_anchor_emphasis ?? 'standard';
 
     const coreResult = await runExtractionCore({
       content,
-      promptConfig: { mode: extractionMode, anchorEmphasis, anchors, userProfile },
+      promptConfig: { mode: extractionMode, anchorEmphasis, anchors, userProfile, activeSkills },
       source: {
         sourceId: meeting.id,
         sourceType: 'meeting',
@@ -242,6 +252,7 @@ async function processMeeting(
       chunk_count: chunksCreated,
       cross_connection_count: crossConnectionCount,
       extraction_duration_ms: null,
+      prompt_version: PROMPT_VERSION,
     });
 
     return { success: true, nodesCreated, edgesCreated };

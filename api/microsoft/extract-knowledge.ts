@@ -4,6 +4,7 @@ import {
   runExtractionCore,
   type Anchor,
   type UserProfile,
+  type PromptSkillHint,
 } from '../pipeline/extract-pipeline.js';
 
 export const maxDuration = 300;
@@ -229,7 +230,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const itemStartTime = Date.now();
       try {
         // ── Fetch extraction config (profile, integration settings, anchors) ──
-        const [profileRes, integrationRes, anchorsRes, extractionSettingsRes] = await Promise.all([
+        const [profileRes, integrationRes, anchorsRes, extractionSettingsRes, skillsRes] = await Promise.all([
           supabase.from('user_profiles').select('*').eq('user_id', item.user_id).maybeSingle(),
           supabase
             .from('microsoft_integrations')
@@ -243,6 +244,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .eq('is_anchor', true)
             .limit(10),
           supabase.from('extraction_settings').select('default_mode, default_anchor_emphasis').eq('user_id', item.user_id).maybeSingle(),
+          supabase
+            .from('knowledge_skills')
+            .select('label, domain, exposure_level')
+            .eq('user_id', item.user_id)
+            .eq('status', 'confirmed')
+            .order('confidence', { ascending: false })
+            .limit(12),
         ]);
 
         const userProfile = profileRes.data as UserProfile | null;
@@ -262,6 +270,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // the same rich anchor context (type + description) every other
         // pipeline uses.
         const anchors = (anchorsRes.data ?? []) as Anchor[];
+        const activeSkills = (skillsRes.data ?? []) as PromptSkillHint[];
 
         // ── Determine source shape ──
         const sourceType = item.resource_type === 'meeting_transcript' || item.resource_type === 'calendar_event'
@@ -313,6 +322,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             anchors,
             userProfile,
             customInstructions: integrationSettings?.custom_instructions ?? null,
+            activeSkills,
           },
           source: {
             sourceId,
