@@ -221,7 +221,10 @@ async function runExtractionPipeline(params: {
 
   const updateStatus = async (status: string, extra?: Record<string, unknown>) => {
     const meta = { ...metadata, extraction_status: status, ...extra };
-    await supabase.from('knowledge_sources').update({ metadata: meta }).eq('id', sourceId);
+    const topLevelStatus = status === 'completed' ? 'complete' : status === 'error' ? 'failed' : undefined;
+    const update: Record<string, unknown> = { metadata: meta };
+    if (topLevelStatus) update.status = topLevelStatus;
+    await supabase.from('knowledge_sources').update(update).eq('id', sourceId);
   };
 
   try {
