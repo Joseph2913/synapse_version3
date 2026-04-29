@@ -403,6 +403,16 @@ async function runExtractionPipeline(params: {
       }).catch(err => { console.warn('[ingest/session] Skills detection trigger failed (non-fatal):', err); });
     }
 
+    // ── STEP 11: TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ───────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId, userId }),
+      }).catch(err => { console.warn('[ingest/session] Cross-connect trigger failed (non-fatal):', err); });
+    }
+
     // ── COMPLETE ────────────────────────────────────────────────────────────
     const durationMs = Date.now() - startTime;
     await updateStatus('completed', {

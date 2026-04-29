@@ -126,6 +126,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .eq('id', sourceId)
       .eq('user_id', userId);
 
+    // ── TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ─────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId, userId }),
+      }).catch(err => { console.warn('[extract:headless] Cross-connect trigger failed (non-fatal):', err); });
+    }
+
     log({ stage: 'extract:headless', user_id: userId, source_id: sourceId, duration_ms: Date.now() - t0, status: 'ok', nodes_created: result.nodesCreated, edges_created: result.edgesCreated, chunks: result.chunksCreated, cross_connections: result.crossConnectionCount });
 
     return res.status(200).json({

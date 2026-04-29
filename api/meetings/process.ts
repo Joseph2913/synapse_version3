@@ -264,6 +264,16 @@ async function processMeeting(
       }).catch(err => { console.warn('[meetings/process] Skills detection trigger failed (non-fatal):', err); });
     }
 
+    // ── TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId: meeting.id, userId: meeting.user_id }),
+      }).catch(err => { console.warn('[meetings/process] Cross-connect trigger failed (non-fatal):', err); });
+    }
+
     // ── LINK TO MEETING DOMAIN AGENT (fire-and-forget) ───────────────────────
     // Resolve meeting agent(s) via:
     // 1. Integration ID → agent_integration_links (supports multi-integration agents)

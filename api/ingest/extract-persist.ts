@@ -10,7 +10,6 @@ import {
   saveNodes,
   saveEdges,
   saveTranscriptChunks,
-  discoverCrossConnections,
   queueNearMatches,
   batchEmbed,
   type ExtractedEntity,
@@ -83,7 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const dedup = await deduplicateEntities(entities, userId, supabase, enableFuzzyDedup);
 
     // Save nodes + embeddings
-    const { savedNodeMap, nodesCreated, nodeEmbeddings } = await saveNodes(entities, dedup, source, userId, supabase);
+    const { savedNodeMap, nodesCreated } = await saveNodes(entities, dedup, source, userId, supabase);
 
     // Queue near-matches for review
     if (enableFuzzyDedup && dedup.nearMatchQueue.length > 0) {
@@ -148,15 +147,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Cross-connections
-    let crossConnectionCount = 0;
-    if (enableCrossConnections && savedNodeMap.size > 0) {
-      crossConnectionCount = await discoverCrossConnections(entities, savedNodeMap, nodeEmbeddings, userId, supabase, { weight: 0.8, timeBudgetMs: 50_000 });
-      edgesCreated += crossConnectionCount;
-    }
+    // Cross-connections — moved out of the inline path. Fire-and-forget the
+    // standalone endpoint, which reads embeddings from the DB so retries work.
+    void enableCrossConnections;
+    const crossConnectionCount = 0;
 
     // Set source status to complete
     await supabase.from('knowledge_sources').update({ status: 'complete' }).eq('id', sourceId).eq('user_id', userId);
+
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId, userId }),
+      }).catch(err => { console.warn('[extract-persist] Cross-connect trigger failed (non-fatal):', err); });
+    }
 
     log({ stage: 'extract:persist', user_id: userId, source_id: sourceId, duration_ms: Date.now() - t0, status: 'ok', nodes_created: nodesCreated, edges_created: edgesCreated, chunks: chunkCount, cross_connections: crossConnectionCount });
 

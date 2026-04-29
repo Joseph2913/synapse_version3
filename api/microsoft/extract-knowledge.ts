@@ -468,6 +468,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }).catch(err => { console.warn('[microsoft/extract] Skills detection trigger failed (non-fatal):', err); });
         }
 
+        // ── TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ────────
+        {
+          const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+          fetch(`${appUrl}/api/cross-connect/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+            body: JSON.stringify({ sourceId, userId: item.user_id }),
+          }).catch(err => { console.warn('[microsoft/extract] Cross-connect trigger failed (non-fatal):', err); });
+        }
+
         // ── Link meeting sources to Microsoft-associated domain agents ──
         // Microsoft-specific: uses user_integrations.integration_slug='microsoft'
         // to find agents belonging to this integration path. Kept here because

@@ -630,6 +630,20 @@ async function extractKnowledgeForItem(
       }).catch(err => { console.warn('[extract-knowledge] Skills detection trigger failed (non-fatal):', err); });
     }
 
+    // ── TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ───────────────────
+    // Stage 8 used to run inline inside runExtractionCore but blew past its 50s
+    // time budget on long sources after the v2 map-reduce pipeline shipped. Now
+    // it runs as an independent background job that reads embeddings from the
+    // DB, so it works equally well on first-run and retried sources.
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId, userId: item.user_id }),
+      }).catch(err => { console.warn('[extract-knowledge] Cross-connect trigger failed (non-fatal):', err); });
+    }
+
     // ── ADVISORY COUNCIL HOOK (fire-and-forget, non-fatal) ─────────────────────
     try {
       await runAdvisoryCouncilHook(item, sourceId, supabase);

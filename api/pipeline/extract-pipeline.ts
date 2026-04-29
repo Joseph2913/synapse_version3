@@ -1712,15 +1712,19 @@ export async function runExtractionCore(params: {
     }
   }
 
-  // 7. Cross-connections
-  let crossConnectionCount = 0;
-  if (enableCrossConnections) {
-    crossConnectionCount = await discoverCrossConnections(
-      entities, savedNodeMap, nodeEmbeddings, userId, supabase,
-      { weight: crossEdgeWeight, itemStartTime, timeBudgetMs }
-    );
-    edgesCreated += crossConnectionCount;
-  }
+  // 7. Cross-connections — DELIBERATELY NOT RUN HERE.
+  //    Cross-connection discovery has been moved to the standalone
+  //    `api/cross-connect/run` endpoint and is invoked fire-and-forget by each
+  //    extraction entry point after this function returns. Two reasons:
+  //      (a) The map-reduce pipeline now consumes most of the per-source time
+  //          budget on long content, leaving none for cross-connections.
+  //      (b) Retries reuse pre-existing nodes, so the in-memory `nodeEmbeddings`
+  //          map is empty — the standalone endpoint reads embeddings from the
+  //          DB instead, so it works for both first-run and retry paths.
+  //    `crossConnectionCount` stays in the return shape (always 0) so existing
+  //    audit-logging callers don't break.
+  const crossConnectionCount = 0;
+  void enableCrossConnections; void crossEdgeWeight; void itemStartTime; void timeBudgetMs;
 
   return {
     savedNodeMap,

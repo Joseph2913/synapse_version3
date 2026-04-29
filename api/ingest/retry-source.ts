@@ -228,6 +228,20 @@ async function runRetryPipeline(
       }).catch(() => {});
     }
 
+    // ── TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ─────────────────
+    // Critical for retries: the extraction pipeline no longer runs cross-connect
+    // inline, and on a retry the in-memory savedNodeMap is mostly reused entities
+    // anyway. The standalone endpoint reads embeddings from the DB so it works
+    // for both first-run and retry paths.
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId, userId }),
+      }).catch(() => {});
+    }
+
     const durationMs = Date.now() - startTime;
     await setStatus('completed', 'complete');
 

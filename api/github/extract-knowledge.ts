@@ -371,6 +371,16 @@ async function extractKnowledgeForItem(
       }).catch(err => { console.warn('[github/extract-knowledge] Skills detection trigger failed (non-fatal):', err); });
     }
 
+    // ── TRIGGER CROSS-CONNECTION DISCOVERY (fire-and-forget) ──────────────────
+    {
+      const appUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${appUrl}/api/cross-connect/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-ingest-secret': process.env.INGEST_SECRET ?? '' },
+        body: JSON.stringify({ sourceId, userId: item.user_id }),
+      }).catch(err => { console.warn('[github/extract-knowledge] Cross-connect trigger failed (non-fatal):', err); });
+    }
+
     return { success: true, nodesCreated, edgesCreated };
 
   } catch (err) {

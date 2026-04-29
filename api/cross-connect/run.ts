@@ -35,6 +35,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
+const INGEST_SECRET = process.env.INGEST_SECRET
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
   throw new Error(
@@ -50,16 +51,24 @@ function getAnonSupabase(): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 }
 
-async function getUserIdFromRequest(req: VercelRequest): Promise<string | null> {
+// Resolves the calling user. Two auth modes are accepted:
+//   1. x-ingest-secret header — used by server-to-server fire-and-forget calls
+//      from extraction entry points. The trusted userId is read from the body.
+//   2. Authorization: Bearer <jwt> — used by browser callers.
+async function resolveAuth(req: VercelRequest): Promise<{ userId: string | null; isIngestSecret: boolean }> {
+  const secret = req.headers['x-ingest-secret'] as string | undefined
+  if (INGEST_SECRET && secret === INGEST_SECRET) {
+    const bodyUserId = (req.body as { userId?: unknown } | null)?.userId
+    return { userId: typeof bodyUserId === 'string' ? bodyUserId : null, isIngestSecret: true }
+  }
   const auth = req.headers.authorization
-  if (!auth?.startsWith('Bearer ')) return null
+  if (!auth?.startsWith('Bearer ')) return { userId: null, isIngestSecret: false }
   const token = auth.slice(7)
   try {
     const { data: { user } } = await getAnonSupabase().auth.getUser(token)
-    return user?.id ?? null
+    return { userId: user?.id ?? null, isIngestSecret: false }
   } catch {
-    /* fall through */
-    return null
+    return { userId: null, isIngestSecret: false }
   }
 }
 
@@ -175,18 +184,31 @@ const GEMINI_BATCH_SIZE = 20
 
 // ─── Input validation ────────────────────────────────────────────────────────
 
+// Body accepts either:
+//   { nodeIds: string[], sourceId?: string }            — explicit node list (legacy callers)
+//   { sourceId: string, userId?: string, nodeIds?: [] } — sourceId-only mode: endpoint fetches
+//                                                          all nodes for the source from the DB.
+//                                                          Required for retries where the in-memory
+//                                                          "new entities" handoff is empty.
 interface RunBody {
-  nodeIds: string[]
+  nodeIds?: string[]
   sourceId?: string
+  userId?: string
 }
 
 function isRunBody(b: unknown): b is RunBody {
   if (!b || typeof b !== 'object') return false
   const o = b as Record<string, unknown>
-  if (!Array.isArray(o.nodeIds)) return false
-  if (o.nodeIds.length === 0 || o.nodeIds.length > 500) return false
-  if (!(o.nodeIds as unknown[]).every((id) => typeof id === 'string')) return false
+  const hasNodeIds = Array.isArray(o.nodeIds)
+  const hasSourceId = typeof o.sourceId === 'string' && o.sourceId.length > 0
+  if (!hasNodeIds && !hasSourceId) return false
+  if (hasNodeIds) {
+    const arr = o.nodeIds as unknown[]
+    if (arr.length > 500) return false
+    if (!arr.every((id) => typeof id === 'string')) return false
+  }
   if (o.sourceId !== undefined && typeof o.sourceId !== 'string') return false
+  if (o.userId !== undefined && typeof o.userId !== 'string') return false
   return true
 }
 
@@ -224,23 +246,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'method_not_allowed' })
   }
 
-  const userId = await getUserIdFromRequest(req)
+  const { userId, isIngestSecret } = await resolveAuth(req)
   if (!userId) {
     return res.status(401).json({ error: 'unauthenticated' })
   }
 
   if (!isRunBody(req.body)) {
-    return res.status(400).json({ error: 'invalid_request', detail: 'Expected { nodeIds: string[], sourceId?: string }' })
+    return res.status(400).json({ error: 'invalid_request', detail: 'Expected { nodeIds: string[] } or { sourceId: string }' })
   }
 
-  const { nodeIds, sourceId } = req.body
+  const { nodeIds: bodyNodeIds, sourceId } = req.body
   const startedAt = Date.now()
   const sb = getServiceSupabase()
 
-  log({ stage: 'cross-connect', status: 'ok', user_id: userId, source_id: sourceId, node_count: nodeIds.length })
+  // Resolve which nodes to bridge from. Two modes:
+  //   - Explicit nodeIds (legacy callers, browser-initiated runs)
+  //   - sourceId only — fetch all nodes for that source from the DB. Used by
+  //     the post-extraction fire-and-forget triggers and retries.
+  let nodeIds: string[] = bodyNodeIds ?? []
+  if (nodeIds.length === 0 && sourceId) {
+    const { data: sourceNodes, error: sourceErr } = await sb
+      .from('knowledge_nodes')
+      .select('id')
+      .eq('source_id', sourceId)
+      .eq('user_id', userId)
+      .limit(500)
+    if (sourceErr) {
+      logError({ stage: 'cross-connect', user_id: userId, source_id: sourceId, status: 'skipped', error: `source-node lookup failed: ${sourceErr.message}`, duration_ms: Date.now() - startedAt })
+      return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
+    }
+    nodeIds = (sourceNodes ?? []).map(n => (n as { id: string }).id)
+  }
+
+  if (nodeIds.length === 0) {
+    log({ stage: 'cross-connect', status: 'skipped', user_id: userId, source_id: sourceId, reason: 'no_nodes_for_source', duration_ms: Date.now() - startedAt })
+    return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
+  }
+
+  log({ stage: 'cross-connect', status: 'ok', user_id: userId, source_id: sourceId, node_count: nodeIds.length, auth: isIngestSecret ? 'ingest_secret' : 'jwt' })
 
   try {
-    // ── 1. Fetch new nodes with embeddings ────────────────────────────────────
+    // ── 1. Fetch the source's nodes with embeddings ──────────────────────────
     const { data: newNodesRaw, error: fetchErr } = await sb
       .from('knowledge_nodes')
       .select('id, label, entity_type, description, embedding')
@@ -253,7 +299,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         user_id: userId,
         source_id: sourceId,
         status: 'skipped',
-        error: fetchErr?.message ?? 'no new nodes found',
+        error: fetchErr?.message ?? 'no nodes found',
         duration_ms: Date.now() - startedAt,
       })
       return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
