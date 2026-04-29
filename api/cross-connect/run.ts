@@ -30,6 +30,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
+// Allow long candidate-gathering on sources with many entities. The per-node
+// match_knowledge_nodes RPC takes ~750ms with the HNSW halfvec index, so a
+// 100-node source takes ~75s of candidate work plus ~10s for the Gemini call.
+export const maxDuration = 300
+
 // ─── Supabase env + factories ────────────────────────────────────────────────
 
 const SUPABASE_URL = process.env.SUPABASE_URL!
@@ -165,10 +170,12 @@ function logError(fields: LogFields & { error: string }): void {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-// Time budget for candidate gathering. If a single node's RPC takes too long
-// we stop collecting and run Gemini on what we have. 25 s leaves margin inside
-// Vercel Pro's 300 s timeout even when called right after a heavy extraction.
-const CROSS_CONNECT_TIME_BUDGET_MS = 25_000
+// Time budget for candidate gathering. If we run out of budget mid-loop, we
+// stop collecting and run Gemini on whatever was found. Each per-node RPC
+// takes ~750ms with the HNSW halfvec index. 240s budget leaves margin under
+// Vercel Pro's 300s function timeout for the Gemini call (~10s) and the
+// final bulk insert.
+const CROSS_CONNECT_TIME_BUDGET_MS = 240_000
 
 // Semantic similarity floor. Candidates below this score are discarded before
 // Gemini sees them. 0.55 is consistent with the inline pipeline value.
