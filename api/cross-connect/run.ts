@@ -316,35 +316,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const newNodeIdSet = new Set(nodeIds)
 
     // ── 2. Gather candidates via match_knowledge_nodes RPC ───────────────────
-    // One RPC call per new node. Candidates are deduplicated into a map keyed
-    // by candidate ID, keeping the highest similarity score seen across nodes.
-    // We stop early if the time budget is consumed during candidate gathering.
+    // RPC calls run in parallel chunks. Each per-node RPC takes ~750ms with the
+    // HNSW halfvec index, so a 100-node source takes ~75s sequentially —
+    // running 8 in parallel compresses that to ~9s. Postgres easily handles the
+    // concurrency given the size of its connection pool. Candidates are
+    // deduplicated by ID, keeping the highest similarity seen across nodes.
     const candidateMap = new Map<string, SemanticCandidate>()
+    const PARALLEL_BATCH = 8
+    let rpcErrors = 0
+    let rpcSuccesses = 0
+    const nodesWithEmb = newNodes.filter(n => n.embedding)
 
-    for (const node of newNodes) {
-      if (!node.embedding) continue
+    for (let i = 0; i < nodesWithEmb.length; i += PARALLEL_BATCH) {
       if (Date.now() - startedAt >= CROSS_CONNECT_TIME_BUDGET_MS) {
-        log({ stage: 'cross-connect', status: 'partial', user_id: userId, source_id: sourceId, reason: 'time_budget_during_rpc' })
+        log({ stage: 'cross-connect', status: 'partial', user_id: userId, source_id: sourceId, reason: 'time_budget_during_rpc', nodes_processed: i, nodes_total: nodesWithEmb.length })
         break
       }
-
-      const { data: similar, error: rpcErr } = await sb.rpc('match_knowledge_nodes', {
-        query_embedding: node.embedding,
-        match_threshold: SIMILARITY_THRESHOLD,
-        match_count: CANDIDATES_PER_NODE + nodeIds.length,
-        p_user_id: userId,
-      })
-
-      if (rpcErr) {
-        logError({ stage: 'cross-connect', user_id: userId, source_id: sourceId, status: 'skipped', error: `RPC error: ${rpcErr.message}` })
-        continue
-      }
-
-      for (const s of (similar ?? []) as SemanticCandidate[]) {
-        if (newNodeIdSet.has(s.id)) continue
-        const existing = candidateMap.get(s.id)
-        if (!existing || s.similarity > existing.similarity) {
-          candidateMap.set(s.id, s)
+      const slice = nodesWithEmb.slice(i, i + PARALLEL_BATCH)
+      const results = await Promise.all(slice.map(node =>
+        sb.rpc('match_knowledge_nodes', {
+          query_embedding: node.embedding,
+          match_threshold: SIMILARITY_THRESHOLD,
+          match_count: CANDIDATES_PER_NODE + nodeIds.length,
+          p_user_id: userId,
+        })
+      ))
+      for (const r of results) {
+        if (r.error) {
+          rpcErrors++
+          continue
+        }
+        rpcSuccesses++
+        for (const s of (r.data ?? []) as SemanticCandidate[]) {
+          if (newNodeIdSet.has(s.id)) continue
+          const existing = candidateMap.get(s.id)
+          if (!existing || s.similarity > existing.similarity) {
+            candidateMap.set(s.id, s)
+          }
         }
       }
     }
@@ -355,14 +363,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .slice(0, GEMINI_BATCH_SIZE)
 
     if (topCandidates.length === 0) {
-      log({ stage: 'cross-connect', status: 'ok', user_id: userId, source_id: sourceId, duration_ms: Date.now() - startedAt, edges_created: 0, reason: 'no_candidates' })
-      return res.status(200).json({ edgesCreated: 0, status: 'ok' })
+      log({ stage: 'cross-connect', status: 'ok', user_id: userId, source_id: sourceId, duration_ms: Date.now() - startedAt, edges_created: 0, reason: 'no_candidates', rpc_successes: rpcSuccesses, rpc_errors: rpcErrors })
+      return res.status(200).json({ edgesCreated: 0, status: 'ok', reason: 'no_candidates', rpcSuccesses, rpcErrors })
     }
 
     // Check budget before the Gemini call
     if (Date.now() - startedAt >= CROSS_CONNECT_TIME_BUDGET_MS) {
       log({ stage: 'cross-connect', status: 'skipped', user_id: userId, source_id: sourceId, duration_ms: Date.now() - startedAt, reason: 'time_budget_before_gemini' })
-      return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
+      return res.status(200).json({ edgesCreated: 0, status: 'skipped', reason: 'time_budget_before_gemini' })
     }
 
     // ── 3. Single Gemini call — batch all new + candidate entities together ──
@@ -413,7 +421,7 @@ Return an empty array if no genuine cross-source connections exist.`
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
         },
-        30_000,
+        60_000,
         'cross-connect'
       )
       geminiUsage = usage
@@ -421,12 +429,12 @@ Return an empty array if no genuine cross-source connections exist.`
       rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
     } catch (geminiErr) {
       logError({ stage: 'cross-connect', user_id: userId, source_id: sourceId, status: 'skipped', error: `Gemini error: ${(geminiErr as Error).message}`, duration_ms: Date.now() - startedAt })
-      return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
+      return res.status(200).json({ edgesCreated: 0, status: 'skipped', reason: 'gemini_error', error: (geminiErr as Error).message.slice(0, 200) })
     }
 
     if (!rawText) {
       log({ stage: 'cross-connect', status: 'skipped', user_id: userId, source_id: sourceId, duration_ms: Date.now() - startedAt, reason: 'empty_gemini_response' })
-      return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
+      return res.status(200).json({ edgesCreated: 0, status: 'skipped', reason: 'empty_gemini_response' })
     }
 
     // ── 4. Parse relationships ────────────────────────────────────────────────
@@ -435,12 +443,12 @@ Return an empty array if no genuine cross-source connections exist.`
       parsed = JSON.parse(rawText) as typeof parsed
     } catch {
       logError({ stage: 'cross-connect', user_id: userId, source_id: sourceId, status: 'skipped', error: 'malformed JSON from Gemini', raw_preview: rawText.slice(0, 200), duration_ms: Date.now() - startedAt })
-      return res.status(200).json({ edgesCreated: 0, status: 'skipped' })
+      return res.status(200).json({ edgesCreated: 0, status: 'skipped', reason: 'malformed_json' })
     }
 
     if (!Array.isArray(parsed.relationships) || parsed.relationships.length === 0) {
       log({ stage: 'cross-connect', status: 'ok', user_id: userId, source_id: sourceId, duration_ms: Date.now() - startedAt, edges_created: 0, prompt_tokens: geminiUsage?.promptTokenCount })
-      return res.status(200).json({ edgesCreated: 0, status: 'ok' })
+      return res.status(200).json({ edgesCreated: 0, status: 'ok', reason: 'no_relationships' })
     }
 
     // ── 5. Map labels → IDs and bulk insert confirmed edges ──────────────────
